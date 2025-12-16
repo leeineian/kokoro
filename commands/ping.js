@@ -16,8 +16,8 @@ const V2Builder = require('../utils/components');
         // Components V2 Container
         const v2Container = V2Builder.container([
             V2Builder.section(
-                `Pong! 🏓\nRoundtrip: \`${roundtrip}ms\`\nHeartbeat: \`${ping}ms\``,
-                V2Builder.button('Refresh', 'ping_refresh', 2)
+                '# Pong!',
+                V2Builder.button(`${roundtrip}ms`, 'ping_refresh', roundtrip < 200 ? 3 : 4)
             )
         ]);
 

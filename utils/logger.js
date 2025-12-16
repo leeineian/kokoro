@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { MessageFlags } = require('discord.js');
+const V2Builder = require('./components');
 
 const LOGGING_FILE = path.join(__dirname, '../logging.json');
 
@@ -34,9 +35,7 @@ async function logAction(client, guildId, user, action, descriptions) {
     
     if (!channel) return;
 
-const V2Builder = require('./components');
 
-// ...
 
     // Components V2 Implementation
     const v2Container = V2Builder.container([

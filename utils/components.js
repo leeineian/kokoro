@@ -66,6 +66,13 @@ class V2Builder {
             components: components
         };
     }
+
+    static mediaGallery(items = []) {
+        return {
+            type: 12, // Media Gallery
+            items: items
+        };
+    }
 }
 
 module.exports = V2Builder;

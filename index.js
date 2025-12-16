@@ -23,6 +23,22 @@ for (const file of commandFiles) {
 	}
 }
 
+// Button Handling
+client.buttons = new Collection();
+const buttonsPath = path.join(__dirname, 'buttons');
+if (fs.existsSync(buttonsPath)) {
+    const buttonFiles = fs.readdirSync(buttonsPath).filter(file => file.endsWith('.js'));
+    for (const file of buttonFiles) {
+        const filePath = path.join(buttonsPath, file);
+        const button = require(filePath);
+        if ('customId' in button && 'execute' in button) {
+            client.buttons.set(button.customId, button);
+        } else {
+            console.log(`[WARNING] The button at ${filePath} is missing a required "customId" or "execute" property.`);
+        }
+    }
+}
+
 client.once(Events.ClientReady, c => {
 	console.log(`Ready! Logged in as ${c.user.tag}`);
 	client.user.setActivity('Minding my own business', { type: ActivityType.Custom });
@@ -38,40 +54,21 @@ client.on(Events.InteractionCreate, async interaction => {
     try {
         console.log(`Received interaction: ${interaction.type} (ID: ${interaction.id})`);
         
-        // Button Handling (Specific logic for dismiss/refresh)
+        // Button Handling
         if (interaction.isButton()) {
-            if (interaction.customId === 'dismiss_log') {
-               // ... (Keeping button logic inline or we could move it to handlers later)
-                try {
-                     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                        return interaction.reply({ content: 'Only admins can dismiss logs.', ephemeral: true });
-                    }
-                    await interaction.message.delete();
-                } catch (err) {
-                     console.error('Failed to delete log:', err);
-                     await interaction.reply({ content: 'Failed to delete log.', ephemeral: true });
-                }
-            } else if (interaction.customId === 'ping_refresh') {
-                const sent = Date.now();
-                const roundtrip = sent - interaction.createdTimestamp;
-                const ping = client.ws.ping;
+            const button = client.buttons.get(interaction.customId);
+            if (!button) {
+                console.error(`No handler matching ${interaction.customId} was found.`);
+                await interaction.reply({ content: 'This button is no longer active.', flags: MessageFlags.Ephemeral });
+                return;
+            }
 
-                 const v2Container = V2Builder.container([
-                    V2Builder.section(
-                        `Pong! 🏓\nRoundtrip: \`${roundtrip}ms\`\nHeartbeat: \`${ping}ms\``,
-                        V2Builder.button('Refresh', 'ping_refresh', 2)
-                    )
-                ]);
-                
-                try {
-                    await interaction.update({ 
-                        components: [v2Container] 
-                    });
-                } catch (err) {
-                     console.error('Failed to update ping:', err);
-                     if (!interaction.replied && !interaction.deferred) {
-                        await interaction.reply({ content: 'Failed to refresh ping.', ephemeral: true });
-                     }
+            try {
+                await button.execute(interaction, client);
+            } catch (error) {
+                console.error(error);
+                if (!interaction.replied && !interaction.deferred) { 
+                    await interaction.reply({ content: 'There was an error while executing this button!', flags: MessageFlags.Ephemeral });
                 }
             }
             return;
@@ -95,9 +92,9 @@ client.on(Events.InteractionCreate, async interaction => {
         } catch (error) {
             console.error(error);
             if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+                await interaction.followUp({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
             } else {
-                await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+                await interaction.reply({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
             }
         }
 

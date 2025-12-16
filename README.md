@@ -34,3 +34,17 @@ In Discord, type:
 `/say message:Hello World`
 
 The bot will reply with an ephemeral message "Hello World".
+
+## Process Management (Avoid Zombies)
+
+### Correctly Stopping the Bot
+To stop the bot, click inside the terminal running it and press **`Ctrl + C`**. This sends a shutdown signal to the process.
+
+### Fixing "Zombie" Processes
+If you close the terminal window without stopping the bot, or if you accidentally start it multiple times, you might get duplicate messages.
+
+**To kill all running bot processes:**
+```bash
+# Linux/Mac
+pkill -f "node index.js"
+```

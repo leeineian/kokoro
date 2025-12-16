@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 
 module.exports = {
 	data: new SlashCommandBuilder()
@@ -12,10 +12,10 @@ module.exports = {
 		const userInput = interaction.options.getString('message');
         
         if (userInput.length > 2000) {
-            return interaction.reply({ content: 'Message is too long (limit is 2000 characters).', ephemeral: true });
+            return interaction.reply({ content: 'Message is too long (limit is 2000 characters).', flags: MessageFlags.Ephemeral });
         }
 
-		await interaction.reply({ content: userInput, ephemeral: true });
+		await interaction.reply({ content: userInput, flags: MessageFlags.Ephemeral });
         return `Message: ${userInput}`;
 	},
 };
