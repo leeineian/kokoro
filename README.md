@@ -1,6 +1,6 @@
 # minder
 
-A simple Discord bot that repeats your input back to you using the `/say` command.
+An app for The Mindscape discord server.
 
 ## Setup
 
@@ -28,7 +28,7 @@ A simple Discord bot that repeats your input back to you using the `/say` comman
     npm start
     ```
 
-## Usage
+## Test usage
 
 In Discord, type:
 `/say message:Hello World`
