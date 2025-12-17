@@ -39,15 +39,59 @@ if (fs.existsSync(buttonsPath)) {
     }
 }
 
-client.once(Events.ClientReady, c => {
+const db = require('./utils/database');
+const reminderCommand = require('./commands/reminder');
+const randomRoleColor = require('./scripts/randomRoleColor');
+
+client.once(Events.ClientReady, async c => {
 	console.log(`Ready! Logged in as ${c.user.tag}`);
 	client.user.setActivity('Minding my own business', { type: ActivityType.Custom });
+
+    // Start Background Scripts
+    randomRoleColor.start(client);
+
+    // Restore Reminders
+    try {
+        const pending = await db.getAllPendingReminders();
+        console.log(`Restoring ${pending.length} pending reminders...`);
+        
+        let restoredCount = 0;
+        const now = Date.now();
+
+        for (const r of pending) {
+            const delay = r.dueAt - now;
+            if (delay <= 0) {
+                // Should have sent already -> Send immediately
+                reminderCommand.sendReminder(client, r.userId, r.channelId, r.message, r.id, r.deliveryType);
+            } else {
+                // Schedule future
+                setTimeout(() => {
+                    reminderCommand.sendReminder(client, r.userId, r.channelId, r.message, r.id, r.deliveryType);
+                }, delay);
+            }
+            restoredCount++;
+        }
+        console.log(`Restored ${restoredCount} reminders.`);
+    } catch (err) {
+        console.error('Failed to restore reminders:', err);
+    }
 });
 
 // Helper to format options for auto-logging
 function formatCommandOptions(interaction) {
     if (!interaction.options.data.length) return 'No options provided';
-    return interaction.options.data.map(opt => `${opt.name}: ${opt.value}`).join('\n');
+
+    const formatOption = (opt) => {
+        if (opt.options) {
+            // It's a subcommand or group
+            const subOptions = opt.options.map(formatOption).join(', ');
+            if (!subOptions) return `Subcommand: ${opt.name}`;
+            return `${opt.name}: [${subOptions}]`;
+        }
+        return `${opt.name}: ${opt.value}`;
+    };
+
+    return interaction.options.data.map(formatOption).join('\n');
 }
 
 client.on(Events.InteractionCreate, async interaction => {

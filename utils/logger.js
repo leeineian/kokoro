@@ -44,7 +44,7 @@ async function logAction(client, guildId, user, action, descriptions) {
             V2Builder.thumbnail(user.displayAvatarURL())
         ),
         V2Builder.actionRow([
-            V2Builder.button('Dismiss', 'dismiss_log', 2)
+            V2Builder.button('Dismiss', 'dismiss_log', 4) // Style 4 = Red/Danger
         ])
     ]);
 
