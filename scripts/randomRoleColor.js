@@ -1,9 +1,10 @@
 const GUILD_ID = '832245857595555861';
 const ROLE_ID = '1450798622294675627';
-const INTERVAL_MS = 10 * 60 * 1000; // 10 Minutes
+const MIN_MINUTES = 1;
+const MAX_MINUTES = 10;
 
 function getRandomColor() {
-    return Math.floor(Math.random() * 16777215); // Random integer for hex color
+    return Math.floor(Math.random() * 16777216); // Random integer for hex color (0 to 0xFFFFFF)
 }
 
 async function updateRoleColor(client) {
@@ -21,7 +22,7 @@ async function updateRoleColor(client) {
         }
 
         const newColor = getRandomColor();
-        await role.edit({ color: newColor });
+        await role.edit({ colors: { primaryColor: newColor } });
         
         console.log(`[RandomColor] Updated role color to #${newColor.toString(16).padStart(6, '0')}`);
 
@@ -30,17 +31,26 @@ async function updateRoleColor(client) {
     }
 }
 
-module.exports = {
-    start: (client) => {
-        console.log('[RandomColor] Script started.');
-        
-        // Initial run after a short delay
-        setTimeout(() => updateRoleColor(client), 5000);
+function scheduleNextUpdate(client) {
+    // Random minute between MIN and MAX (inclusive)
+    const minutes = Math.floor(Math.random() * (MAX_MINUTES - MIN_MINUTES + 1)) + MIN_MINUTES;
+    const ms = minutes * 60 * 1000;
+    
+    console.log(`[RandomColor] Next update in ${minutes} minutes.`);
+    
+    setTimeout(async () => {
+        await updateRoleColor(client);
+        scheduleNextUpdate(client); // Recurse
+    }, ms);
+}
 
-        // Interval loop
-        setInterval(() => {
-            updateRoleColor(client);
-        }, INTERVAL_MS);
+module.exports = {
+    start: async (client) => {
+        console.log('[RandomColor] Script started.');
+        // Run immediately on start
+        await updateRoleColor(client);
+        // Then start the loop
+        scheduleNextUpdate(client);
     },
     updateRoleColor
 };

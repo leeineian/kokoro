@@ -17,6 +17,7 @@ module.exports = {
 
         try {
             await interaction.update({ 
+                flags: MessageFlags.IsComponentsV2,
                 components: [v2Container] 
             });
         } catch (err) {

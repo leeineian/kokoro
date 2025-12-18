@@ -45,7 +45,10 @@ const randomRoleColor = require('./scripts/randomRoleColor');
 
 client.once(Events.ClientReady, async c => {
 	console.log(`Ready! Logged in as ${c.user.tag}`);
-	client.user.setActivity('Minding my own business', { type: ActivityType.Custom });
+	client.user.setPresence({
+		activities: [{ name: 'Custom Status', type: ActivityType.Custom, state: 'Minding my own business' }],
+		status: 'dnd',
+	});
 
     // Start Background Scripts
     randomRoleColor.start(client);
