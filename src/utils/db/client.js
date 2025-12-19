@@ -3,7 +3,7 @@ const { Database } = require('bun:sqlite');
 const path = require('path');
 
 // Resolve path to data.db (root directory)
-const dbPath = path.resolve(__dirname, '../../data.db');
+const dbPath = path.resolve(__dirname, '../../../data.db');
 
 // Enable WAL mode (Write-Ahead Logging) for better concurrency and performance
 const db = new Database(dbPath);

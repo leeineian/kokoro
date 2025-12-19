@@ -4,8 +4,8 @@
   "description": "A discord app for The Mindscape server",
   "main": "index.js",
   "scripts": {
-    "start": "bun index.js",
-    "dev": "bun --watch index.js"
+    "start": "bun src/index.js",
+    "dev": "bun --watch src/index.js"
   },
   "dependencies": {
     "chalk": "^4.1.2",
