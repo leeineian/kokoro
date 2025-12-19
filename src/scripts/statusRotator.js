@@ -11,10 +11,13 @@ const statusGenerators = [
     async () => {
         try {
             const count = await db.getRemindersCount();
+            
+            if (count === 0) return null;
+
             return { 
                 name: 'Custom Status', 
                 type: ActivityType.Custom, 
-                state: `Serving ${count} pending reminders` 
+                state: `${count} pending reminder${count === 1 ? '' : 's'}` 
             };
         } catch (e) {
             console.error('Failed to fetching reminder count for status:', e);
