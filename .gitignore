@@ -1,0 +1,24 @@
+# Dependency Directories
+node_modules/
+
+# Environment Variables
+.env
+
+# Discloud
+discloud/
+discloud.config
+.discloudignore
+
+# Database
+data.db
+*.db-shm
+*.db-wal
+
+# Runtime & Process
+.bot.pid
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# System
+.DS_Store
