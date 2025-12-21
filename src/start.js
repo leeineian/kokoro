@@ -5,10 +5,10 @@ const path = require('path');
 
 // Discord.js
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
-const chalk = require('chalk');
+const ConsoleLogger = require('./utils/consoleLogger');
 
 // Utilities
-const db = require('./utils/database');
+
 
 const startTime = performance.now();
 
@@ -17,19 +17,19 @@ const PID_FILE = path.join(__dirname, '../.bot.pid');
 
 try {
     fs.writeFileSync(PID_FILE, process.pid.toString());
-    console.log(chalk.blue(`[Start] PID file created: ${process.pid}`));
+    ConsoleLogger.info('Start', `PID file created: ${process.pid}`);
 } catch (err) {
-    console.error(chalk.red('[Start] Failed to create PID file:'), err);
+    ConsoleLogger.error('Start', 'Failed to create PID file:', err);
 }
 
 const cleanup = () => {
     try {
         if (fs.existsSync(PID_FILE)) {
             fs.unlinkSync(PID_FILE);
-            console.log(chalk.blue('[Shutdown] PID file removed.'));
+            ConsoleLogger.info('Shutdown', 'PID file removed.');
         }
     } catch (err) {
-        console.error(chalk.red('[Shutdown] Failed to remove PID file:'), err);
+        ConsoleLogger.error('Shutdown', 'Failed to remove PID file:', err);
     }
     process.exit(0);
 };
@@ -37,10 +37,10 @@ const cleanup = () => {
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 process.on('unhandledRejection', (reason, promise) => {
-    console.error(chalk.red('[Fatal] Unhandled Rejection at:'), promise, chalk.red('reason:'), reason);
+    ConsoleLogger.error('Fatal', `Unhandled Rejection at: ${promise}`, reason);
 });
 process.on('uncaughtException', (err) => {
-    console.error(chalk.red('[Fatal] Uncaught Exception:'), err);
+    ConsoleLogger.error('Fatal', 'Uncaught Exception:', err);
 });
 // --- PROCESS MANAGEMENT END ---
 
@@ -74,7 +74,7 @@ for (const file of commandFiles) {
         }
 
 	} else {
-		console.log(chalk.yellow(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`));
+		ConsoleLogger.warn('Loader', `The command at ${filePath} is missing a required "data" or "execute" property.`);
 	}
 }
 
@@ -89,7 +89,7 @@ if (fs.existsSync(buttonsPath)) {
         if ('customId' in button && 'execute' in button) {
             client.buttons.set(button.customId, button);
         } else {
-            console.log(chalk.yellow(`[WARNING] The button at ${filePath} is missing a required "customId" or "execute" property.`));
+            ConsoleLogger.warn('Loader', `The button at ${filePath} is missing a required "customId" or "execute" property.`);
         }
     }
 }

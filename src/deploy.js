@@ -2,7 +2,7 @@
 const { REST, Routes } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const chalk = require('chalk');
+const ConsoleLogger = require('./utils/consoleLogger');
 
 const deployCommands = async () => {
     try {
@@ -15,22 +15,22 @@ const deployCommands = async () => {
             if ('data' in command && 'execute' in command) {
                 commands.push(command.data.toJSON());
             } else {
-                console.log(chalk.yellow(`[WARNING] The command at ${file} is missing a required "data" or "execute" property.`));
+                ConsoleLogger.warn('Deploy', `The command at ${file} is missing a required "data" or "execute" property.`);
             }
         }
 
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-        console.log(chalk.green(`[Deploy] Started refreshing ${commands.length} application (/) commands.`));
+        ConsoleLogger.info('Deploy', `Started refreshing ${commands.length} application (/) commands.`);
 
         const data = await rest.put(
             Routes.applicationCommands(process.env.CLIENT_ID),
             { body: commands },
         );
 
-        console.log(chalk.green(`[Deploy] Successfully reloaded ${data.length} application (/) commands.`));
+        ConsoleLogger.success('Deploy', `Successfully reloaded ${data.length} application (/) commands.`);
     } catch (error) {
-        console.error(error);
+        ConsoleLogger.error('Deploy', 'Error deploying commands:', error);
     }
 };
 

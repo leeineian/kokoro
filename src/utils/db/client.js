@@ -9,6 +9,11 @@ const dbPath = path.resolve(__dirname, '../../../data.db');
 const db = new Database(dbPath);
 db.run('PRAGMA journal_mode = WAL');
 
+// Verify WAL Mode
+const journalMode = db.prepare('PRAGMA journal_mode').get();
+if (journalMode && journalMode.journal_mode === 'wal') {
+}
+
 // Initialize Tables
 // 1. Reminders
 db.run(`
@@ -58,7 +63,7 @@ db.run(`
     )
 `);
 
-const chalk = require('chalk');
-console.log(chalk.blue('[Database] Initialized with bun:sqlite (data.db).'));
+const ConsoleLogger = require('../consoleLogger');
+ConsoleLogger.info('Database', `Initialized with bun:sqlite (data.db) | Mode: ${journalMode ? journalMode.journal_mode.toUpperCase() : 'UNKNOWN'}`);
 
 module.exports = db;

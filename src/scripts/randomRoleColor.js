@@ -1,6 +1,6 @@
-const GUILD_ID = '832245857595555861';
-const chalk = require('chalk');
-const ROLE_ID = '1450798622294675627';
+const GUILD_ID = process.env.GUILD_ID;
+const ConsoleLogger = require('../utils/consoleLogger');
+const ROLE_ID = process.env.ROLE_ID;
 const MIN_MINUTES = 1;
 const MAX_MINUTES = 10;
 
@@ -12,13 +12,13 @@ async function updateRoleColor(client) {
     try {
         const guild = client.guilds.cache.get(GUILD_ID) ?? await client.guilds.fetch(GUILD_ID);
         if (!guild) {
-            console.warn(`[RandomColor] Guild ${GUILD_ID} not found/cached.`);
+            ConsoleLogger.warn('RandomColor', `Guild ${GUILD_ID} not found/cached.`);
             return;
         }
 
         const role = guild.roles.cache.get(ROLE_ID) ?? await guild.roles.fetch(ROLE_ID);
         if (!role) {
-            console.warn(`[RandomColor] Role ${ROLE_ID} not found in guild.`);
+            ConsoleLogger.warn('RandomColor', `Role ${ROLE_ID} not found in guild.`);
             return;
         }
 
@@ -26,10 +26,10 @@ async function updateRoleColor(client) {
         await role.edit({ colors: { primaryColor: newColor } });
         
         currentColor = `#${newColor.toString(16).padStart(6, '0').toUpperCase()}`;
-        console.log(`[RandomColor] Updated role color to ${currentColor}`);
+        ConsoleLogger.info('RandomColor', `Updated role color to ${currentColor}`);
 
     } catch (error) {
-        console.error('[RandomColor] Failed to update role color:', error);
+        ConsoleLogger.error('RandomColor', 'Failed to update role color:', error);
     }
 }
 
@@ -42,7 +42,7 @@ function scheduleNextUpdate(client) {
     const ms = minutes * 60 * 1000;
     
     nextUpdateTimestamp = Date.now() + ms;
-    console.log(`[RandomColor] Next update in ${minutes} minutes.`);
+    ConsoleLogger.info('RandomColor', `Next update in ${minutes} minutes.`);
     
     setTimeout(async () => {
         await updateRoleColor(client);
@@ -52,7 +52,7 @@ function scheduleNextUpdate(client) {
 
 module.exports = {
     start: async (client) => {
-        console.log(chalk.magenta('[RandomColor] Script started.'));
+        ConsoleLogger.info('RandomColor', 'Script started.');
         // Run immediately on start
         await updateRoleColor(client);
         // Then start the loop

@@ -1,5 +1,5 @@
 const { ActivityType } = require('discord.js');
-const chalk = require('chalk');
+const ConsoleLogger = require('../utils/consoleLogger');
 const db = require('../utils/database');
 const { getNextUpdateTimestamp, getCurrentColor } = require('./randomRoleColor');
 
@@ -19,7 +19,7 @@ const generators = {
                 state: `${count} pending reminder${count === 1 ? '' : 's'}` 
             };
         } catch (e) {
-            console.error('Failed to fetching reminder count:', e);
+            ConsoleLogger.error('StatusRotator', 'Failed to fetch reminder count:', e);
             return null;
         }
     },
@@ -100,7 +100,7 @@ let lastActivityTime = Date.now();
 
 module.exports = {
     start: (client) => {
-        console.log(chalk.magenta('[StatusRotator] Script started.'));
+        ConsoleLogger.info('StatusRotator', 'Script started.');
         updateStatus(client);
         setInterval(() => updateStatus(client), ROTATION_INTERVAL_MS);
     },
@@ -111,7 +111,7 @@ module.exports = {
         lastActivityTime = Date.now();
 
         if (wasIdle) {
-            console.log(chalk.magenta('[StatusRotator] Waking up from IDLE, forcing status update.'));
+            ConsoleLogger.info('StatusRotator', 'Waking up from IDLE, forcing status update.');
             updateStatus(client);
         }
     },

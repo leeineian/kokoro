@@ -1,5 +1,5 @@
 const { PermissionFlagsBits, ChannelType, MessageFlags } = require('discord.js');
-const chalk = require('chalk');
+const ConsoleLogger = require('../utils/consoleLogger');
 const V2Builder = require('../utils/components');
 
 // --- STATE ---
@@ -65,12 +65,12 @@ async function resetPingCategories(interaction) {
 
     // Clear DB
     try {
-        clearAllPingCategories();
+        webhookConfig.clearAllRawCategories();
     } catch (err) {
-        console.error('DB Reset Error:', err);
+        ConsoleLogger.error('WebhookPinger', 'DB Reset Error:', err);
     }
 
-    console.log(chalk.yellow(`[WebhookPinger] Reset by ${interaction.user.tag}. Stopped ${activeCount} loops, cleared ${configCount} configurations.`));
+    ConsoleLogger.warn('WebhookPinger', `Reset by ${interaction.user.tag}. Stopped ${activeCount} loops, cleared ${configCount} configurations.`);
 
     return interaction.reply({ content: `✅ **Reset Complete.**\nStopped ${activeCount} active loops.\nCleared ${configCount} configured categories.`, flags: MessageFlags.Ephemeral });
 }
@@ -99,9 +99,9 @@ async function setPingCategory(interaction) {
 
     // Save to DB
     try {
-        addPingCategory(category.id, category.name);
+        webhookConfig.addRawCategory(category.id, category.name);
     } catch (err) {
-        console.error('DB Error:', err);
+        ConsoleLogger.error('WebhookPinger', 'DB Error:', err);
     }
 
     // Log Buffer for UI
@@ -124,7 +124,7 @@ async function setPingCategory(interaction) {
         await message.edit({ 
             components: [container],
             flags: MessageFlags.IsComponentsV2
-        }).catch(err => console.error('UI Update Error:', err));
+        }).catch(err => ConsoleLogger.error('WebhookPinger', 'UI Update Error:', err));
     };
 
     const stripAnsi = (str) => str.replace(/\x1B\[\d+m/g, '');
@@ -139,7 +139,7 @@ async function setPingCategory(interaction) {
         hooks = await prepareWebhooksForCategory(category, interaction.client, logCallback);
         await updateUI(true); // Final update
     } catch (error) {
-        console.error(chalk.red(`[Setup-${category.name}] Error:`), error);
+        ConsoleLogger.error(`Setup-${category.name}`, `Error:`, error);
         return message.edit(`❌ Error setting up webhooks: ${error.message}`);
     }
 
@@ -167,8 +167,7 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
     if (targetChannels.size === 0) throw new Error('No text channels found.');
 
     const hooks = [];
-    const logPrefix = `[Setup-${category.name}]`;
-
+    
     let i = 0;
     for (const [_, channel] of targetChannels) {
         let attempts = 0;
@@ -179,8 +178,8 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
             try {
                 if (attempts === 1) { // Only log increment once
                     i++;
-                    const msg = `${logPrefix} Processing channel ${i}/${targetChannels.size}: ${channel.name}`;
-                    console.log(chalk.dim(msg));
+                    const msg = `[Setup-${category.name}] Processing channel ${i}/${targetChannels.size}: ${channel.name}`;
+                    ConsoleLogger.debug('Setup', msg);
                     if (logCallback) logCallback(msg);
                 }
 
@@ -191,8 +190,8 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
                 if (!hook) {
                     if (existingHooks.size >= 10) {
                         // SAFETY FIX: Do NOT use random hooks. Skip if full.
-                        const warning = `${logPrefix} ⚠️ Channel '${channel.name}' has 10 webhooks and none belong to us. Skipping.`;
-                        console.warn(chalk.yellow(warning));
+                        const warning = `[Setup-${category.name}] ⚠️ Channel '${channel.name}' has 10 webhooks and none belong to us. Skipping.`;
+                        ConsoleLogger.warn('Setup', warning);
                         if (logCallback) logCallback(warning);
                         success = true; // Treated as "done" (skipped)
                         continue; 
@@ -212,17 +211,17 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
                     let retryTime = 5000;
                     if (err.retry_after) retryTime = err.retry_after * 1000; // v13 style
                     if (err.global) retryTime += 1000; // Add buffer for global
-
-                    console.warn(chalk.yellow(`${logPrefix} ⚠️ Rate Limit on '${channel.name}'. Waiting ${(retryTime/1000).toFixed(1)}s (Attempt ${attempts}/3)...`));
-                    if (logCallback) logCallback(`${logPrefix} ⚠️ Rate Limit. Retrying in ${(retryTime/1000).toFixed(1)}s...`);
+                    
+                    ConsoleLogger.warn('Setup', `[Setup-${category.name}] ⚠️ Rate Limit on '${channel.name}'. Waiting ${(retryTime/1000).toFixed(1)}s (Attempt ${attempts}/3)...`);
+                    if (logCallback) logCallback(`[Setup-${category.name}] ⚠️ Rate Limit. Retrying in ${(retryTime/1000).toFixed(1)}s...`);
                     
                     await sleep(retryTime);
                     continue; // Retry
                 }
 
                 const errName = err.code === 50013 ? 'Missing Permissions' : err.message;
-                const errorMsg = `${logPrefix} ❌ Failed to setup channel '${channel.name}': ${errName}. Skipping.`;
-                console.error(chalk.red(errorMsg));
+                const errorMsg = `[Setup-${category.name}] ❌ Failed to setup channel '${channel.name}': ${errName}. Skipping.`;
+                ConsoleLogger.error('Setup', errorMsg);
                 if (logCallback) logCallback(errorMsg);
                 success = true; // Stop retrying on non-transient errors
             }
@@ -272,7 +271,7 @@ async function runPingCategories(interaction) {
         await message.edit({ 
             components: [container],
             flags: MessageFlags.IsComponentsV2
-        }).catch(err => console.error('UI Update Error:', err));
+        }).catch(err => ConsoleLogger.error('WebhookPinger', 'UI Update Error:', err));
     };
 
     const stripAnsi = (str) => str.replace(/\x1B\[\d+m/g, '');
@@ -293,7 +292,7 @@ async function runPingCategories(interaction) {
     const chStr = totalChannels === 1 ? 'Channel' : 'Channels';
 
     const startMsg = `🚀 ${rStr}: ${rounds} | ${cStr}: ${catCount} | ${chStr}: ${totalChannels}`;
-    console.log(chalk.green(startMsg));
+    ConsoleLogger.success('WebhookPinger', startMsg);
     logs.push(startMsg);
     await updateUI(true);
 
@@ -308,23 +307,23 @@ async function runPingCategories(interaction) {
 
         // Lazy Load check
         if (!config.hooks) {
-            console.log(chalk.magenta(`[${config.name}] Lazy loading webhooks...`));
+            ConsoleLogger.info(config.name, `Lazy loading webhooks...`);
             logCallback(`[${config.name}] Lazy loading webhooks...`, true);
             try {
                 const category = await interaction.client.channels.fetch(id).catch(() => null);
                 if (!category) {
-                    console.warn(chalk.yellow(`[${config.name}] Category not found! Automatically removing from config.`));
+                    ConsoleLogger.warn(config.name, `Category not found! Automatically removing from config.`);
                     logCallback(`[${config.name}] Category not found! Auto-removing...`, true);
                     
                     // Cleanup
                     configuredCategories.delete(id);
-                    deletePingCategory(id);
+                    webhookConfig.deleteRawCategory(id);
                     continue;
                 }
 
                 // Sync Name if changed
                 if (category.name !== config.name) {
-                    console.log(chalk.yellow(`[WebhookPinger] Name mismatch detected. Updating "${config.name}" -> "${category.name}"`));
+                    ConsoleLogger.warn('WebhookPinger', `Name mismatch detected. Updating "${config.name}" -> "${category.name}"`);
                     logCallback(`[Config] Renamed "${config.name}" -> "${category.name}"`, true);
                     
                     config.name = category.name; // Update local config object
@@ -332,9 +331,9 @@ async function runPingCategories(interaction) {
                     
                     // Update DB
                     try {
-                        addPingCategory(id, config.name); 
+                        webhookConfig.addRawCategory(id, config.name); 
                     } catch (e) {
-                        console.error('Failed to update category name in DB:', e);
+                        ConsoleLogger.error('WebhookPinger', 'Failed to update category name in DB:', e);
                     }
                 }
 
@@ -348,10 +347,10 @@ async function runPingCategories(interaction) {
 
                 configuredCategories.set(id, config); // Update cache
                 
-                console.log(chalk.green(`[${config.name}] Webhooks prepared.`));
+                ConsoleLogger.success(config.name, `Webhooks prepared.`);
                 logCallback(`[${config.name}] Webhooks prepared.`, true);
             } catch (err) {
-                console.error(chalk.red(`[${config.name}] Failed to load:`), err);
+                ConsoleLogger.error(config.name, `Failed to load:`, err);
                 logCallback(`[${config.name}] Failed to load: ${err.message}`, true);
                 continue;
             }
@@ -383,19 +382,18 @@ function logSuccess(rounds, startTime, logCallback) {
     
     // Only log if we actually did something
     if (totalChannels > 0) {
-        const msg = `[WebhookPinger] Successfully initialized ${rounds} ${rStr} in ${catCount} ${cStr} and ${totalChannels} ${chStr} resulting in ${totalPings} pings in ${duration}s.`;
-        console.log(chalk.green(msg));
-        if (logCallback) logCallback(msg, true);
+        const msg = `Successfully initialized ${rounds} ${rStr} in ${catCount} ${cStr} and ${totalChannels} ${chStr} resulting in ${totalPings} pings in ${duration}s.`;
+        ConsoleLogger.success('WebhookPinger', msg);
+        if (logCallback) logCallback(`[WebhookPinger] ${msg}`, true);
     } else {
-        const msg = `[WebhookPinger] ⚠️ Finished execution but no channels were targeted (configuration empty or load failed).`;
-        console.warn(chalk.yellow(msg));
-        if (logCallback) logCallback(msg, true);
+        const msg = `⚠️ Finished execution but no channels were targeted (configuration empty or load failed).`;
+        ConsoleLogger.warn('WebhookPinger', msg);
+        if (logCallback) logCallback(`[WebhookPinger] ${msg}`, true);
     }
 }
 
 // Internal loop starter
 function startLoop(catId, config, rounds, interaction, logCallback, startTime, executionState) {
-    const logPrefix = `[Run-${config.name}]`;
     let running = true;
     const stop = () => { running = false; };
     
@@ -404,14 +402,14 @@ function startLoop(catId, config, rounds, interaction, logCallback, startTime, e
     activePingLoops.set(catId, state);
 
     const log = (msg, force = false) => {
-        console.log(msg);
+        ConsoleLogger.info(config.name, msg);
         if (logCallback) logCallback(msg, force);
     };
 
     (async () => {
         while (running && state.currentRound < rounds) {
             state.currentRound++;
-            log(chalk.cyan(`${logPrefix} Initializing round/s: ${state.currentRound}/${rounds}`), true);
+            log(`Initializing round/s: ${state.currentRound}/${rounds}`, true);
 
             const BATCH_SIZE = 25;
             for (let i = 0; i < config.hooks.length; i += BATCH_SIZE) {
@@ -436,16 +434,16 @@ function startLoop(catId, config, rounds, interaction, logCallback, startTime, e
                                 retryTime = (err.rawError.retry_after * 1000) + 500;
                             }
                             
-                            console.warn(`${logPrefix} ⚠️ Rate Limit hit on ${channelName}. Backing off ${(retryTime/1000).toFixed(1)}s...`);
+                            ConsoleLogger.warn(`Run-${config.name}`, `⚠️ Rate Limit hit on ${channelName}. Backing off ${(retryTime/1000).toFixed(1)}s...`);
                             await sleep(retryTime); 
                         } else if (err.code === 10015) { // Unknown Webhook
-                            console.warn(`${logPrefix} ⚠️ Webhook for ${channelName} is missing (404). Removing from list.`);
+                            ConsoleLogger.warn(`Run-${config.name}`, `⚠️ Webhook for ${channelName} is missing (404). Removing from list.`);
                             // Optional: Remove from memory to save future calls
                             // finding index is O(N) but safe here
                             const idx = config.hooks.findIndex(h => h.channelName === channelName);
                             if (idx > -1) config.hooks.splice(idx, 1);
                         } else {
-                            console.error(`${logPrefix} Failed to send to ${channelName}:`, err.message);
+                            ConsoleLogger.error(`Run-${config.name}`, `Failed to send to ${channelName}:`, err);
                         }
                     }
                 }));
@@ -461,7 +459,7 @@ function startLoop(catId, config, rounds, interaction, logCallback, startTime, e
             }
         }
 
-        log(chalk.green(`${logPrefix} Finished.`), true); // Force update
+        log(`Finished.`, true); 
         activePingLoops.delete(catId);
         
         // If all done, maybe notify?
@@ -473,14 +471,14 @@ function startLoop(catId, config, rounds, interaction, logCallback, startTime, e
 }
 
 // --- DB INTEGRATION ---
-const { addPingCategory, getAllPingCategories, clearAllPingCategories, deletePingCategory } = require('../utils/database');
+const { webhookConfig } = require('../utils/database');
 
 /**
  * Initializes the script by loading configured categories from the DB.
  */
 async function initialize(client) {
-    const rows = getAllPingCategories();
-    console.log(chalk.magenta(`[WebhookPinger] Loading ${rows.length} configured categories from DB...`));
+    const rows = webhookConfig.getAllRawCategories();
+    ConsoleLogger.info('WebhookPinger', `Loading ${rows.length} configured categories from DB...`);
 
     for (const row of rows) {
         configuredCategories.set(row.categoryId, {
@@ -488,10 +486,9 @@ async function initialize(client) {
             hooks: null // Lazy load
         });
     }
-    console.log(chalk.magenta(`[WebhookPinger] Loaded configuration for ${rows.length} categories (Lazy).`));
+    ConsoleLogger.info('WebhookPinger', `Loaded configuration for ${rows.length} categories (Lazy).`);
 }
 
-// ... (Existing exports) ...
 module.exports = {
     initialize, // Export init
     listPingCategories,

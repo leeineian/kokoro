@@ -1,7 +1,7 @@
 const { Events, MessageFlags } = require('discord.js');
-const chalk = require('chalk');
+const ConsoleLogger = require('../utils/consoleLogger');
 const statusRotator = require('../scripts/statusRotator');
-const { logAction, getLoggingConfig } = require('../utils/logger');
+const { logAction, getLoggingConfig } = require('../utils/auditLogger');
 
 // Helper to format options for auto-logging
 function formatCommandOptions(interaction) {
@@ -26,7 +26,7 @@ module.exports = {
         const client = interaction.client;
 
         try {
-            console.log(`Received interaction: ${interaction.type} (ID: ${interaction.id})`);
+            ConsoleLogger.debug('Interaction', `Received interaction: ${interaction.type} (ID: ${interaction.id})`);
             
             // Dynamic Status
             statusRotator.recordActivity(client);
@@ -35,7 +35,7 @@ module.exports = {
             if (interaction.isButton()) {
                 const button = client.buttons.get(interaction.customId);
                 if (!button) {
-                    console.error(chalk.red(`No handler matching ${interaction.customId} was found.`));
+                    ConsoleLogger.error('Interaction', `No handler matching ${interaction.customId} was found.`);
                     await interaction.reply({ content: 'This button is no longer active.', flags: MessageFlags.Ephemeral });
                     return;
                 }
@@ -43,7 +43,7 @@ module.exports = {
                 try {
                     await button.execute(interaction, client);
                 } catch (error) {
-                    console.error(error);
+                    ConsoleLogger.error('Interaction', 'Button execution error:', error);
                     if (!interaction.replied && !interaction.deferred) { 
                         await interaction.reply({ content: 'There was an error while executing this button!', flags: MessageFlags.Ephemeral });
                     }
@@ -56,7 +56,7 @@ module.exports = {
                 if (interaction.isStringSelectMenu()) {
                     const handler = client.componentHandlers.get(interaction.customId);
                     if (!handler) {
-                        console.error(chalk.red(`No handler matching ${interaction.customId} was found.`));
+                        ConsoleLogger.error('Interaction', `No handler matching ${interaction.customId} was found.`);
                         await interaction.reply({ content: 'This interaction is no longer valid.', flags: MessageFlags.Ephemeral });
                         return;
                     }
@@ -64,7 +64,7 @@ module.exports = {
                     try {
                         await handler(interaction, client);
                     } catch (error) {
-                        console.error(error);
+                        ConsoleLogger.error('Interaction', 'Select menu execution error:', error);
                         if (!interaction.replied && !interaction.deferred) { 
                             await interaction.reply({ content: 'Error processing interaction.', flags: MessageFlags.Ephemeral });
                         }
@@ -77,7 +77,7 @@ module.exports = {
             const command = client.commands.get(interaction.commandName);
 
             if (!command) {
-                console.error(chalk.red(`No command matching ${interaction.commandName} was found.`));
+                ConsoleLogger.error('Interaction', `No command matching ${interaction.commandName} was found.`);
                 return;
             }
 
@@ -88,7 +88,7 @@ module.exports = {
                 const result = await command.execute(interaction, client);
                 logDetails = result;
             } catch (error) {
-                console.error(error);
+                ConsoleLogger.error('Interaction', 'Command execution error:', error);
                 if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
                 } else {
@@ -104,7 +104,7 @@ module.exports = {
             }
 
         } catch (error) {
-            console.error(chalk.red('Uncaptured interaction error:'), error);
+            ConsoleLogger.error('Interaction', 'Uncaptured interaction error:', error);
         }
     },
 };

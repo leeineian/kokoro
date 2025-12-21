@@ -1,6 +1,5 @@
-const userPrompts = require('../utils/db/repo/aiPrompts');
-const aiMemory = require('../utils/db/repo/aiMemory');
-const chalk = require('chalk');
+const db = require('../utils/database');
+const ConsoleLogger = require('../utils/consoleLogger');
 const DEFAULT_SYSTEM_PROMPT = "Answer concisely.";
 const statusRotator = require('./statusRotator');
 
@@ -44,7 +43,7 @@ async function handleMessage(message, client) {
     try {
         // 3. Prepare Context
         const dynamicLimit = getDynamicContextLimit();
-        const barrierTimestamp = aiMemory.getBarrier(message.channel.id);
+        const barrierTimestamp = db.aiMemory.getBarrier(message.channel.id);
         
         const [contextMessages] = await Promise.all([
             message.channel.messages.fetch({ limit: dynamicLimit, before: message.id }).catch(() => new Map())
@@ -65,7 +64,7 @@ async function handleMessage(message, client) {
         if (!userPrompt) userPrompt = "*stares silently*";
 
         // Get Custom System Prompt
-        const customSystemPrompt = userPrompts.get(message.author.id) || DEFAULT_SYSTEM_PROMPT;
+        const customSystemPrompt = db.aiPrompts.get(message.author.id) || DEFAULT_SYSTEM_PROMPT;
 
         // Build Payload
         const messages = [
@@ -111,8 +110,8 @@ async function handleMessage(message, client) {
         }
 
     } catch (error) {
-        console.error(chalk.yellow('[AI Chat] Error:'), error);
-        await message.reply(`*fizz*... (Error: ${error.message})`).catch(e => console.error('[AI Chat] Failed to send error message:', e.message));
+        ConsoleLogger.error('AI Chat', 'Error:', error);
+        await message.reply(`*fizz*... (Error: ${error.message})`).catch(e => ConsoleLogger.error('AI Chat', 'Failed to send error message:', e));
     }
 }
 

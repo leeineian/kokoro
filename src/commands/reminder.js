@@ -2,6 +2,7 @@ const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const chrono = require('chrono-node');
 const V2Builder = require('../utils/components');
 const db = require('../utils/database');
+const ConsoleLogger = require('../utils/consoleLogger');
 
 module.exports = {
 	data: new SlashCommandBuilder()
@@ -94,7 +95,7 @@ module.exports = {
                     });
                     dmUrl = sentMsg.url;
                 } catch (err) {
-                    console.error(`DM Confirmation Failed (User: ${interaction.user.id}):`, err);
+                    ConsoleLogger.error('Reminder', `DM Confirmation Failed (User: ${interaction.user.id}):`, err);
                     dmFailed = true;
                 }
             }
@@ -114,7 +115,7 @@ module.exports = {
             }
 
         } catch (error) {
-            console.error('Failed to set reminder:', error);
+            ConsoleLogger.error('Reminder', 'Failed to set reminder:', error);
             await interaction.editReply({ 
                 content: 'Failed to save reminder.'
             });
@@ -151,7 +152,7 @@ module.exports = {
             });
 
         } catch (error) {
-            console.error('Failed to list reminders:', error);
+            ConsoleLogger.error('Reminder', 'Failed to list reminders:', error);
             await interaction.reply({ 
                 content: 'Database error.', 
                 flags: MessageFlags.Ephemeral 
@@ -204,8 +205,9 @@ module.exports = {
                         });
                         deliverySuccess = true;
                     }
+
                 } catch (channelError) {
-                    console.error(`Channel Delivery Failed (Channel: ${channelId}):`, JSON.stringify(channelError, null, 2));
+                    ConsoleLogger.error('Reminder', `Channel Delivery Failed (Channel: ${channelId}):`, channelError);
                 }
             } else {
                 // DM Delivery
@@ -219,7 +221,7 @@ module.exports = {
                         deliverySuccess = true;
                     }
                 } catch (dmError) {
-                    console.error(`DM Delivery Failed (User: ${userId}):`, dmError);
+                    ConsoleLogger.error('Reminder', `DM Delivery Failed (User: ${userId}):`, dmError);
                     
                     // Fallback to channel if DM fails
                     if (channelId) {
@@ -234,7 +236,7 @@ module.exports = {
                                 deliverySuccess = true;
                             }
                         } catch (channelError) {
-                            console.error(`Channel Delivery Failed (Channel: ${channelId}):`, channelError);
+                            ConsoleLogger.error('Reminder', `Channel Delivery Failed (Channel: ${channelId}):`, channelError);
                         }
                     }
                 }
@@ -244,7 +246,7 @@ module.exports = {
             db.deleteReminder(dbId);
 
         } catch (error) {
-            console.error(`Failed to deliver reminder ${dbId}:`, error);
+            ConsoleLogger.error('Reminder', `Failed to deliver reminder ${dbId}:`, error);
         }
     }
 };

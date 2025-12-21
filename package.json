@@ -2,7 +2,7 @@
   "name": "minder",
   "version": "1.0.0",
   "description": "A discord app for The Mindscape server",
-  "main": "start.js",
+  "main": "src/start.js",
   "scripts": {
     "deploy": "bun src/deploy.js",
     "stop": "bun src/stop.js",
@@ -12,15 +12,12 @@
   "dependencies": {
     "chalk": "^4.1.2",
     "chrono-node": "^2.9.0",
-    "discord.js": "^14.16.3",
-    "hercai": "^14.0.3"
+    "discord.js": "^14.16.3"
   },
   "keywords": [
     "discord",
-    "bot",
-    "say",
-    "command"
+    "bot"
   ],
-  "author": "",
+  "author": "EianLee",
   "license": "ISC"
 }

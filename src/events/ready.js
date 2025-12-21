@@ -1,5 +1,5 @@
 const { Events } = require('discord.js');
-const chalk = require('chalk');
+const ConsoleLogger = require('../utils/consoleLogger');
 const { performance } = require('perf_hooks');
 const webhookPinger = require('../scripts/webhookPinger');
 const statusRotator = require('../scripts/statusRotator');
@@ -11,7 +11,7 @@ module.exports = {
     name: Events.ClientReady,
     once: true,
     async execute(client) {
-        console.log(chalk.green(`[Start] Ready! Logged in as ${client.user.tag} (Startup: ${performance.now().toFixed(2)}ms)`));
+        ConsoleLogger.success('Start', `Ready! Logged in as ${client.user.tag} (Startup: ${performance.now().toFixed(2)}ms)`);
         
         // Start Background Scripts
         statusRotator.start(client);
@@ -24,7 +24,7 @@ module.exports = {
         try {
             // Synchronous call - no await
             const pending = db.getAllPendingReminders();
-            console.log(chalk.blue(`Restoring ${pending.length} pending reminders...`));
+            ConsoleLogger.info('Reminders', `Restoring ${pending.length} pending reminders...`);
             
             let restoredCount = 0;
 
@@ -33,9 +33,9 @@ module.exports = {
                 reminder.scheduleReminder(client, r.userId, r.channelId, r.message, r.id, r.deliveryType, r.dueAt);
                 restoredCount++;
             }
-            console.log(chalk.blue(`Restored ${restoredCount} reminders.`));
+            ConsoleLogger.success('Reminders', `Restored ${restoredCount} reminders.`);
         } catch (err) {
-            console.error(chalk.red('Failed to restore reminders:'), err);
+            ConsoleLogger.error('Reminders', 'Failed to restore reminders:', err);
         }
     },
 };

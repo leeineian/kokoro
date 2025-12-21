@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, ChannelType, MessageFlags } = require('discord.js');
 const { setPingCategory, runPingCategories, listPingCategories, resetPingCategories } = require('../scripts/webhookPinger');
 const { updateRoleColor } = require('../scripts/randomRoleColor');
+const ConsoleLogger = require('../utils/consoleLogger');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -63,7 +64,7 @@ module.exports = {
                     await updateRoleColor(client);
                     await interaction.editReply({ content: '🎨 Role color has been refreshed!' });
                 } catch (error) {
-                    console.error(error);
+                    ConsoleLogger.error('Debug', 'Failed to refresh role color:', error);
                     await interaction.editReply({ content: 'Failed to refresh role color.' });
                 }
             }
