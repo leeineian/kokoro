@@ -2,7 +2,7 @@
 const { REST, Routes } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const ConsoleLogger = require('./utils/consoleLogger');
+const ConsoleLogger = require('./utils/log/consoleLogger');
 
 // --- ENVIRONMENT VALIDATION ---
 const REQUIRED_ENV_VARS = ['DISCORD_TOKEN', 'CLIENT_ID'];
@@ -55,8 +55,10 @@ const deployCommands = async () => {
         );
 
         ConsoleLogger.success('Sync', `Successfully reloaded ${data.length} application (/) commands.`);
+        process.exit(0);
     } catch (error) {
         ConsoleLogger.error('Sync', 'Error deploying commands:', error);
+        process.exit(1);
     }
 };
 

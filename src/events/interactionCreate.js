@@ -1,8 +1,16 @@
 const { Events, MessageFlags } = require('discord.js');
-const { ERRORS } = require('../configs/text');
-const ConsoleLogger = require('../utils/consoleLogger');
-const statusRotator = require('../scripts/statusRotator');
-const { logAction, getLoggingConfig } = require('../utils/auditLogger');
+const ConsoleLogger = require('../utils/log/consoleLogger');
+const statusRotator = require('../daemons/statusRotator');
+const { logAction, getLoggingConfig } = require('../utils/log/auditLogger');
+
+// Error messages
+const ERRORS = {
+    GENERIC: 'There was an error while executing this command!',
+    GENERIC_BUTTON: 'There was an error while executing this button!',
+    GENERIC_MENU: 'Error processing interaction.',
+    BUTTON_INACTIVE: 'This button is no longer active.',
+    INVALID_INTERACTION: 'This interaction is no longer valid.',
+};
 
 // Helper to format options for auto-logging
 function formatCommandOptions(interaction) {
@@ -34,7 +42,26 @@ module.exports = {
             
             // Button Handling
             if (interaction.isButton()) {
-                const handler = client.componentHandlers.get(interaction.customId);
+                let handler = client.componentHandlers.get(interaction.customId);
+                
+                // If no exact match, try pattern matching
+                if (!handler) {
+                    for (const [key, value] of client.componentHandlers) {
+                        // Check for pattern-based handlers
+                        if (interaction.customId.startsWith('reminder_page_')) {
+                            if (key === 'reminder_page_nav') {
+                                handler = value;
+                                break;
+                            }
+                        } else if (interaction.customId.startsWith('reminder_refresh_')) {
+                            if (key === 'reminder_refresh') {
+                                handler = value;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
                 if (!handler) {
                     ConsoleLogger.error('Interaction', `No handler matching ${interaction.customId} was found.`);
                     await interaction.reply({ content: ERRORS.BUTTON_INACTIVE, flags: MessageFlags.Ephemeral });
@@ -42,7 +69,7 @@ module.exports = {
                 }
 
                 try {
-                    await handler(interaction, client);
+                    await handler(interaction, interaction.customId);
                 } catch (error) {
                     ConsoleLogger.error('Interaction', 'Button execution error:', error);
                     if (!interaction.replied && !interaction.deferred) { 
@@ -55,7 +82,30 @@ module.exports = {
             if (!interaction.isChatInputCommand()) {
                 // Select Menu Handling (via global handlers)
                 if (interaction.isStringSelectMenu()) {
-                    const handler = client.componentHandlers.get(interaction.customId);
+                    let handler = client.componentHandlers.get(interaction.customId);
+                    
+                    // If no exact match, try pattern matching
+                    if (!handler) {
+                        for (const [key, value] of client.componentHandlers) {
+                            // Check for pattern-based handlers (e.g., "dismiss_reminder_page_*")
+                            if (interaction.customId.startsWith('dismiss_reminder_page_')) {
+                                if (key === 'dismiss_reminder') {
+                                    handler = value;
+                                    break;
+                                }
+                            }
+                            // Webhook looper exact match handlers
+                            if (interaction.customId === 'delete_loop_config' && key === 'delete_loop_config') {
+                                handler = value;
+                                break;
+                            }
+                            if (interaction.customId === 'stop_loop_select' && key === 'stop_loop_select') {
+                                handler = value;
+                                break;
+                            }
+                        }
+                    }
+                    
                     if (!handler) {
                         ConsoleLogger.error('Interaction', `No handler matching ${interaction.customId} was found.`);
                         await interaction.reply({ content: ERRORS.INVALID_INTERACTION, flags: MessageFlags.Ephemeral });
@@ -63,7 +113,7 @@ module.exports = {
                     }
 
                     try {
-                        await handler(interaction, client);
+                        await handler(interaction, interaction.customId);
                     } catch (error) {
                         ConsoleLogger.error('Interaction', 'Select menu execution error:', error);
                         if (!interaction.replied && !interaction.deferred) { 

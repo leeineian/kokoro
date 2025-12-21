@@ -1,18 +1,18 @@
 const os = require('os');
 const { MessageFlags } = require('discord.js');
-const V2Builder = require('../../utils/components');
-const db = require('../../utils/database');
-const ConsoleLogger = require('../../utils/consoleLogger');
+const V2Builder = require('../../utils/core/components');
+const db = require('../../utils/core/database');
+const ConsoleLogger = require('../../utils/log/consoleLogger');
+const { title, key, val } = require('./.helper');
 
-const { ANSI } = require('../../configs/theme');
-
-// --- ANSI Helper ---
-const fmt = ANSI;
-const title = (text) => `${fmt.pink}${text}${fmt.reset}`;
-const key = (text) => `${fmt.pink}> ${text}:${fmt.reset}`;
-const val = (text) => `${fmt.pink_bold}${text}${fmt.reset}`;
 
 // --- Data Gathering ---
+
+// --- Data Gathering ---
+/**
+ * Gathers system hardware and OS statistics
+ * @returns {string} - Formatted ANSI string with system stats
+ */
 const getSystemStats = () => {
     const usedMem = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
     const totalMem = (os.totalmem() / 1024 / 1024 / 1024).toFixed(2);
@@ -26,6 +26,12 @@ const getSystemStats = () => {
     ].join('\n');
 };
 
+/**
+ * Gathers application runtime statistics
+ * @param {import('discord.js').Client} client - Discord client instance
+ * @param {Object} [healthMetrics={}] - Optional health metrics (ping, dbLatency)
+ * @returns {string} - Formatted ANSI string with app stats
+ */
 const getAppStats = (client, healthMetrics = {}) => {
     // UPTIME
     const uptimeSeconds = Math.floor(process.uptime());
@@ -53,6 +59,13 @@ const getAppStats = (client, healthMetrics = {}) => {
     return lines.join('\n');
 };
 
+/**
+ * Renders stats UI with interactive filter
+ * @param {string} selection - Filter selection ('all', 'system', 'app')
+ * @param {import('discord.js').Client} client - Discord client instance  
+ * @param {Object} [healthMetrics={}] - Optional health metrics
+ * @returns {Object} - V2 container with stats and filter menu
+ */
 const renderStats = (selection, client, healthMetrics = {}) => {
     let output = '';
     if (selection === 'system') {
@@ -79,9 +92,16 @@ const renderStats = (selection, client, healthMetrics = {}) => {
 
 module.exports = {
     renderStats,
+    /**
+     * Handles stats command execution
+     * @param {import('discord.js').ChatInputCommandInteraction} interaction - Discord interaction
+     * @param {import('discord.js').Client} client - Discord client instance
+     * @returns {Promise<void>}
+     */
     async handle(interaction, client) {
          try {
-             await interaction.deferReply({ flags: MessageFlags.IsComponentsV2 });
+             // Defer reply immediately (no flags needed for defer)
+             await interaction.deferReply();
              
              // Calculate Metrics
              const sent = await interaction.fetchReply();
@@ -103,7 +123,39 @@ module.exports = {
              });
          } catch (error) {
              ConsoleLogger.error('Debug', 'Stats command failed:', error);
-             await interaction.editReply({ content: '❌ Failed to fetch statistics.' });
+             // Only try to reply if interaction is still valid
+             if (interaction.deferred || interaction.replied) {
+                 try {
+                     await interaction.editReply({ content: '❌ Failed to fetch statistics.' });
+                 } catch (e) {
+                     ConsoleLogger.error('Debug', 'Failed to send error message:', e);
+                 }
+             } else {
+                 try {
+                     await interaction.reply({ content: '❌ Failed to fetch statistics.', flags: MessageFlags.Ephemeral });
+                 } catch (e) {
+                     ConsoleLogger.error('Debug', 'Failed to send error message:', e);
+                 }
+             }
          }
+    },
+    
+    handlers: {
+        'debug_stats_filter': async (interaction) => {
+            const selection = interaction.values[0];
+            
+            const dbStart = performance.now();
+            db.getRemindersCount(interaction.user.id);
+            const dbLatency = (performance.now() - dbStart).toFixed(2);
+            
+            // Only include DB latency (can't measure ping from component interactions)
+            const metrics = { dbLatency };
+
+            await interaction.update({
+                content: null,
+                components: [renderStats(selection, interaction.client, metrics)],
+                flags: MessageFlags.IsComponentsV2
+            });
+        }
     }
 };

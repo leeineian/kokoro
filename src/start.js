@@ -5,35 +5,34 @@ const path = require('path');
 
 // Discord.js
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
-const ConsoleLogger = require('./utils/consoleLogger');
+const ConsoleLogger = require('./utils/log/consoleLogger');
 
 // --- ENVIRONMENT VALIDATION ---
 const REQUIRED_ENV_VARS = ['DISCORD_TOKEN', 'CLIENT_ID'];
 const OPTIONAL_ENV_VARS = ['GUILD_ID', 'ROLE_ID', 'LLM7_KEY', 'TAVILY_API_KEY'];
 
 // Validate required variables
+// Validate required variables
 const missing = REQUIRED_ENV_VARS.filter(key => !process.env[key]);
 if (missing.length > 0) {
-    console.error(`\u001b[31m[FATAL] Missing required environment variables: ${missing.join(', ')}\u001b[0m`);
-    console.error(`\u001b[31m[FATAL] Please check your .env file and ensure all required variables are set.\u001b[0m`);
+    ConsoleLogger.error('Fatal', `Missing required environment variables: ${missing.join(', ')}`);
+    ConsoleLogger.error('Fatal', `Please check your .env file and ensure all required variables are set.`);
     process.exit(1);
 }
 
 // Warn about optional variables
 const missingOptional = OPTIONAL_ENV_VARS.filter(key => !process.env[key]);
 if (missingOptional.length > 0) {
-    console.warn(`\u001b[33m[WARNING] Missing optional environment variables: ${missingOptional.join(', ')}\u001b[0m`);
-    console.warn(`\u001b[33m[WARNING] Some features may be disabled.\u001b[0m`);
+    ConsoleLogger.warn('Warning', `Missing optional environment variables: ${missingOptional.join(', ')}`);
+    ConsoleLogger.warn('Warning', `Some features may be disabled.`);
 }
-
 
 // Utilities
 
 const startTime = performance.now();
 
 // --- PROCESS MANAGEMENT START ---
-const { PATHS } = require('./configs/constants');
-const PID_FILE = PATHS.PID_FILE;
+const PID_FILE = path.join(__dirname, '../.bot.pid');
 
 try {
     fs.writeFileSync(PID_FILE, process.pid.toString());
@@ -48,8 +47,8 @@ const cleanup = () => {
         
         // Stop background scripts
         try {
-            const statusRotator = require('./scripts/statusRotator');
-            const randomRoleColor = require('./scripts/randomRoleColor');
+            const statusRotator = require('./daemons/statusRotator');
+            const randomRoleColor = require('./daemons/randomRoleColor');
             
             statusRotator.stop();
             randomRoleColor.stop();
@@ -100,7 +99,7 @@ for (const file of commandFiles) {
 
     try {
         if (fs.statSync(filePath).isDirectory()) {
-            const indexFile = path.join(filePath, 'index.js');
+            const indexFile = path.join(filePath, '.index.js');
             if (fs.existsSync(indexFile)) {
                 command = require(indexFile);
             } else {

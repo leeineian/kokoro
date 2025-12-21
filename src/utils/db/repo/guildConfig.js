@@ -1,5 +1,5 @@
-const db = require('../client');
-const ConsoleLogger = require('../../consoleLogger');
+const db = require('../setup');
+const ConsoleLogger = require('../../log/consoleLogger');
 
 // Cache prepared statements
 const stmt = {

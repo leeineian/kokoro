@@ -1,11 +1,20 @@
 const { MessageFlags } = require('discord.js');
 const chrono = require('chrono-node');
-const V2Builder = require('../../utils/components');
-const db = require('../../utils/database');
-const ConsoleLogger = require('../../utils/consoleLogger');
-const reminderScheduler = require('../../utils/reminderScheduler');
+const V2Builder = require('../../utils/core/components');
+const db = require('../../utils/core/database');
+const ConsoleLogger = require('../../utils/log/consoleLogger');
+const reminderScheduler = require('../../daemons/reminderScheduler');
 
+/**
+ * Reminder Set Handler - Creates and schedules new reminders
+ * Handles natural language time parsing, DM/channel delivery, and confirmation messages
+ */
 module.exports = {
+    /**
+     * Handles reminder creation
+     * @param {import('discord.js').ChatInputCommandInteraction} interaction - Discord interaction
+     * @returns {Promise<void>}
+     */
     async handle(interaction) {
         const message = interaction.options.getString('message');
         const when = interaction.options.getString('when');
@@ -52,6 +61,7 @@ module.exports = {
                 
                 try {
                     const sentMsg = await interaction.user.send({ 
+                        content: null,
                         components: [v2Container],
                         flags: MessageFlags.IsComponentsV2
                     });

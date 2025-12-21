@@ -1,10 +1,9 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const ConsoleLogger = require('./utils/consoleLogger');
+const ConsoleLogger = require('./utils/log/consoleLogger');
 
-const { PATHS } = require('./configs/constants');
-const PID_FILE = PATHS.PID_FILE;
+const PID_FILE = path.join(__dirname, '../.bot.pid');
 
 try {
     // 1. Try PID file first (Precision Kill)

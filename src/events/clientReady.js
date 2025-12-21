@@ -1,11 +1,11 @@
 const { Events } = require('discord.js');
-const ConsoleLogger = require('../utils/consoleLogger');
+const ConsoleLogger = require('../utils/log/consoleLogger');
 const { performance } = require('perf_hooks');
-const webhookPinger = require('../scripts/webhookPinger');
-const statusRotator = require('../scripts/statusRotator');
-const randomRoleColor = require('../scripts/randomRoleColor');
-const db = require('../utils/database');
-const reminderScheduler = require('../utils/reminderScheduler');
+const webhookLooper = require('../daemons/webhookLooper');
+const statusRotator = require('../daemons/statusRotator');
+const randomRoleColor = require('../daemons/randomRoleColor');
+const db = require('../utils/core/database');
+const reminderScheduler = require('../daemons/reminderScheduler');
 
 module.exports = {
     name: Events.ClientReady,
@@ -17,11 +17,15 @@ module.exports = {
         statusRotator.start(client);
         randomRoleColor.start(client);
 
-        // Initialize Ping Persistence
-        await webhookPinger.initialize(client);
+        // Initialize Loop Persistence
+        await webhookLooper.initialize(client);
 
         // Restore Reminders
         try {
+            // Clear any stuck locks from previous crashes
+            const clearedLocks = db.resetAllReminderLocks();
+            if (clearedLocks > 0) ConsoleLogger.warn('Reminders', `Cleared ${clearedLocks} stuck reminder locks.`);
+
             // Synchronous call - no await
             const pending = db.getAllPendingReminders();
             ConsoleLogger.info('Reminders', `Restoring ${pending.length} pending reminders...`);

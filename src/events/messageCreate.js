@@ -1,5 +1,5 @@
 const { Events } = require('discord.js');
-const aiChat = require('../scripts/aiChat');
+const aiChat = require('../daemons/aiChat');
 
 module.exports = {
     name: Events.MessageCreate,

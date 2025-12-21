@@ -1,7 +1,18 @@
-const { MessageFlags } = require('discord.js');
-const { logAction, getGuildConfig, saveGuildConfig } = require('../../utils/auditLogger');
+const { MessageFlags, PermissionFlagsBits } = require('discord.js');
+const { logAction, getGuildConfig, saveGuildConfig } = require('../../utils/log/auditLogger');
+const ConsoleLogger = require('../../utils/log/consoleLogger');
+
+/**
+ * Debug Log Handler - Configures audit logging for guilds
+ * Manages logging channel and enabled/disabled status
+ */
 
 module.exports = {
+    /**
+     * Handles log configuration
+     * @param {import('discord.js').ChatInputCommandInteraction} interaction - Discord interaction
+     * @returns {Promise<void>}
+     */
     async handle(interaction) {
         const guildId = interaction.guildId;
         const config = getGuildConfig(guildId);
@@ -39,6 +50,20 @@ module.exports = {
                 content: 'No valid options provided. Usage: `/debug log channel: #channel` or `/debug log toggle: true/false`', 
                 flags: MessageFlags.Ephemeral 
             });
+        }
+    },
+    
+    handlers: {
+        'dismiss_log': async (interaction) => {
+            try {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    return interaction.reply({ content: 'Only admins can dismiss logs.', flags: MessageFlags.Ephemeral });
+                }
+                await interaction.message.delete();
+            } catch (err) {
+                ConsoleLogger.error('DebugCommand', 'Failed to delete log:', err);
+                await interaction.reply({ content: 'Failed to delete log.', flags: MessageFlags.Ephemeral });
+            }
         }
     }
 };
