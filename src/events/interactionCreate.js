@@ -1,4 +1,5 @@
 const { Events, MessageFlags } = require('discord.js');
+const { ERRORS } = require('../configs/text');
 const ConsoleLogger = require('../utils/consoleLogger');
 const statusRotator = require('../scripts/statusRotator');
 const { logAction, getLoggingConfig } = require('../utils/auditLogger');
@@ -33,19 +34,19 @@ module.exports = {
             
             // Button Handling
             if (interaction.isButton()) {
-                const button = client.buttons.get(interaction.customId);
-                if (!button) {
+                const handler = client.componentHandlers.get(interaction.customId);
+                if (!handler) {
                     ConsoleLogger.error('Interaction', `No handler matching ${interaction.customId} was found.`);
-                    await interaction.reply({ content: 'This button is no longer active.', flags: MessageFlags.Ephemeral });
+                    await interaction.reply({ content: ERRORS.BUTTON_INACTIVE, flags: MessageFlags.Ephemeral });
                     return;
                 }
 
                 try {
-                    await button.execute(interaction, client);
+                    await handler(interaction, client);
                 } catch (error) {
                     ConsoleLogger.error('Interaction', 'Button execution error:', error);
                     if (!interaction.replied && !interaction.deferred) { 
-                        await interaction.reply({ content: 'There was an error while executing this button!', flags: MessageFlags.Ephemeral });
+                        await interaction.reply({ content: ERRORS.GENERIC_BUTTON, flags: MessageFlags.Ephemeral });
                     }
                 }
                 return;
@@ -57,7 +58,7 @@ module.exports = {
                     const handler = client.componentHandlers.get(interaction.customId);
                     if (!handler) {
                         ConsoleLogger.error('Interaction', `No handler matching ${interaction.customId} was found.`);
-                        await interaction.reply({ content: 'This interaction is no longer valid.', flags: MessageFlags.Ephemeral });
+                        await interaction.reply({ content: ERRORS.INVALID_INTERACTION, flags: MessageFlags.Ephemeral });
                         return;
                     }
 
@@ -66,7 +67,7 @@ module.exports = {
                     } catch (error) {
                         ConsoleLogger.error('Interaction', 'Select menu execution error:', error);
                         if (!interaction.replied && !interaction.deferred) { 
-                            await interaction.reply({ content: 'Error processing interaction.', flags: MessageFlags.Ephemeral });
+                            await interaction.reply({ content: ERRORS.GENERIC_MENU, flags: MessageFlags.Ephemeral });
                         }
                     }
                     return;
@@ -90,9 +91,9 @@ module.exports = {
             } catch (error) {
                 ConsoleLogger.error('Interaction', 'Command execution error:', error);
                 if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
+                    await interaction.followUp({ content: ERRORS.GENERIC, flags: MessageFlags.Ephemeral });
                 } else {
-                    await interaction.reply({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
+                    await interaction.reply({ content: ERRORS.GENERIC, flags: MessageFlags.Ephemeral });
                 }
             }
 

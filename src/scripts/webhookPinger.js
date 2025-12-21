@@ -8,9 +8,11 @@ const configuredCategories = new Map();
 // Map<categoryId, { stop: Function, roundsTotal: number, currentRound: number }>
 const activePingLoops = new Map();
 
+const { WEBHOOK_PINGER } = require('../configs/bot');
+
 // --- CONSTANTS ---
-const WEBHOOK_NAME = 'DebugPingHook';
-const LOOP_DELAY_MS = 2000; // Delay between loop iterations
+const WEBHOOK_NAME = WEBHOOK_PINGER.NAME;
+const LOOP_DELAY_MS = WEBHOOK_PINGER.LOOP_DELAY; // Delay between loop iterations
 
 // --- HELPERS ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -411,7 +413,7 @@ function startLoop(catId, config, rounds, interaction, logCallback, startTime, e
             state.currentRound++;
             log(`Initializing round/s: ${state.currentRound}/${rounds}`, true);
 
-            const BATCH_SIZE = 25;
+            const BATCH_SIZE = WEBHOOK_PINGER.BATCH_SIZE;
             for (let i = 0; i < config.hooks.length; i += BATCH_SIZE) {
                 if (!running) break;
 

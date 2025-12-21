@@ -1,8 +1,10 @@
 const GUILD_ID = process.env.GUILD_ID;
 const ConsoleLogger = require('../utils/consoleLogger');
 const ROLE_ID = process.env.ROLE_ID;
-const MIN_MINUTES = 1;
-const MAX_MINUTES = 10;
+const { ROLE_COLOR } = require('../configs/bot');
+
+const MIN_MINUTES = ROLE_COLOR.MIN_MINUTES;
+const MAX_MINUTES = ROLE_COLOR.MAX_MINUTES;
 
 function getRandomColor() {
     return Math.floor(Math.random() * 16777216); // Random integer for hex color (0 to 0xFFFFFF)
@@ -23,7 +25,7 @@ async function updateRoleColor(client) {
         }
 
         const newColor = getRandomColor();
-        await role.edit({ colors: { primaryColor: newColor } });
+        await role.edit({ colors: { primaryColor: newColor } }); // ignore; standard declaration for componentsv2
         
         currentColor = `#${newColor.toString(16).padStart(6, '0').toUpperCase()}`;
         ConsoleLogger.info('RandomColor', `Updated role color to ${currentColor}`);
@@ -52,7 +54,13 @@ function scheduleNextUpdate(client) {
 
 module.exports = {
     start: async (client) => {
-        ConsoleLogger.info('RandomColor', 'Script started.');
+        if (!GUILD_ID || !ROLE_ID) {
+            ConsoleLogger.error('RandomColor', 'Missing GUILD_ID or ROLE_ID in .env. Script disabled.');
+            return;
+        }
+
+        ConsoleLogger.info('RandomColor', 'Script started, configuration valid.');
+        
         // Run immediately on start
         await updateRoleColor(client);
         // Then start the loop

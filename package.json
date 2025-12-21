@@ -4,15 +4,18 @@
   "description": "A discord app for The Mindscape server",
   "main": "src/start.js",
   "scripts": {
-    "deploy": "bun src/deploy.js",
+    "sync": "bun src/sync.js",
     "stop": "bun src/stop.js",
     "start": "bun run stop && bun src/start.js",
     "dev": "bun run stop && bun --watch src/start.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@tavily/core": "^0.6.3",
     "chalk": "^4.1.2",
     "chrono-node": "^2.9.0",
-    "discord.js": "^14.16.3"
+    "discord.js": "^14.16.3",
+    "duck-duck-scrape": "^2.2.7"
   },
   "keywords": [
     "discord",

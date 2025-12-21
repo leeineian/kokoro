@@ -5,7 +5,7 @@ const webhookPinger = require('../scripts/webhookPinger');
 const statusRotator = require('../scripts/statusRotator');
 const randomRoleColor = require('../scripts/randomRoleColor');
 const db = require('../utils/database');
-const reminder = require('../commands/reminder');
+const reminderScheduler = require('../utils/reminderScheduler');
 
 module.exports = {
     name: Events.ClientReady,
@@ -30,7 +30,7 @@ module.exports = {
 
             for (const r of pending) {
                 // Restore using safe scheduler
-                reminder.scheduleReminder(client, r.userId, r.channelId, r.message, r.id, r.deliveryType, r.dueAt);
+                reminderScheduler.scheduleReminder(client, r.userId, r.channelId, r.message, r.id, r.deliveryType, r.dueAt);
                 restoredCount++;
             }
             ConsoleLogger.success('Reminders', `Restored ${restoredCount} reminders.`);

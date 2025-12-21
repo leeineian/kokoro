@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const ConsoleLogger = require('./utils/consoleLogger');
 
-const PID_FILE = path.join(__dirname, '../.bot.pid');
+const { PATHS } = require('./configs/constants');
+const PID_FILE = PATHS.PID_FILE;
 
 try {
     // 1. Try PID file first (Precision Kill)

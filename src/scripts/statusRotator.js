@@ -3,8 +3,10 @@ const ConsoleLogger = require('../utils/consoleLogger');
 const db = require('../utils/database');
 const { getNextUpdateTimestamp, getCurrentColor } = require('./randomRoleColor');
 
-const ROTATION_INTERVAL_MS = 60000;
-const IDLE_THRESHOLD = 1 * 60 * 1000;
+const { STATUS } = require('../configs/bot');
+
+const ROTATION_INTERVAL_MS = STATUS.ROTATION_INTERVAL;
+const IDLE_THRESHOLD = STATUS.IDLE_THRESHOLD;
 const START_TIME = Date.now();
 
 // Named Generators for Organization

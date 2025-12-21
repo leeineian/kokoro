@@ -9,11 +9,11 @@ const ConsoleLogger = require('./utils/consoleLogger');
 
 // Utilities
 
-
 const startTime = performance.now();
 
 // --- PROCESS MANAGEMENT START ---
-const PID_FILE = path.join(__dirname, '../.bot.pid');
+const { PATHS } = require('./configs/constants');
+const PID_FILE = PATHS.PID_FILE;
 
 try {
     fs.writeFileSync(PID_FILE, process.pid.toString());
@@ -58,39 +58,40 @@ client.commands = new Collection();
 client.componentHandlers = new Collection();
 
 const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+const commandFiles = fs.readdirSync(commandsPath);
 
 for (const file of commandFiles) {
 	const filePath = path.join(commandsPath, file);
-	const command = require(filePath);
-	if ('data' in command && 'execute' in command) {
-		client.commands.set(command.data.name, command);
-        
-        // Register component handlers if present
-        if (command.handlers) {
-            for (const [customId, handler] of Object.entries(command.handlers)) {
-                client.componentHandlers.set(customId, handler);
+    let command;
+
+    try {
+        if (fs.statSync(filePath).isDirectory()) {
+            const indexFile = path.join(filePath, 'index.js');
+            if (fs.existsSync(indexFile)) {
+                command = require(indexFile);
+            } else {
+                continue; // Skip directories without index.js
             }
-        }
-
-	} else {
-		ConsoleLogger.warn('Loader', `The command at ${filePath} is missing a required "data" or "execute" property.`);
-	}
-}
-
-// Button Handling
-client.buttons = new Collection();
-const buttonsPath = path.join(__dirname, 'buttons');
-if (fs.existsSync(buttonsPath)) {
-    const buttonFiles = fs.readdirSync(buttonsPath).filter(file => file.endsWith('.js'));
-    for (const file of buttonFiles) {
-        const filePath = path.join(buttonsPath, file);
-        const button = require(filePath);
-        if ('customId' in button && 'execute' in button) {
-            client.buttons.set(button.customId, button);
+        } else if (file.endsWith('.js')) {
+            command = require(filePath);
         } else {
-            ConsoleLogger.warn('Loader', `The button at ${filePath} is missing a required "customId" or "execute" property.`);
+            continue; 
         }
+
+        if ('data' in command && 'execute' in command) {
+            client.commands.set(command.data.name, command);
+            
+            // Register component handlers if present
+            if (command.handlers) {
+                for (const [customId, handler] of Object.entries(command.handlers)) {
+                    client.componentHandlers.set(customId, handler);
+                }
+            }
+        } else {
+            ConsoleLogger.warn('Loader', `The command at ${filePath} is missing a required "data" or "execute" property.`);
+        }
+    } catch (err) {
+        ConsoleLogger.error('Loader', `Failed to load command ${file}:`, err);
     }
 }
 
@@ -100,12 +101,16 @@ const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'
 
 for (const file of eventFiles) {
 	const filePath = path.join(eventsPath, file);
-	const event = require(filePath);
-	if (event.once) {
-		client.once(event.name, (...args) => event.execute(...args));
-	} else {
-		client.on(event.name, (...args) => event.execute(...args));
-	}
+    try {
+        const event = require(filePath);
+        if (event.once) {
+            client.once(event.name, (...args) => event.execute(...args));
+        } else {
+            client.on(event.name, (...args) => event.execute(...args));
+        }
+    } catch (err) {
+        ConsoleLogger.error('Loader', `Failed to load event ${file}:`, err);
+    }
 }
 
 (async () => {
