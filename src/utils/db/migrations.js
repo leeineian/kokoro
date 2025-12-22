@@ -113,6 +113,25 @@ const MIGRATIONS = [
         up: (db) => {
             db.run('ALTER TABLE loop_channels ADD COLUMN isRunning INTEGER NOT NULL DEFAULT 0');
         }
+    },
+
+    {
+        version: 6,
+        name: 'Add custom webhook author and avatar to loop_channels',
+        up: (db) => {
+            db.run('ALTER TABLE loop_channels ADD COLUMN webhookAuthor TEXT');
+            db.run('ALTER TABLE loop_channels ADD COLUMN webhookAvatar TEXT');
+        }
+    },
+
+    {
+        version: 7,
+        name: 'Add thread support to loop_channels',
+        up: (db) => {
+            db.run('ALTER TABLE loop_channels ADD COLUMN useThread INTEGER NOT NULL DEFAULT 0');
+            db.run('ALTER TABLE loop_channels ADD COLUMN threadMessage TEXT');
+            db.run('ALTER TABLE loop_channels ADD COLUMN threads TEXT');
+        }
     }
 ];
 

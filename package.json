@@ -9,8 +9,8 @@
     "start": "bun run stop && bun src/start.js",
     "start:watch": "bun run stop && bun --watch src/start.js",
     "start:silent": "LOG_LEVEL=silent bun run stop && LOG_LEVEL=silent bun src/start.js",
-    "test": "LOG_LEVEL=silent bun test specs",
-    "test:watch": "LOG_LEVEL=silent bun test --watch"
+    "test": "NODE_ENV=test LOG_LEVEL=silent bun test specs",
+    "test:watch": "NODE_ENV=test LOG_LEVEL=silent bun test --watch"
   },
   "dependencies": {
     "@tavily/core": "^0.6.3",

@@ -3,8 +3,10 @@ const { Database } = require('bun:sqlite');
 const path = require('path');
 const { runMigrations } = require('./migrations');
 
-// Resolve path to data.db (root directory)
-const dbPath = path.resolve(__dirname, '../../../data.db');
+// Resolve path to database
+const isTest = process.env.NODE_ENV === 'test';
+const dbName = isTest ? 'test.db' : 'data.db';
+const dbPath = path.resolve(__dirname, `../../../${dbName}`);
 
 // Enable WAL mode (Write-Ahead Logging) for better concurrency and performance
 const db = new Database(dbPath);

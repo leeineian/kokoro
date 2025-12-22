@@ -100,10 +100,6 @@ module.exports = {
                                 .addChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
                                 .setRequired(true))
                         .addStringOption(option =>
-                            option.setName('interval')
-                                .setDescription('Time limit (e.g., "5min") or "0" for infinite random mode')
-                                .setRequired(false))
-                        .addStringOption(option =>
                             option.setName('active_name')
                                 .setDescription('Channel/category name while loop is active')
                                 .setRequired(false))
@@ -115,6 +111,22 @@ module.exports = {
                             option.setName('message')
                                 .setDescription('Message to send in each loop (defaults to @everyone)')
                                 .setRequired(false))
+                        .addStringOption(option =>
+                            option.setName('webhook_avatar')
+                                .setDescription('Custom avatar URL for the webhook (defaults to server icon)')
+                                .setRequired(false))
+                        .addStringOption(option =>
+                            option.setName('webhook_author')
+                                .setDescription('Custom author name for the webhook (defaults to LoopHook)')
+                                .setRequired(false))
+                        .addBooleanOption(option =>
+                            option.setName('usethread')
+                                .setDescription('Create and use threads for looping (default: false)')
+                                .setRequired(false))
+                        .addStringOption(option =>
+                            option.setName('threadmessage')
+                                .setDescription('Message to send in threads (defaults to channel message)')
+                                .setRequired(false))
                         .addBooleanOption(option =>
                             option.setName('logs')
                                 .setDescription('Enable verbose logging in Discord (default: false)')
@@ -122,7 +134,16 @@ module.exports = {
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('start')
-                        .setDescription('Start loops for all configured channels')
+                        .setDescription('Start loops for all or specific configured channels')
+                        .addStringOption(option =>
+                            option.setName('target')
+                                .setDescription('Select a specific loop to start (or "all")')
+                                .setAutocomplete(true)
+                                .setRequired(true))
+                        .addStringOption(option =>
+                            option.setName('interval')
+                                .setDescription('Time limit (e.g., "5min") or "0" for infinite random mode (default: 0)')
+                                .setRequired(false))
                         .addBooleanOption(option =>
                             option.setName('logs')
                                 .setDescription('Enable verbose logging in Discord (default: false)')

@@ -32,7 +32,7 @@ const deployCommands = async () => {
                 } else {
                     continue;
                 }
-            } else if (file.endsWith('.js')) {
+            } else if (file.endsWith('.js') && !file.startsWith('.')) {
                  command = require(filePath);
             } else {
                 continue;

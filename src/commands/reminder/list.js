@@ -6,6 +6,7 @@ const ConsoleLogger = require('../../utils/log/consoleLogger');
 // Pagination constants
 const REMINDERS_PER_PAGE = 25;
 const MESSAGE_TRUNCATE_LENGTH = 80;
+const MAX_PAGES = 10; // Safety limit for pagination
 
 /**
  * Reminder List Handler - Displays user's active reminders with pagination
@@ -20,6 +21,9 @@ module.exports = {
      */
     async handle(interaction, page = 0) {
         try {
+            // Validate page number
+            page = Math.max(0, Math.min(page, MAX_PAGES - 1));
+
             // Synchronous call - no await
             const userReminders = db.getReminders(interaction.user.id);
 
@@ -33,6 +37,11 @@ module.exports = {
             // Pagination logic
             const totalPages = Math.ceil(userReminders.length / REMINDERS_PER_PAGE);
             const currentPage = Math.max(0, Math.min(page, totalPages - 1)); // Clamp page
+            
+            // Additional safety check for excessive pages
+            if (totalPages > MAX_PAGES) {
+                ConsoleLogger.warn('Reminder', `User ${interaction.user.tag} has excessive reminders (${userReminders.length})`);
+            }
             
             const startIdx = currentPage * REMINDERS_PER_PAGE;
             const endIdx = Math.min(startIdx + REMINDERS_PER_PAGE, userReminders.length);

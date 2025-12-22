@@ -1,4 +1,5 @@
 const { mock } = require('bun:test');
+const { Collection } = require('discord.js');
 
 /**
  * Mock Discord.js Client
@@ -6,13 +7,12 @@ const { mock } = require('bun:test');
  */
 function createMockClient() {
     return {
-        user: {
+        user: createMockUser({
             tag: 'TestBot#0001',
             id: '123456789',
             username: 'TestBot',
-            discriminator: '0001',
-            setPresence: mock(() => {})
-        },
+            discriminator: '0001'
+        }),
         commands: new Map(),
         componentHandlers: new Map(),
         guilds: {
@@ -65,7 +65,7 @@ function createMockChannel(options = {}) {
         type: options.type || 0, // 0 = GuildText
         guild: options.guild || createMockGuild(),
         send: mock(async (content) => createMockMessage({ content })),
-        fetchWebhooks: mock(async () => []),
+        fetchWebhooks: mock(async () => new Collection()),
         createWebhook: mock(async (name) => createMockWebhook({ name })),
         permissionsFor: mock(() => ({
             has: mock(() => true)

@@ -106,22 +106,27 @@ for (const file of commandFiles) {
                 continue; // Skip directories without index.js
             }
         } else if (file.endsWith('.js')) {
+            // Skip utility files (starting with .) silently
+            if (file.startsWith('.')) {
+                continue;
+            }
             command = require(filePath);
         } else {
             continue; 
         }
 
-        if ('data' in command && 'execute' in command) {
-            client.commands.set(command.data.name, command);
-            
-            // Register component handlers if present
-            if (command.handlers) {
-                for (const [customId, handler] of Object.entries(command.handlers)) {
-                    client.componentHandlers.set(customId, handler);
-                }
-            }
-        } else {
+        if (!command.data || !command.execute) {
             ConsoleLogger.warn('Loader', `The command at ${filePath} is missing a required "data" or "execute" property.`);
+            continue;
+        }
+        
+        client.commands.set(command.data.name, command);
+        
+        // Register component handlers if present
+        if (command.handlers) {
+            for (const [customId, handler] of Object.entries(command.handlers)) {
+                client.componentHandlers.set(customId, handler);
+            }
         }
     } catch (err) {
         ConsoleLogger.error('Loader', `Failed to load command ${file}:`, err);

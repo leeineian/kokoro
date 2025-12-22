@@ -13,28 +13,52 @@ module.exports = {
      * Autocomplete handler for webhook-looper options
      */
     async autocomplete(interaction) {
+        const perfStart = performance.now();
         const focusedValue = interaction.options.getFocused().toLowerCase();
+        const subcommand = interaction.options.getSubcommand();
         
-        // Only handle stop subcommand for now
-        if (interaction.options.getSubcommand() !== 'stop') return;
+        if (subcommand !== 'stop' && subcommand !== 'start') return;
 
         const options = [];
-        
-        // Add "Stop All" if multiple loops are running
-        if (activeLoops.size > 1) {
-            options.push({ name: '🛑 Stop All Running Loops', value: 'all' });
-        }
+        const { webhookLooper: repo } = require('../../utils/core/database');
 
-        // Add individual active loops
-        for (const [id, state] of activeLoops) {
-            const { webhookLooper: repo } = require('../../utils/core/database');
-            const config = repo.getLoopConfig(id);
-            const name = config?.channelName || id;
-            options.push({ name: `🛑 Stop Loop: ${name}`, value: id });
+        if (subcommand === 'stop') {
+            // Add "Stop All" if multiple loops are running
+            if (activeLoops.size > 1) {
+                options.push({ name: '🛑 Stop All Running Loops', value: 'all' });
+            }
+
+            // Add individual active loops
+            for (const [id, state] of activeLoops) {
+                const config = repo.getLoopConfig(id);
+                const name = config?.channelName || id;
+                options.push({ name: `🛑 Stop Loop: ${name}`, value: id });
+            }
+        } else if (subcommand === 'start') {
+            const configs = repo.getAllLoopConfigs();
+            
+            if (configs.length > 1) {
+                options.push({ name: '🚀 Start All Configured Loops', value: 'all' });
+            }
+
+            for (const config of configs) {
+                const isRunning = activeLoops.has(config.channelId);
+                const status = isRunning ? '🟢 (Running)' : '⚪ (Idle)';
+                options.push({ 
+                    name: `🚀 Start Loop: ${config.channelName} ${status}`, 
+                    value: config.channelId 
+                });
+            }
         }
 
         // Filter by user input
         const filtered = options.filter(opt => opt.name.toLowerCase().includes(focusedValue)).slice(0, 25);
+        
+        const perfEnd = performance.now();
+        const perfTime = (perfEnd - perfStart).toFixed(2);
+        if (perfTime > 100) {
+            ConsoleLogger.warn('WebhookLooper', `Slow autocomplete (${perfTime}ms) - consider caching`);
+        }
         
         await interaction.respond(filtered).catch(() => {});
     },
@@ -54,11 +78,12 @@ module.exports = {
                 case 'set':
                     return await setLoopConfig(interaction);
                 case 'start':
-                    return await startLoops(interaction);
+                    const startTarget = interaction.options.getString('target');
+                    return await startLoops(interaction, startTarget);
                 case 'stop':
-                    const target = interaction.options.getString('target');
-                    if (target) {
-                        return await this.handleStopTarget(interaction, target);
+                    const stopTarget = interaction.options.getString('target');
+                    if (stopTarget) {
+                        return await this.handleStopTarget(interaction, stopTarget);
                     }
                     return await stopLoops(interaction);
                 case 'purge':
@@ -202,35 +227,35 @@ module.exports = {
      * Handle stopping a specific target from autocomplete
      */
     async handleStopTarget(interaction, target) {
+        // Defer reply to prevent timeout during thread cleanup
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        
         if (target === 'all') {
             const loopIds = Array.from(activeLoops.keys());
             
             if (loopIds.length === 0) {
-                return interaction.reply({ content: 'ℹ️ No loops are currently running.', flags: MessageFlags.Ephemeral });
+                return interaction.editReply({ content: 'ℹ️ No loops are currently running.' });
             }
 
             for (const id of loopIds) {
                 await stopLoopInternal(id, interaction.client);
             }
 
-            return interaction.reply({ 
-                content: `🛑 Stopped all **${val.plain(loopIds.length)}** running loops.`, 
-                flags: MessageFlags.Ephemeral 
+            return interaction.editReply({ 
+                content: `🛑 Stopped all **${val.plain(loopIds.length)}** running loops.`
             });
         } else {
             // Stop specific loop
             const success = await stopLoopInternal(target, interaction.client);
             
             if (!success) {
-                return interaction.reply({ 
-                    content: `❌ Could not find or stop loop for target: \`${target}\`.`, 
-                    flags: MessageFlags.Ephemeral 
+                return interaction.editReply({ 
+                    content: `❌ Could not find or stop loop for target: \`${target}\`.`
                 });
             }
 
-            return interaction.reply({ 
-                content: `✅ Stopped the selected loop.`, 
-                flags: MessageFlags.Ephemeral 
+            return interaction.editReply({ 
+                content: `✅ Stopped the selected loop.`
             });
         }
     },

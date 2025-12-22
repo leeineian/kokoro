@@ -6,15 +6,17 @@ const stmt = {
     add: db.prepare(`
         INSERT OR REPLACE INTO loop_channels (
             channelId, channelName, channelType, rounds, interval,
-            activeChannelName, inactiveChannelName, message, isRunning
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT isRunning FROM loop_channels WHERE channelId = ?), 0))
+            activeChannelName, inactiveChannelName, message, webhookAuthor, webhookAvatar,
+            useThread, threadMessage, threads, isRunning
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT isRunning FROM loop_channels WHERE channelId = ?), 0))
     `),
     get: db.prepare('SELECT * FROM loop_channels WHERE channelId = ?'),
     getAll: db.prepare('SELECT * FROM loop_channels'),
     delete: db.prepare('DELETE FROM loop_channels WHERE channelId = ?'),
     clearAll: db.prepare('DELETE FROM loop_channels'),
     setState: db.prepare('UPDATE loop_channels SET isRunning = ? WHERE channelId = ?'),
-    setName: db.prepare('UPDATE loop_channels SET channelName = ? WHERE channelId = ?')
+    setName: db.prepare('UPDATE loop_channels SET channelName = ? WHERE channelId = ?'),
+    setThreads: db.prepare('UPDATE loop_channels SET threads = ? WHERE channelId = ?')
 };
 
 /**
@@ -28,6 +30,9 @@ const stmt = {
  * @param {string} [config.activeChannelName] - Name when loop is active
  * @param {string} [config.inactiveChannelName] - Name when loop is inactive
  * @param {string} [config.message] - Message to send (defaults to @everyone)
+ * @param {boolean} [config.useThread] - Whether to create and use threads
+ * @param {string} [config.threadMessage] - Message to send in threads
+ * @param {string} [config.threads] - JSON string of thread mappings
  */
 const addLoopConfig = (channelId, config) => {
     try {
@@ -40,6 +45,11 @@ const addLoopConfig = (channelId, config) => {
             config.activeChannelName || null,
             config.inactiveChannelName || null,
             config.message || '@everyone',
+            config.webhookAuthor || null,
+            config.webhookAvatar || null,
+            config.useThread ? 1 : 0,
+            config.threadMessage || null,
+            config.threads || null,
             channelId // For subquery to preserve state
         );
     } catch (error) {
@@ -128,6 +138,21 @@ const updateChannelName = (channelId, channelName) => {
     }
 };
 
+/**
+ * Update thread mappings for a loop configuration
+ * @param {string} channelId 
+ * @param {Object} threadMappings - Object mapping channelId -> threadId
+ */
+const setThreadMappings = (channelId, threadMappings) => {
+    try {
+        const threadsJson = threadMappings ? JSON.stringify(threadMappings) : null;
+        return stmt.setThreads.run(threadsJson, channelId);
+    } catch (error) {
+        ConsoleLogger.error('Database', 'Failed to set thread mappings:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     addLoopConfig,
     getLoopConfig,
@@ -135,5 +160,6 @@ module.exports = {
     deleteLoopConfig,
     clearAllLoopConfigs,
     setLoopState,
-    updateChannelName
+    updateChannelName,
+    setThreadMappings
 };

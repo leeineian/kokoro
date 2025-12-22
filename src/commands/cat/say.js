@@ -1,10 +1,14 @@
 const { MessageFlags } = require('discord.js');
 const V2Builder = require('../../utils/core/components');
 const ConsoleLogger = require('../../utils/log/consoleLogger');
+const { sanitizeInput, validateLength, validateColor, ALLOWED_COLORS } = require('../.validation');
 
 // Configuration constants
 const { ANSI_COLORS, ANSI_RESET, getVisualWidth, wrapText } = require('./.helper');
-
+const MAX_MESSAGE_LENGTH = 280;
+const MIN_MESSAGE_LENGTH = 1;
+const BUBBLE_TEXT_WIDTH = 30;
+const CAT_ASCII_WIDTH = 13;
 
 /**
  * Cat Say Command - Generates ASCII art speech bubbles with a cat
@@ -32,15 +36,48 @@ module.exports = {
             }
             
             // Validate message length
-            if (message.length > MAX_MESSAGE_LENGTH) {
+            if (!validateLength(message, MIN_MESSAGE_LENGTH, MAX_MESSAGE_LENGTH)) {
                 return interaction.reply({
-                    content: `Message is too long! Keep it under ${MAX_MESSAGE_LENGTH} characters.`,
+                    content: `Message must be between ${MIN_MESSAGE_LENGTH} and ${MAX_MESSAGE_LENGTH} characters.`,
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+
+            // Sanitize message (prevent ANSI injection, but allow newlines for formatting)
+            const sanitizedMessage = sanitizeInput(message, { allowNewlines: true, allowAnsi: false });
+            
+            // Additional check - ensure sanitized message isn't empty after cleaning
+            if (sanitizedMessage.trim().length === 0) {
+                return interaction.reply({
+                    content: '⚠️ Your message contains only invalid characters!',
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+
+            // Validate color choices
+            if (!validateColor(msgColor, ALLOWED_COLORS)) {
+                return interaction.reply({
+                    content: `Invalid message color! Allowed colors: ${ALLOWED_COLORS.join(', ')}`,
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+            
+            if (!validateColor(bubColor, ALLOWED_COLORS)) {
+                return interaction.reply({
+                    content: `Invalid bubble color! Allowed colors: ${ALLOWED_COLORS.join(', ')}`,
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+            
+            if (!validateColor(catColor, ALLOWED_COLORS)) {
+                return interaction.reply({
+                    content: `Invalid cat color! Allowed colors: ${ALLOWED_COLORS.join(', ')}`,
                     flags: MessageFlags.Ephemeral
                 });
             }
 
             // Build the speech bubble
-            const lines = wrapText(message, BUBBLE_TEXT_WIDTH);
+            const lines = wrapText(sanitizedMessage, BUBBLE_TEXT_WIDTH);
             const maxLen = Math.max(...lines.map(l => getVisualWidth(l)));
             
             // Apply bubble color if specified
