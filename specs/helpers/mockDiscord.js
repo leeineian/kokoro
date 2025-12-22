@@ -241,8 +241,10 @@ function createMockCommandOptions(data = []) {
  */
 function addInteractionTypeMethods(interaction) {
     interaction.isChatInputCommand = mock(() => interaction.type === 2);
-    interaction.isButton = mock(() => interaction.type === 3);
-    interaction.isStringSelectMenu = mock(() => interaction.type === 3 && interaction.customId);
+    interaction.isButton = mock(() => interaction.type === 3 && interaction.customId && !interaction.values);
+    interaction.isStringSelectMenu = mock(() => interaction.type === 3 && interaction.customId && Array.isArray(interaction.values));
+    interaction.isAutocomplete = mock(() => interaction.type === 4);
+    interaction.isCommand = mock(() => interaction.isChatInputCommand());
     return interaction;
 }
 

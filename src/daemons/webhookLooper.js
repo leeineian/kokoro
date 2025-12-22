@@ -2,6 +2,7 @@ const { PermissionFlagsBits, ChannelType, MessageFlags } = require('discord.js')
 const ConsoleLogger = require('../utils/log/consoleLogger');
 const V2Builder = require('../utils/core/components');
 const { webhookLooper: webhookRepo } = require('../utils/core/database');
+const { ANSI, title, key, val, formatInterval } = require('../commands/debug/.helper');
 
 // --- STATE ---
 // Map<channelId, { config, hooks }>
@@ -42,27 +43,42 @@ function parseInterval(interval) {
     }
 }
 
-/**
- * Format milliseconds to human-readable interval
- */
-function formatInterval(ms) {
-    if (ms === 0) return 'infinite';
-    if (ms < 60000) return `${ms / 1000}s`;
-    if (ms < 3600000) return `${ms / 60000}min`;
-    return `${ms / 3600000}h`;
-}
 
 /**
  * Rename channel or category
+ * @param {import('discord.js').GuildChannel} channel 
+ * @param {string} newName 
  */
 async function renameChannel(channel, newName) {
-    if (!newName) return;
+    if (!newName || channel.name === newName) return;
     try {
         await channel.setName(newName);
         ConsoleLogger.info('WebhookLooper', `Renamed ${channel.type === ChannelType.GuildCategory ? 'category' : 'channel'} to: ${newName}`);
     } catch (err) {
         ConsoleLogger.error('WebhookLooper', `Failed to rename channel/category:`, err);
     }
+}
+
+/**
+ * Sync base names from Discord (updates DB if changed while NOT running)
+ */
+async function syncBaseNames(client) {
+    let synced = 0;
+    for (const [id, data] of configuredChannels) {
+        if (activeLoops.has(id)) continue; // Don't sync while running
+
+        const channel = await client.channels.fetch(id).catch(() => null);
+        if (channel && channel.name !== data.config.channelName) {
+            // Only update if it's not the active name (which is temporary)
+            // We allow syncing TO the inactive name because that's often the intended base state
+            if (channel.name !== data.config.activeChannelName) {
+                data.config.channelName = channel.name;
+                webhookRepo.updateChannelName(id, channel.name);
+                synced++;
+            }
+        }
+    }
+    if (synced > 0) ConsoleLogger.info('WebhookLooper', `Synced ${synced} base names from Discord.`);
 }
 
 /**
@@ -77,9 +93,17 @@ async function listLoopConfigs(interaction) {
         return interaction.reply({ content: 'ℹ️ No channels/categories are currently configured.', flags: MessageFlags.Ephemeral });
     }
 
+    // Defer because we might fetch many channels
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     const configs = Array.from(configuredChannels.entries());
-    const list = configs.map(([id, data]) => {
+    const listItems = await Promise.all(configs.map(async ([id, data]) => {
         const active = activeLoops.get(id);
+        const channel = await interaction.client.channels.fetch(id).catch(() => null);
+        
+        // Use live name if available, otherwise fallback to stored configuration name
+        const displayName = channel?.name || data.config.channelName;
+        
         const typeIcon = data.config.channelType === 'category' ? '📁' : '💬';
         const roundsStr = data.config.rounds === 0 ? 'Random' : data.config.rounds;
         const intervalStr = formatInterval(data.config.interval);
@@ -93,15 +117,22 @@ async function listLoopConfigs(interaction) {
             status = `🟠 **Configured** (Ready)`;
         }
         
-        return `${typeIcon} **${data.config.channelName}** [${data.hooks ? data.hooks.length : '?'} channels] - Rounds: ${roundsStr}, Interval: ${intervalStr}\n    ${status}`;
-    }).join('\n\n');
+        return `${typeIcon} **${displayName}** [${data.hooks ? data.hooks.length : '?'} channels] - Rounds: ${roundsStr}, Interval: ${intervalStr}\n    ${status}`;
+    }));
 
-    // Build select menu for deletion
-    const selectOptions = configs.map(([id, data]) => ({
-        label: data.config.channelName,
-        value: id,
-        description: `${data.config.channelType} • Rounds: ${data.config.rounds === 0 ? 'Random' : data.config.rounds}`,
-        emoji: data.config.channelType === 'category' ? '📁' : '💬'
+    const list = listItems.join('\n\n');
+
+    // Build select menu for deletion (always use live names if possible)
+    const selectOptions = await Promise.all(configs.map(async ([id, data]) => {
+        const channel = await interaction.client.channels.fetch(id).catch(() => null);
+        const displayName = channel?.name || data.config.channelName;
+
+        return {
+            label: displayName.substring(0, 100),
+            value: id,
+            description: `${data.config.channelType} • Rounds: ${data.config.rounds === 0 ? 'Random' : data.config.rounds}`,
+            emoji: data.config.channelType === 'category' ? '📁' : '💬'
+        };
     }));
 
     const components = [
@@ -119,7 +150,8 @@ async function listLoopConfigs(interaction) {
 
     const container = V2Builder.container(components);
     
-    return interaction.reply({ 
+    return interaction.editReply({ 
+        content: null,
         components: [container], 
         flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral 
     });
@@ -293,7 +325,7 @@ async function setLoopConfig(interaction) {
         }
         await updateUI(true);
     } catch (error) {
-        ConsoleLogger.error(`Setup-${channel.name}`, `Error:`, error);
+        ConsoleLogger.error(`${channel.name}`, `Error:`, error);
         return message.edit(`❌ Error setting up webhooks: ${error.message}`);
     }
 
@@ -322,8 +354,7 @@ async function setLoopConfig(interaction) {
  */
 async function prepareWebhooksForChannel(channel, client, logCallback) {
     try {
-        const msg = `[Setup-${channel.name}] Processing channel: ${channel.name}`;
-        ConsoleLogger.info('Setup', msg);
+        const msg = `[${channel.name}] Processing channel: ${channel.name}`;
         if (logCallback) logCallback(msg);
 
         const existingHooks = await channel.fetchWebhooks();
@@ -331,7 +362,7 @@ async function prepareWebhooksForChannel(channel, client, logCallback) {
 
         if (!hook) {
             if (existingHooks.size >= 10) {
-                const warning = `[Setup-${channel.name}] ⚠️ Channel '${channel.name}' has 10 webhooks and none belong to us. Skipping.`;
+                const warning = `[${channel.name}] ⚠️ Channel '${channel.name}' has 10 webhooks and none belong to us. Skipping.`;
                 ConsoleLogger.warn('Setup', warning);
                 if (logCallback) logCallback(warning);
                 return [];
@@ -342,6 +373,10 @@ async function prepareWebhooksForChannel(channel, client, logCallback) {
             });
         }
         
+        const successMsg = `[${channel.name}] Processed channel: ${channel.name}`;
+        ConsoleLogger.success('Setup', successMsg);
+        if (logCallback) logCallback(successMsg);
+
         return [{ hook, channelName: channel.name }];
     } catch (err) {
         ConsoleLogger.error('Setup', `Failed to setup channel '${channel.name}':`, err);
@@ -369,8 +404,7 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
             try {
                 if (attempts === 1) {
                     i++;
-                    const msg = `[Setup-${category.name}] Processing channel ${i}/${targetChannels.size}: ${channel.name}`;
-                    ConsoleLogger.info('Setup', msg);
+                    const msg = `[${category.name}] Processing channel ${i}/${targetChannels.size}: ${channel.name}`;
                     if (logCallback) logCallback(msg);
                 }
 
@@ -379,7 +413,7 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
 
                 if (!hook) {
                     if (existingHooks.size >= 10) {
-                        const warning = `[Setup-${category.name}] ⚠️ Channel '${channel.name}' has 10 webhooks and none belong to us. Skipping.`;
+                        const warning = `[${category.name}] ⚠️ Channel '${channel.name}' has 10 webhooks and none belong to us. Skipping.`;
                         ConsoleLogger.warn('Setup', warning);
                         if (logCallback) logCallback(warning);
                         success = true;
@@ -391,7 +425,12 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
                         }), 20000);
                     }
                 }
-                if (hook) hooks.push({ hook, channelName: channel.name });
+                if (hook) {
+                    hooks.push({ hook, channelName: channel.name });
+                    const successMsg = `[${category.name}] Processed channel ${i}/${targetChannels.size}: ${channel.name}`;
+                    ConsoleLogger.success('Setup', successMsg);
+                    if (logCallback) logCallback(successMsg);
+                }
                 success = true;
             } catch (err) {
                 if (err.status === 429 || err.code === 429) {
@@ -399,22 +438,22 @@ async function prepareWebhooksForCategory(category, client, logCallback) {
                     if (err.retry_after) retryTime = err.retry_after * 1000;
                     if (err.global) retryTime += 100;
                     
-                    ConsoleLogger.warn('Setup', `[Setup-${category.name}] ⚠️ Rate Limit on '${channel.name}'. Waiting ${(retryTime/1000).toFixed(1)}s (Attempt ${attempts}/3)...`);
-                    if (logCallback) logCallback(`[Setup-${category.name}] ⚠️ Rate Limit. Retrying in ${(retryTime/1000).toFixed(1)}s...`);
+                    ConsoleLogger.warn('Setup', `[${category.name}] ⚠️ Rate Limit on '${channel.name}'. Waiting ${(retryTime/1000).toFixed(1)}s (Attempt ${attempts}/3)...`);
+                    if (logCallback) logCallback(`[${category.name}] ⚠️ Rate Limit. Retrying in ${(retryTime/1000).toFixed(1)}s...`);
                     
                     await sleep(retryTime);
                     continue;
                 }
 
                 if (err.message === 'Timeout') {
-                    ConsoleLogger.warn('Setup', `[Setup-${category.name}] ⚠️ Timeout on '${channel.name}'. Retrying (Attempt ${attempts}/3)...`);
-                    if (logCallback) logCallback(`[Setup-${category.name}] ⚠️ Timeout. Retrying...`);
+                    ConsoleLogger.warn('Setup', `[${category.name}] ⚠️ Timeout on '${channel.name}'. Retrying (Attempt ${attempts}/3)...`);
+                    if (logCallback) logCallback(`[${category.name}] ⚠️ Timeout. Retrying...`);
                     await sleep(2000);
                     continue;
                 }
 
                 const errName = err.code === 50013 ? 'Missing Permissions' : err.message;
-                const errorMsg = `[Setup-${category.name}] ❌ Failed to setup channel '${channel.name}': ${errName}. Skipping.`;
+                const errorMsg = `[${category.name}] ❌ Failed to setup channel '${channel.name}': ${errName}. Skipping.`;
                 ConsoleLogger.error('Setup', errorMsg);
                 if (logCallback) logCallback(errorMsg);
                 success = true;
@@ -583,28 +622,81 @@ function logSuccess(startTime, logCallback) {
     const configCount = configuredChannels.size;
     
     if (totalChannels > 0) {
-        const msg = `Successfully initialized ${configCount} config(s) with ${totalChannels} channel(s) in ${duration}s.`;
+        const msg = `Successfully initialized ${val(configCount)} config(s) with ${val(totalChannels)} channel(s) in ${val(duration + 's')}.`;
         ConsoleLogger.success('WebhookLooper', msg);
-        if (logCallback) logCallback(`[WebhookLooper] ${msg}`, true);
+        if (logCallback) logCallback(`[${title('WebhookLooper')}] ${msg}`, true);
     } else {
         const msg = `⚠️ Finished execution but no channels were targeted.`;
         ConsoleLogger.warn('WebhookLooper', msg);
-        if (logCallback) logCallback(`[WebhookLooper] ${msg}`, true);
+        if (logCallback) logCallback(`[${title('WebhookLooper')}] ${msg}`, true);
     }
+}
+
+/**
+ * Stop a specific loop and perform cleanup
+ * @param {string} channelId 
+ * @param {import('discord.js').Client} client
+ */
+async function stopLoopInternal(channelId, client) {
+    const state = activeLoops.get(channelId);
+    if (!state) return false;
+
+    const data = configuredChannels.get(channelId);
+    if (!data) return false;
+
+    // 1. Signal stop (interrupts round loop)
+    state.stop();
+
+    // 2. Clear timeout (interrupts wait between rounds in random mode)
+    if (state.intervalTimeout) {
+        clearTimeout(state.intervalTimeout);
+        state.intervalTimeout = null;
+    }
+
+    // 3. Persist state
+    webhookRepo.setLoopState(channelId, false);
+    activeLoops.delete(channelId);
+
+    // 4. Rename to inactive
+    if (data.config.inactiveChannelName) {
+        const channel = await client.channels.fetch(channelId).catch(() => null);
+        if (channel) {
+            await renameChannel(channel, data.config.inactiveChannelName);
+        }
+    }
+
+    ConsoleLogger.warn('WebhookLooper', `Stopped loop for: ${data.config.channelName}`);
+    return true;
 }
 
 // Internal loop starter
 function startLoop(channelId, data, interaction, logCallback, startTime, executionState) {
     let running = true;
-    const stop = () => { running = false; };
+    const stop = () => { 
+        running = false;
+        // If we are in a sleep, we need to be able to wake up or at least check frequently
+    };
     
-    const state = { stop, roundsTotal: 0, currentRound: 0, intervalTimeout: null };
+    const state = { 
+        stop, 
+        roundsTotal: 0, 
+        currentRound: 0, 
+        intervalTimeout: null,
+        // Helper to check if still running (checks both local flag and global map)
+        isAlive: () => running && activeLoops.has(channelId)
+    };
     activeLoops.set(channelId, state);
     webhookRepo.setLoopState(channelId, true); // Persist state
 
     const log = (msg, force = false) => {
-        ConsoleLogger.info(data.config.channelName, msg);
-        if (logCallback) logCallback(msg, force);
+        const currentName = data.config.channelName;
+        if (executionState?.isInitializing) {
+            ConsoleLogger.info('Startup', `[${currentName}] ${msg}`);
+        } else {
+            ConsoleLogger.info(currentName, msg);
+        }
+        // Prefix for UI logs to stay distinguishable in global view
+        if (logCallback) logCallback(`[${title(currentName)}] ${msg}`, force);
     };
 
     // Rename channel to active name
@@ -626,20 +718,22 @@ function startLoop(channelId, data, interaction, logCallback, startTime, executi
     
     if (isTimedMode) {
         // Timed mode: loop continuously until interval expires
-        log(`[${data.config.channelName}] Starting timed loop for ${formatInterval(data.config.interval)}`, true);
+        log(`Starting timed loop for ${formatInterval(data.config.interval)}`, true);
         
         state.intervalTimeout = setTimeout(async () => {
-            log(`[${data.config.channelName}] ⏰ Time limit reached. Finishing last round...`, true);
+            log(`⏰ Time limit reached. Finishing last round...`, true);
             gracefulStop = true;
             // We do NOT call stop() here. We let the loop finish its current iteration.
         }, data.config.interval);
     } else if (isRandomInfiniteMode) {
         // Random infinite mode
-        log(`[${data.config.channelName}] Starting infinite random mode`, true);
+        log(`Starting infinite random mode`, true);
     }
 
     (async () => {
-        while (running) {
+        const isAlive = state.isAlive;
+        
+        while (isAlive()) {
             if (isRandomInfiniteMode) {
                 // Generate random rounds and delay for this iteration
                 const randomRounds = Math.floor(Math.random() * 100) + 1; // 1-100
@@ -648,39 +742,44 @@ function startLoop(channelId, data, interaction, logCallback, startTime, executi
                 state.roundsTotal = randomRounds;
                 state.currentRound = 0;
                 
-                log(`[${data.config.channelName}] 🎲 Random: ${randomRounds} rounds, next delay: ${formatInterval(randomDelay)}`, true);
+                log(`🎲 Random: ${randomRounds} rounds, next delay: ${formatInterval(randomDelay)}`, true);
                 
                 // Execute the random rounds
-                for (let i = 0; i < randomRounds && running; i++) {
+                for (let i = 0; i < randomRounds && isAlive(); i++) {
                     state.currentRound = i + 1;
-                    log(`[${data.config.channelName}] Round ${state.currentRound}/${randomRounds}`, true);
+                    log(`Round ${state.currentRound}/${randomRounds}`, true);
                     
-                    await executeRound(data, running, log, interaction);
+                    await executeRound(data, isAlive, log, interaction);
                     
-                    if (!running) break;
+                    if (!isAlive()) break;
                     if (i < randomRounds - 1) {
                         await sleep(LOOP_DELAY);
                     }
                 }
                 
                 // Wait random delay before next iteration
-                if (running) {
-                    log(`[${data.config.channelName}] ⏳ Waiting ${formatInterval(randomDelay)} before next iteration...`, true);
+                if (isAlive()) {
+                    log(`⏳ Waiting ${val(formatInterval(randomDelay))} before next iteration...`, true);
+                    
+                    // Use a promise-based sleep that we can "interrupt" if needed, 
+                    // though for now clearing the timeout in stopLoopInternal and checking isAlive is enough
+                    // because we split long sleeps into smaller chunks or just check after sleep.
+                    // For now, let's keep it simple: if stopped during sleep, the loop condition while(isAlive()) will catch it.
                     await sleep(randomDelay);
                 }
             } else if (isTimedMode) {
                 // Timed mode: run until gracefulStop is set (or manual stop)
-                // The loop condition while(running) catches manual stops.
+                // The loop condition while(isAlive()) catches manual stops.
                 // We check gracefulStop inside.
                 
-                if (gracefulStop) break;
+                if (gracefulStop || !isAlive()) break;
 
                 state.currentRound++;
-                log(`[${data.config.channelName}] Round ${state.currentRound}`, true);
+                log(`Round ${val(state.currentRound)}`, true);
                 
-                await executeRound(data, running, log, interaction);
+                await executeRound(data, isAlive, log, interaction);
                 
-                if (running && !gracefulStop) {
+                if (isAlive() && !gracefulStop) {
                     await sleep(LOOP_DELAY);
                 }
             } else {
@@ -688,13 +787,13 @@ function startLoop(channelId, data, interaction, logCallback, startTime, executi
                 const roundsTotal = data.config.rounds === 0 ? Math.floor(Math.random() * 10) + 1 : data.config.rounds;
                 state.roundsTotal = roundsTotal;
                 
-                while (running && state.currentRound < roundsTotal) {
+                while (isAlive() && state.currentRound < roundsTotal) {
                     state.currentRound++;
-                    log(`[${data.config.channelName}] Round ${state.currentRound}/${roundsTotal}`, true);
+                    log(`Round ${val(state.currentRound + '/' + roundsTotal)}`, true);
                     
-                    await executeRound(data, running, log, interaction);
+                    await executeRound(data, isAlive, log, interaction);
                     
-                    if (state.currentRound < roundsTotal && running) {
+                    if (state.currentRound < roundsTotal && isAlive()) {
                         await sleep(LOOP_DELAY);
                     }
                 }
@@ -702,7 +801,7 @@ function startLoop(channelId, data, interaction, logCallback, startTime, executi
             }
         }
 
-        log(`[${data.config.channelName}] Finished.`, true);
+        log(`${ANSI.red}Finished.${ANSI.reset}`, true);
         
         // Clear interval timeout if set
         if (state.intervalTimeout) {
@@ -725,13 +824,14 @@ function startLoop(channelId, data, interaction, logCallback, startTime, executi
 }
 
 // Helper to execute a single round of webhook sends
-async function executeRound(data, running, log, interaction) {
+async function executeRound(data, isAlive, log, interaction) {
+    // isAlive is a function passed as 'isAlive' in startLoop
     for (let i = 0; i < data.hooks.length; i += BATCH_SIZE) {
-        if (!running) break;
+        if (!isAlive()) break;
 
         const batch = data.hooks.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async ({ hook, channelName }) => {
-            if (!running) return;
+            if (!isAlive()) return;
 
             try {
                 await hook.send({
@@ -746,7 +846,7 @@ async function executeRound(data, running, log, interaction) {
                         retryTime = (err.rawError.retry_after * 1000) + 50;
                     }
                     
-                    ConsoleLogger.warn(`Run-${data.config.channelName}`, `⚠️ Rate Limit hit on ${channelName}. Backing off ${(retryTime/1000).toFixed(1)}s...`);
+                    ConsoleLogger.warn(`Run-${data.config.channelName}`, `⚠️ Rate Limit hit on ${channelName}. Backing off ${val((retryTime/1000).toFixed(1) + 's')}...`);
                     await sleep(retryTime); 
                 } else if (err.code === 10015) {
                     ConsoleLogger.warn(`Run-${data.config.channelName}`, `⚠️ Webhook for ${channelName} is missing (404). Removing from list.`);
@@ -758,7 +858,7 @@ async function executeRound(data, running, log, interaction) {
             }
         }));
         
-        if (!running) break;
+        if (!isAlive()) break;
         await sleep(0);
     }
 }
@@ -783,20 +883,8 @@ async function stopLoops(interaction) {
 
     if (activeConfigs.length === 1) {
         // Only one running, stop it directly
-        const { id, state, config } = activeConfigs[0];
-        state.stop();
-        if (state.intervalTimeout) clearTimeout(state.intervalTimeout);
-        
-        // Rename to inactive
-        const channel = await interaction.client.channels.fetch(id).catch(() => null);
-        if (channel && config.inactiveChannelName) {
-            await renameChannel(channel, config.inactiveChannelName);
-        }
-        
-        activeLoops.delete(id);
-        webhookRepo.setLoopState(id, false);
-        
-        ConsoleLogger.warn('WebhookLooper', `Stopped loop for: ${config.channelName}`);
+        const { id, config } = activeConfigs[0];
+        await stopLoopInternal(id, interaction.client);
         return interaction.reply({ content: `✅ Stopped loop for **${config.channelName}**.`, flags: MessageFlags.Ephemeral });
     }
 
@@ -904,6 +992,9 @@ async function initialize(client) {
         }
     }
     
+    // Sync base names (updates DB if manual renames happened while inactive)
+    await syncBaseNames(client);
+    
     // Ensure all channels are in inactive state on startup
     // Ensure all channels are in inactive state on startup (Batched for performance)
     const updates = [];
@@ -934,5 +1025,7 @@ module.exports = {
     listLoopConfigs,
     setLoopConfig,
     startLoops,
-    stopLoops
+    stopLoops,
+    stopLoopInternal,
+    activeLoops
 };

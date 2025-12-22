@@ -90,7 +90,8 @@ describe('Webhook Looper Script', () => {
         mock.module('../../src/utils/core/database', () => ({
             webhookLooper: {
                 getAllLoopConfigs: mock(() => []),
-                setLoopState: mock(() => {})
+                setLoopState: mock(() => {}),
+                updateChannelName: mock(() => {})
             }
         }));
 

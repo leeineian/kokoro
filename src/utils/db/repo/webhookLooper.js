@@ -13,7 +13,8 @@ const stmt = {
     getAll: db.prepare('SELECT * FROM loop_channels'),
     delete: db.prepare('DELETE FROM loop_channels WHERE channelId = ?'),
     clearAll: db.prepare('DELETE FROM loop_channels'),
-    setState: db.prepare('UPDATE loop_channels SET isRunning = ? WHERE channelId = ?')
+    setState: db.prepare('UPDATE loop_channels SET isRunning = ? WHERE channelId = ?'),
+    setName: db.prepare('UPDATE loop_channels SET channelName = ? WHERE channelId = ?')
 };
 
 /**
@@ -113,11 +114,26 @@ const setLoopState = (channelId, isRunning) => {
     }
 };
 
+/**
+ * Update the stored channel name
+ * @param {string} channelId 
+ * @param {string} channelName 
+ */
+const updateChannelName = (channelId, channelName) => {
+    try {
+        return stmt.setName.run(channelName, channelId);
+    } catch (error) {
+        ConsoleLogger.error('Database', 'Failed to update channel name:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     addLoopConfig,
     getLoopConfig,
     getAllLoopConfigs,
     deleteLoopConfig,
     clearAllLoopConfigs,
-    setLoopState
+    setLoopState,
+    updateChannelName
 };

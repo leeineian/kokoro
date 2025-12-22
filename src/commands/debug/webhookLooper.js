@@ -1,7 +1,7 @@
 const { MessageFlags } = require('discord.js');
 const ConsoleLogger = require('../../utils/log/consoleLogger');
-const { setLoopConfig, startLoops, listLoopConfigs, stopLoops } = require('../../daemons/webhookLooper');
-const { formatInterval } = require('./.helper');
+const { setLoopConfig, startLoops, listLoopConfigs, stopLoops, stopLoopInternal, activeLoops } = require('../../daemons/webhookLooper');
+const { formatInterval, val, title } = require('./.helper');
 
 
 /**
@@ -9,6 +9,36 @@ const { formatInterval } = require('./.helper');
  * Allows configuration and execution of webhook loops for testing
  */
 module.exports = {
+    /**
+     * Autocomplete handler for webhook-looper options
+     */
+    async autocomplete(interaction) {
+        const focusedValue = interaction.options.getFocused().toLowerCase();
+        
+        // Only handle stop subcommand for now
+        if (interaction.options.getSubcommand() !== 'stop') return;
+
+        const options = [];
+        
+        // Add "Stop All" if multiple loops are running
+        if (activeLoops.size > 1) {
+            options.push({ name: '🛑 Stop All Running Loops', value: 'all' });
+        }
+
+        // Add individual active loops
+        for (const [id, state] of activeLoops) {
+            const { webhookLooper: repo } = require('../../utils/core/database');
+            const config = repo.getLoopConfig(id);
+            const name = config?.channelName || id;
+            options.push({ name: `🛑 Stop Loop: ${name}`, value: id });
+        }
+
+        // Filter by user input
+        const filtered = options.filter(opt => opt.name.toLowerCase().includes(focusedValue)).slice(0, 25);
+        
+        await interaction.respond(filtered).catch(() => {});
+    },
+
     /**
      * Handles webhook looper subcommands
      * @param {import('discord.js').ChatInputCommandInteraction} interaction - Discord interaction
@@ -26,6 +56,10 @@ module.exports = {
                 case 'start':
                     return await startLoops(interaction);
                 case 'stop':
+                    const target = interaction.options.getString('target');
+                    if (target) {
+                        return await this.handleStopTarget(interaction, target);
+                    }
                     return await stopLoops(interaction);
                 case 'purge':
                     return await this.purgeWebhooks(interaction);
@@ -159,9 +193,46 @@ module.exports = {
 
         // Final summary
             await interaction.editReply({
-                content: `✅ **Purge Complete**\n\nDeleted **${totalDeleted}** webhook(s) from **${category.name}**.`,
+                content: `✅ **Purge Complete**\n\nDeleted **${val(totalDeleted)}** webhook(s) from **${val(category.name)}**.`,
                 components: []
             });
+    },
+
+    /**
+     * Handle stopping a specific target from autocomplete
+     */
+    async handleStopTarget(interaction, target) {
+        if (target === 'all') {
+            const loopIds = Array.from(activeLoops.keys());
+            
+            if (loopIds.length === 0) {
+                return interaction.reply({ content: 'ℹ️ No loops are currently running.', flags: MessageFlags.Ephemeral });
+            }
+
+            for (const id of loopIds) {
+                await stopLoopInternal(id, interaction.client);
+            }
+
+            return interaction.reply({ 
+                content: `🛑 Stopped all **${val(loopIds.length)}** running loops.`, 
+                flags: MessageFlags.Ephemeral 
+            });
+        } else {
+            // Stop specific loop
+            const success = await stopLoopInternal(target, interaction.client);
+            
+            if (!success) {
+                return interaction.reply({ 
+                    content: `❌ Could not find or stop loop for target: \`${target}\`.`, 
+                    flags: MessageFlags.Ephemeral 
+                });
+            }
+
+            return interaction.reply({ 
+                content: `✅ Stopped the selected loop.`, 
+                flags: MessageFlags.Ephemeral 
+            });
+        }
     },
 
     // Component handlers for interactive elements
@@ -254,24 +325,51 @@ module.exports = {
          */
         stop_loop_select: async (interaction) => {
             const V2Builder = require('../../utils/core/components');
-            
-            const container = V2Builder.container([
-                V2Builder.textDisplay('⚠️ **Action Required**\n\nPlease use the `/debug webhook-looper stop` command to stop loops.'),
-            ]);
+            const selection = interaction.values[0];
 
             try {
-                // Determine if we should stop all or specific (just informational for now)
-                const selection = interaction.values[0];
-                
-                await interaction.update({
-                    content: null,
-                    components: [container],
-                    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
-                });
+                if (selection === '__STOP_ALL__') {
+                    const { activeLoops } = require('../../daemons/webhookLooper');
+                    const loopIds = Array.from(activeLoops?.keys() || []);
+                    
+                    if (loopIds.length === 0) {
+                         return interaction.update({
+                            content: null,
+                            components: [V2Builder.container([V2Builder.textDisplay('ℹ️ No loops are currently running.')])],
+                            flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+                        });
+                    }
+
+                    for (const id of loopIds) {
+                        await stopLoopInternal(id, interaction.client);
+                    }
+
+                    const container = V2Builder.container([
+                        V2Builder.textDisplay(`🛑 **Action Complete**\n\nStopped all **${val(loopIds.length)}** running loops.`),
+                    ]);
+
+                    await interaction.update({
+                        content: null,
+                        components: [container],
+                        flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+                    });
+                } else {
+                    // Stop specific loop
+                    const success = await stopLoopInternal(selection, interaction.client);
+                    
+                    const container = V2Builder.container([
+                        V2Builder.textDisplay(success ? `✅ **Action Complete**\n\nStopped the selected loop.` : `❌ **Error**\n\nCould not find or stop the selected loop.`),
+                    ]);
+
+                    await interaction.update({
+                        content: null,
+                        components: [container],
+                        flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+                    });
+                }
             } catch (error) {
                 ConsoleLogger.error('WebhookLooper', 'Failed to handle stop loop selection:', error);
                 
-                // Fallback attempt
                 try {
                      await interaction.reply({
                         content: '❌ Failed to process selection.',

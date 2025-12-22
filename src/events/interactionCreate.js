@@ -79,6 +79,18 @@ module.exports = {
                 return;
             }
 
+            if (interaction.isAutocomplete()) {
+                const command = client.commands.get(interaction.commandName);
+                if (!command || !command.autocomplete) return;
+                
+                try {
+                    await command.autocomplete(interaction);
+                } catch (error) {
+                    ConsoleLogger.error('Interaction', 'Autocomplete error:', error);
+                }
+                return;
+            }
+
             if (!interaction.isChatInputCommand()) {
                 // Select Menu Handling (via global handlers)
                 if (interaction.isStringSelectMenu()) {

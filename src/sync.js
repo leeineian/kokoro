@@ -26,7 +26,7 @@ const deployCommands = async () => {
             let command;
 
             if (fs.statSync(filePath).isDirectory()) {
-                const indexFile = path.join(filePath, 'index.js');
+                const indexFile = path.join(filePath, '.index.js');
                 if (fs.existsSync(indexFile)) {
                     command = require(indexFile);
                 } else {

@@ -16,6 +16,13 @@ const {
 // INTERACTION CREATE EVENT
 // ============================================================================
 
+// Mock statusRotator
+mock.module('../../src/daemons/statusRotator', () => ({
+    recordActivity: mock(() => {}),
+    start: mock(() => {}),
+    stop: mock(() => {})
+}));
+
 describe('InteractionCreate Event Handler', () => {
     let interactionCreate;
     let mockClient;

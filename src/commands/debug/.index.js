@@ -130,7 +130,12 @@ module.exports = {
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('stop')
-                        .setDescription('Stop running loops'))
+                        .setDescription('Stop running loops')
+                        .addStringOption(option =>
+                            option.setName('target')
+                                .setDescription('Select a specific loop to stop (or "all")')
+                                .setAutocomplete(true)
+                                .setRequired(true)))
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('purge')
@@ -199,6 +204,25 @@ module.exports = {
                     flags: MessageFlags.Ephemeral
                 });
             }
+        }
+    },
+
+    /**
+     * Routes autocomplete interactions to sub-handlers
+     * @param {import('discord.js').AutocompleteInteraction} interaction 
+     */
+    async autocomplete(interaction) {
+        try {
+            const group = interaction.options.getSubcommandGroup();
+            
+            // For now, only webhook-looper has autocomplete
+            if (group === 'webhook-looper') {
+                if (webhookLooperHandler.autocomplete) {
+                    await webhookLooperHandler.autocomplete(interaction);
+                }
+            }
+        } catch (error) {
+            ConsoleLogger.error('DebugCommand', 'Autocomplete routing error:', error);
         }
     },
 
