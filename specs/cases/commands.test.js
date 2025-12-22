@@ -3,8 +3,9 @@ const { describe, test, expect } = require('bun:test');
 // ============================================================================
 // CAT COMMAND
 // ============================================================================
-const catCommand = require('../../src/commands/cat/index');
-const sayHandler = require('../../src/commands/cat/say');
+const catCommand = require('../../src/commands/cat/.index');
+const catHelper = require('../../src/commands/cat/.helper');
+
 
 describe('Cat Command', () => {
     test('should have valid slash command data', () => {
@@ -29,32 +30,32 @@ describe('Cat Command', () => {
 
     describe('Say Handler', () => {
         test('getVisualWidth should calculate ASCII correctly', () => {
-            expect(sayHandler.getVisualWidth('hello')).toBe(5);
-            expect(sayHandler.getVisualWidth('cat')).toBe(3);
+            expect(catHelper.getVisualWidth('hello')).toBe(5);
+            expect(catHelper.getVisualWidth('cat')).toBe(3);
         });
 
         test('getVisualWidth should strip ANSI codes', () => {
             const textWithAnsi = '\x1b[31mred\x1b[0m';
-            expect(sayHandler.getVisualWidth(textWithAnsi)).toBe(3);
+            expect(catHelper.getVisualWidth(textWithAnsi)).toBe(3);
         });
 
         test('getVisualWidth should handle emoji as width 2', () => {
-            expect(sayHandler.getVisualWidth('😀')).toBe(2);
-            expect(sayHandler.getVisualWidth('🐱')).toBe(2);
+            expect(catHelper.getVisualWidth('😀')).toBe(2);
+            expect(catHelper.getVisualWidth('🐱')).toBe(2);
         });
 
         test('wrapText should wrap at maxWidth', () => {
-            const lines = sayHandler.wrapText('hello world this is a test', 10);
+            const lines = catHelper.wrapText('hello world this is a test', 10);
             expect(Array.isArray(lines)).toBe(true);
             expect(lines.length).toBeGreaterThan(1);
             
             lines.forEach(line => {
-                expect(sayHandler.getVisualWidth(line)).toBeLessThanOrEqual(10);
+                expect(catHelper.getVisualWidth(line)).toBeLessThanOrEqual(10);
             });
         });
 
         test('wrapText should handle empty string', () => {
-            const lines = sayHandler.wrapText('', 10);
+            const lines = catHelper.wrapText('', 10);
             expect(lines).toEqual(['']);
         });
     });
@@ -63,7 +64,7 @@ describe('Cat Command', () => {
 // ============================================================================
 // REMINDER COMMAND
 // ============================================================================
-const reminderCommand = require('../../src/commands/reminder/index');
+const reminderCommand = require('../../src/commands/reminder/.index');
 
 describe('Reminder Command', () => {
     test('should have valid slash command data', () => {
@@ -110,7 +111,7 @@ describe('Reminder Command', () => {
 // ============================================================================
 // AI COMMAND
 // ============================================================================
-const aiCommand = require('../../src/commands/ai/index');
+const aiCommand = require('../../src/commands/ai/.index');
 
 describe('AI Command', () => {
     test('should have valid slash command data', () => {
@@ -168,7 +169,7 @@ describe('AI Command', () => {
 // ============================================================================
 // DEBUG COMMAND
 // ============================================================================
-const debugCommand = require('../../src/commands/debug/index');
+const debugCommand = require('../../src/commands/debug/.index');
 
 describe('Debug Command', () => {
     test('should have valid slash command data', () => {
@@ -215,9 +216,9 @@ describe('Debug Command', () => {
     });
 
     describe('Subcommand Groups', () => {
-        test('should have rolecolor group', () => {
+        test('should have random-role-color group', () => {
             const options = debugCommand.data.options;
-            const rolecolor = options.find(opt => opt.name === 'rolecolor');
+            const rolecolor = options.find(opt => opt.name === 'random-role-color');
             expect(rolecolor).toBeDefined();
         });
 
