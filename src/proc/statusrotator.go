@@ -3,68 +3,44 @@ package proc
 import (
 	"fmt"
 	"math/rand"
-	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/leeineian/minder/src/sys"
 )
 
-const (
-	RotationInterval = 60 * time.Second
-	IdleThreshold    = 60 * time.Second
-)
+func GetRotationInterval() time.Duration {
+	return time.Duration(15+rand.Intn(46)) * time.Second
+}
 
 var (
 	StartTime       = time.Now()
-	statusList      []func(*discordgo.Session) *discordgo.Activity
-	statusTicker    *time.Ticker
+	statusList      []func(*discordgo.Session) string
 	statusStopChan  chan struct{}
-	configKeyStatus = "status_visible"
-
-	// Idle handling
-	lastInteraction = time.Now()
-	interactionMu   sync.RWMutex
+	lastStatusIdx   int = -1
+	configKeyStatus     = "status_visible"
 )
 
-// MarkInteraction updates the last interaction time
-func MarkInteraction() {
-	interactionMu.Lock()
-	lastInteraction = time.Now()
-	interactionMu.Unlock()
-}
-
-// StartStatusRotator starts the status rotation daemon
 func StartStatusRotator(s *discordgo.Session) {
-	sys.RegisterInteractionCallback(MarkInteraction)
-
-	// Initialize generators
-	statusList = []func(*discordgo.Session) *discordgo.Activity{
-		GenerateRemindersStatus,
-		GenerateColorStatus,
-		GenerateUptimeStatus,
-		GenerateLatencyStatus,
-		GenerateTimeStatus,
+	statusList = []func(*discordgo.Session) string{
+		GetRemindersStatus,
+		GetColorStatus,
+		GetUptimeStatus,
+		GetLatencyStatus,
+		GetTimeStatus,
 	}
 
-	if statusTicker != nil {
-		statusTicker.Stop()
-	}
 	if statusStopChan != nil {
 		close(statusStopChan)
 	}
-
-	statusTicker = time.NewTicker(RotationInterval)
 	statusStopChan = make(chan struct{})
-
-	// Run immediately
-	go updateStatus(s)
 
 	go func() {
 		for {
+			next := GetRotationInterval()
+			updateStatus(s, next)
 			select {
-			case <-statusTicker.C:
-				updateStatus(s)
+			case <-time.After(next):
 			case <-statusStopChan:
 				return
 			}
@@ -72,147 +48,91 @@ func StartStatusRotator(s *discordgo.Session) {
 	}()
 }
 
-// TriggerStatusUpdate forces an immediate status update
 func TriggerStatusUpdate(s *discordgo.Session) {
-	updateStatus(s)
+	updateStatus(s, 0)
 }
 
-// updateStatus checks config and updates the bot's status
-func updateStatus(s *discordgo.Session) {
-	// Check visibility config
+func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
+	if s == nil || s.State == nil || s.State.User == nil {
+		return
+	}
+
 	visibleStr, err := sys.GetBotConfig(configKeyStatus)
-	if err != nil {
-		sys.LogStatusRotator("DB Error: %v", err)
-		return
-	}
-
-	// Default to TRUE (enabled) if not set, to match existing behavior.
-	// Only disable if explicitly set to "false".
-	if visibleStr == "false" {
-		// Ensure simplified status (e.g. just online or dnd without custom text)
+	if err != nil || visibleStr == "false" {
 		s.UpdateStatusComplex(discordgo.UpdateStatusData{
-			Status:     "dnd",
-			Activities: []*discordgo.Activity{},
+			Status: "online",
 		})
 		return
 	}
 
-	// Pick random generator
-	gen := statusList[rand.Intn(len(statusList))]
-	activity := gen(s)
+	idx := rand.Intn(len(statusList))
+	if lastStatusIdx != -1 && len(statusList) > 1 && idx == lastStatusIdx {
+		idx = (idx + 1) % len(statusList)
+	}
+	lastStatusIdx = idx
 
-	// Fallback to uptime if generator returned nil
-	if activity == nil {
-		activity = GenerateUptimeStatus(s)
+	gen := statusList[idx]
+	text := gen(s)
+	if text == "" {
+		text = GetUptimeStatus(s)
 	}
 
-	if activity != nil {
-		// Update Status
+	activity := &discordgo.Activity{
+		Name:          text,
+		Type:          discordgo.ActivityTypeStreaming,
+		URL:           "https://www.twitch.tv/videos/1110069047",
+		ApplicationID: s.State.User.ID,
+	}
 
-		// Determine effective status based on idle time
-		statusStr := "online"
-		interactionMu.RLock()
-		if time.Since(lastInteraction) > IdleThreshold {
-			statusStr = "dnd"
-		}
-		interactionMu.RUnlock()
+	err = s.UpdateStatusComplex(discordgo.UpdateStatusData{
+		Status:     "online",
+		Activities: []*discordgo.Activity{activity},
+	})
 
-		err = s.UpdateStatusComplex(discordgo.UpdateStatusData{
-			Status:     statusStr,
-			Activities: []*discordgo.Activity{activity},
-		})
-		if err != nil {
-			sys.LogStatusRotator("Failed to update status: %v", err)
+	if err != nil {
+		sys.LogStatusRotator("Update failed: %v", err)
+	} else {
+		if nextInterval > 0 {
+			sys.LogStatusRotator("Status rotated to: %s (Next rotate in %v)", text, nextInterval)
+		} else {
+			sys.LogStatusRotator("Status rotated to: %s", text)
 		}
 	}
 }
 
 // Generators
 
-func GenerateRemindersStatus(s *discordgo.Session) *discordgo.Activity {
-	count, err := sys.GetRemindersCount()
-	if err != nil {
-		sys.LogStatusRotator("Reminders count error: %v", err)
-		return nil
-	}
+func GetRemindersStatus(s *discordgo.Session) string {
+	count, _ := sys.GetRemindersCount()
 	if count == 0 {
-		return nil
+		return ""
 	}
-
-	text := fmt.Sprintf("%d pending reminder", count)
-	if count != 1 {
-		text += "s"
-	}
-
-	return &discordgo.Activity{
-		Name:  "Custom Status",
-		Type:  discordgo.ActivityTypeCustom,
-		State: text,
-	}
+	return fmt.Sprintf("Reminder: %d", count)
 }
 
-func GenerateColorStatus(s *discordgo.Session) *discordgo.Activity {
+func GetColorStatus(s *discordgo.Session) string {
 	nextUpdate, guildID, found := GetNextUpdate()
 	if !found {
-		return nil
+		return ""
 	}
-
 	currentColor := GetCurrentColor(guildID)
-
 	diff := time.Until(nextUpdate)
-	minutes := int(diff.Minutes())
-	if minutes < 0 {
-		minutes = 0
-	}
-	// Round up logic from JS: Math.ceil
-	if diff.Seconds() > 0 {
-		minutes = int(diff.Minutes()) + 1
-	}
-
-	timeStr := fmt.Sprintf("%d minutes", minutes)
-	if minutes == 1 {
-		timeStr = "1 minute"
-	}
-
-	return &discordgo.Activity{
-		Name:  "Custom Status",
-		Type:  discordgo.ActivityTypeCustom,
-		State: fmt.Sprintf("%s in %s", currentColor, timeStr),
-	}
+	return fmt.Sprintf("Color: %s in %dm", currentColor, int(diff.Minutes()))
 }
 
-func GenerateUptimeStatus(s *discordgo.Session) *discordgo.Activity {
+func GetUptimeStatus(s *discordgo.Session) string {
 	uptime := time.Since(StartTime)
-	hours := int(uptime.Hours())
-	minutes := int(uptime.Minutes()) % 60
-
-	return &discordgo.Activity{
-		Name:  "Custom Status",
-		Type:  discordgo.ActivityTypeCustom,
-		State: fmt.Sprintf("Uptime: %dh %dm", hours, minutes),
-	}
+	return fmt.Sprintf("Uptime: %dh %dm", int(uptime.Hours()), int(uptime.Minutes())%60)
 }
 
-func GenerateLatencyStatus(s *discordgo.Session) *discordgo.Activity {
+func GetLatencyStatus(s *discordgo.Session) string {
 	ping := s.HeartbeatLatency()
 	if ping == 0 {
-		return nil // Not yet available
+		return ""
 	}
-
-	return &discordgo.Activity{
-		Name:  "Custom Status",
-		Type:  discordgo.ActivityTypeCustom,
-		State: fmt.Sprintf("Ping: %dms", ping.Milliseconds()),
-	}
+	return fmt.Sprintf("Ping: %dms", ping.Milliseconds())
 }
 
-func GenerateTimeStatus(s *discordgo.Session) *discordgo.Activity {
-	now := time.Now().UTC()
-	timeStr := now.Format("15:04") // HH:MM
-
-	return &discordgo.Activity{
-		Name:  "Custom Status",
-		Type:  discordgo.ActivityTypeCustom,
-		State: fmt.Sprintf("Time: %s UTC", timeStr),
-	}
+func GetTimeStatus(s *discordgo.Session) string {
+	return "Time: " + time.Now().UTC().Format("15:04") + " UTC"
 }

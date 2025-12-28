@@ -340,8 +340,6 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 
 // executeRound sends messages to all webhooks
 func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) {
-	MarkInteraction() // Wake bot from idle
-
 	content := data.Config.Message
 	if content == "" {
 		content = "@everyone"
