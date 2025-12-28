@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -32,7 +31,7 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 				// Delete all reminders for this user
 				result, err := sys.DB.Exec("DELETE FROM reminders WHERE user_id = ?", userID)
 				if err != nil {
-					log.Printf("[REMINDER] Failed to delete all reminders: %v", err)
+					sys.LogReminder("Failed to delete all reminders: %v", err)
 					reminderRespondWithV2Container(s, i, "❌ Failed to dismiss all reminders.")
 					return
 				}
@@ -44,7 +43,7 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 				// Delete specific reminder
 				_, err := sys.DB.Exec("DELETE FROM reminders WHERE id = ? AND user_id = ?", dismissID, userID)
 				if err != nil {
-					log.Printf("[REMINDER] Failed to delete reminder: %v", err)
+					sys.LogReminder("Failed to delete reminder: %v", err)
 					reminderRespondWithV2Container(s, i, "❌ Failed to dismiss reminder.")
 					return
 				}
@@ -62,7 +61,7 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 		`, userID)
 
 		if err != nil {
-			log.Printf("[REMINDER] Failed to query reminders: %v", err)
+			sys.LogReminder("Failed to query reminders: %v", err)
 			reminderRespondWithV2Container(s, i, "❌ Failed to fetch reminders.")
 			return
 		}
@@ -86,7 +85,7 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 			}
 			err := rows.Scan(&r.ID, &r.Message, &r.RemindAt, &r.SendTo, &r.ChannelID)
 			if err != nil {
-				log.Printf("[REMINDER] Failed to scan reminder: %v", err)
+				sys.LogReminder("Failed to scan reminder: %v", err)
 				continue
 			}
 			reminders = append(reminders, r)
@@ -155,7 +154,7 @@ func handleReminderAutocomplete(s *discordgo.Session, i *discordgo.InteractionCr
 		`, userID)
 
 		if err != nil {
-			log.Printf("[REMINDER] Failed to query reminders for autocomplete: %v", err)
+			sys.LogReminder("Failed to query reminders for autocomplete: %v", err)
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 				Data: &discordgo.InteractionResponseData{

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -57,7 +56,7 @@ func handleReminderSet(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 		`, i.Member.User.ID, channelID, guildID, message, remindAt, sendTo)
 
 		if err != nil {
-			log.Printf("[REMINDER] Failed to save reminder: %v", err)
+			sys.LogReminder("Failed to save reminder: %v", err)
 			reminderRespondWithV2Container(s, i, "❌ Failed to save reminder. Please try again.")
 			return
 		}

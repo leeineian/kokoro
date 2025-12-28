@@ -2,6 +2,7 @@ package sys
 
 import (
 	"database/sql"
+	"fmt"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -16,14 +17,33 @@ func InitDatabase(dataSourceName string) error {
 	}
 
 	// Set connection pool settings for better concurrency
-	// WAL mode allows multiple readers and one writer.
-	// With _timeout=5000, we can safely allow multiple connections.
-	DB.SetMaxOpenConns(5)
-	DB.SetMaxIdleConns(5)
+	// SQLite works best with a single connection for writing, but WAL allows multiple readers.
+	DB.SetMaxOpenConns(1)
 
-	// Create reminders table
-	_, err = DB.Exec(`
-		CREATE TABLE IF NOT EXISTS reminders (
+	// Apply optimizations
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL;",
+		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA busy_timeout=5000;",
+		"PRAGMA cache_size=-2000;", // ~2MB cache
+	}
+	for _, p := range pragmas {
+		if _, err := DB.Exec(p); err != nil {
+			return fmt.Errorf("failed to set pragma %s: %w", p, err)
+		}
+	}
+
+	// Create tables in a single transaction for speed and atomicity
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+
+	// Ensure transaction rollback on error
+	defer tx.Rollback()
+
+	tableQueries := []string{
+		`CREATE TABLE IF NOT EXISTS reminders (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL,
 			channel_id TEXT NOT NULL,
@@ -32,39 +52,18 @@ func InitDatabase(dataSourceName string) error {
 			remind_at DATETIME NOT NULL,
 			send_to TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Create Guild Configs table
-	_, err = DB.Exec(`
-		CREATE TABLE IF NOT EXISTS guild_configs (
+		)`,
+		`CREATE TABLE IF NOT EXISTS guild_configs (
 			guild_id TEXT PRIMARY KEY,
 			random_color_role_id TEXT,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Create Bot Config table
-	_, err = DB.Exec(`
-		CREATE TABLE IF NOT EXISTS bot_config (
+		)`,
+		`CREATE TABLE IF NOT EXISTS bot_config (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Create Loop Channels table
-	_, err = DB.Exec(`
-		CREATE TABLE IF NOT EXISTS loop_channels (
+		)`,
+		`CREATE TABLE IF NOT EXISTS loop_channels (
 			channel_id TEXT PRIMARY KEY,
 			channel_name TEXT NOT NULL,
 			channel_type TEXT NOT NULL,
@@ -79,9 +78,16 @@ func InitDatabase(dataSourceName string) error {
 			thread_message TEXT,
 			threads TEXT,
 			is_running INTEGER DEFAULT 0
-		)
-	`)
-	if err != nil {
+		)`,
+	}
+
+	for _, q := range tableQueries {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("failed to create table: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 

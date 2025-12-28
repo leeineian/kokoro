@@ -50,24 +50,46 @@ func RegisterComponentHandler(customID string, handler func(s *discordgo.Session
 func RegisterCommands(s *discordgo.Session, guildID string) error {
 	LogInfo("Registering commands...")
 
-	// If a guild ID is provided, register commands to that guild AND clear global commands.
+	// If a guild ID is provided, register to guild and clear global simultaneously
 	if guildID != "" {
-		LogInfo("Registering commands to guild: %s", guildID)
-		createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, guildID, commands)
-		if err != nil {
-			return fmt.Errorf("[ERROR] Failed to register guild commands: %w", err)
-		}
-		for _, cmd := range createdCommands {
-			LogInfo("Registered guild command: %s", cmd.Name)
-		}
+		var errGuild, errGlobal error
+		done := make(chan bool, 2)
 
-		// Clear global commands to remove old ones
-		LogInfo("Clearing global commands...")
-		_, err = s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", []*discordgo.ApplicationCommand{})
-		if err != nil {
-			LogWarn("Failed to clear global commands: %v", err)
-		} else {
-			LogInfo("Global commands cleared.")
+		// 1. Register to Guild
+		go func() {
+			LogInfo("Registering commands to guild: %s", guildID)
+			createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, guildID, commands)
+			if err != nil {
+				errGuild = err
+			} else {
+				for _, cmd := range createdCommands {
+					LogInfo("Registered guild command: %s", cmd.Name)
+				}
+			}
+			done <- true
+		}()
+
+		// 2. Clear Global
+		go func() {
+			LogInfo("Clearing global commands...")
+			_, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", []*discordgo.ApplicationCommand{})
+			if err != nil {
+				errGlobal = err
+			} else {
+				LogInfo("Global commands cleared.")
+			}
+			done <- true
+		}()
+
+		// Wait for both
+		<-done
+		<-done
+
+		if errGuild != nil {
+			return fmt.Errorf("failed to register guild commands: %w", errGuild)
+		}
+		if errGlobal != nil {
+			LogWarn("Failed to clear global commands: %v", errGlobal)
 		}
 
 		return nil
@@ -76,6 +98,7 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 	// Otherwise, register commands globally
 	LogInfo("Registering commands globally...")
 	createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands)
+	// ... (the rest remains the same)
 	if err != nil {
 		return fmt.Errorf("[ERROR] Failed to register global commands: %w", err)
 	}

@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"log"
-
 	"github.com/bwmarrin/discordgo"
 	"github.com/leeineian/minder/src/sys"
 )
@@ -24,6 +22,6 @@ func handleDebugEcho(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 
 	container := sys.NewV2Container(sys.NewTextDisplay(msg))
 	if err := sys.RespondInteractionV2(s, i.Interaction, container, ephemeral); err != nil {
-		log.Printf("[DEBUG] Failed to respond to echo: %v", err)
+		sys.LogDebug("Failed to respond to echo: %v", err)
 	}
 }

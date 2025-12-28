@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"runtime"
 	"strings"
 	"time"
@@ -23,7 +22,7 @@ func handleDebugStats(s *discordgo.Session, i *discordgo.InteractionCreate, opti
 
 	// Defer reply
 	if err := sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("⏳ Loading stats...")), ephemeral); err != nil {
-		log.Printf("[DEBUG] Failed to defer stats: %v", err)
+		sys.LogDebug("Failed to defer stats: %v", err)
 		return
 	}
 
@@ -49,7 +48,7 @@ func handleDebugStats(s *discordgo.Session, i *discordgo.InteractionCreate, opti
 
 		container := renderDebugStats(s, metrics)
 		if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
-			log.Printf("[DEBUG] Failed to edit stats: %v", err)
+			sys.LogDebug("Failed to edit stats: %v", err)
 			return
 		}
 
@@ -104,7 +103,7 @@ func handleDebugPing(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 
 		container := buildDebugPingContainer(latency, "# Pong!")
 		if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
-			log.Printf("[DEBUG] Failed to edit ping: %v", err)
+			sys.LogDebug("Failed to edit ping: %v", err)
 		}
 	}()
 }
@@ -116,7 +115,7 @@ func handleDebugPingRefresh(s *discordgo.Session, i *discordgo.InteractionCreate
 	container := buildDebugPingContainer(latency, "# 🔁 Pong!")
 
 	if err := sys.UpdateInteractionV2(s, i.Interaction, container); err != nil {
-		log.Printf("[DEBUG] Failed to update ping refresh: %v", err)
+		sys.LogDebug("Failed to update ping refresh: %v", err)
 	}
 }
 

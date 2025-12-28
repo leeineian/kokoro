@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -17,14 +16,14 @@ func initReminderParser() {
 	var err error
 	reminderParser, err = naturaltime.New()
 	if err != nil {
-		log.Fatalf("Failed to initialize naturaltime parser: %v", err)
+		sys.LogFatal("Failed to initialize naturaltime parser: %v", err)
 	}
 }
 
 func reminderRespondWithV2Container(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
 	container := sys.NewV2Container(sys.NewTextDisplay(content))
 	if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
-		log.Printf("[REMINDER] Error editing interaction response: %v", err)
+		sys.LogReminder("Error editing interaction response: %v", err)
 	}
 }
 

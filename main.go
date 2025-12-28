@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -14,6 +15,14 @@ import (
 )
 
 func main() {
+	// Parse flags
+	silent := flag.Bool("silent", false, "Disable all log output")
+	flag.Parse()
+
+	if *silent {
+		sys.SetSilentMode(true)
+	}
+
 	// 1. Check for and kill old process
 	if pidData, err := os.ReadFile(".bot.pid"); err == nil {
 		if oldPid, err := strconv.Atoi(string(pidData)); err == nil && oldPid != os.Getpid() {
@@ -50,12 +59,12 @@ func main() {
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 
 	// 4. Run bot (blocks until shutdown signal)
-	if err := run(pid, sc); err != nil {
+	if err := run(pid, sc, *silent); err != nil {
 		sys.LogFatal("%v", err)
 	}
 }
 
-func run(pid int, shutdownChan <-chan os.Signal) error {
+func run(pid int, shutdownChan <-chan os.Signal, silent bool) error {
 	cfg, err := sys.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("Failed to load config: %w", err)
@@ -73,27 +82,32 @@ func run(pid int, shutdownChan <-chan os.Signal) error {
 	}
 	defer s.Close()
 
-	// Register Slash Commands
+	// 1. Memory registrations (Instant)
 	cmd.RegisterCatHandlers()
 	cmd.RegisterDebugHandlers()
 	cmd.RegisterReminderHandlers()
 	cmd.RegisterUndertextHandlers()
 
-	if err := sys.RegisterCommands(s, cfg.GuildID); err != nil {
-		return fmt.Errorf("Failed to register commands: %w", err)
-	}
+	// 2. Background Command Registration (Parallel)
+	go func() {
+		if err := sys.RegisterCommands(s, cfg.GuildID); err != nil {
+			sys.LogError("Background command registration failed: %v", err)
+		}
+	}()
 
-	// Register and start daemons
+	// 3. Background Daemons (Parallel)
 	sys.RegisterDaemon(sys.LogReminder, func() { proc.StartReminderScheduler(s, sys.DB) })
 	sys.RegisterDaemon(sys.LogRoleColorRotator, func() { proc.StartRoleColorRotator(s, sys.DB) })
 	sys.RegisterDaemon(sys.LogStatusRotator, func() { proc.StartStatusRotator(s) })
 	sys.RegisterDaemon(sys.LogLoopRotator, func() { proc.InitLoopRotator(s) })
 	sys.StartDaemons()
 
-	// Wait for shutdown signal
+	// 4. Success Message & Wait
 	sys.LogInfo("%s is online! (ID: %s) (PID: %d)", s.State.User.Username, s.State.User.ID, pid)
 	<-shutdownChan
-	fmt.Println()
+	if !silent {
+		fmt.Println()
+	}
 	sys.LogInfo("Shutting down %s...", s.State.User.Username)
 
 	return nil
