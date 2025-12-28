@@ -1,0 +1,103 @@
+package proc
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/leeineian/minder/src/sys"
+)
+
+var reminderSchedulerRunning = false
+
+// StartReminderScheduler starts the reminder scheduler daemon
+func StartReminderScheduler(s *discordgo.Session, db *sql.DB) {
+	if reminderSchedulerRunning {
+		return
+	}
+	reminderSchedulerRunning = true
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			checkAndSendReminders(s, db)
+		}
+	}()
+}
+
+func checkAndSendReminders(s *discordgo.Session, db *sql.DB) {
+	now := time.Now()
+
+	rows, err := db.Query(`
+		SELECT id, user_id, channel_id, message, send_to
+		FROM reminders
+		WHERE remind_at <= ?
+		ORDER BY remind_at ASC
+	`, now)
+
+	if err != nil {
+		sys.LogReminder("Failed to query due reminders: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var userID, channelID, message, sendTo string
+
+		err := rows.Scan(&id, &userID, &channelID, &message, &sendTo)
+		if err != nil {
+			sys.LogReminder("Failed to scan reminder: %v", err)
+			continue
+		}
+
+		// Send reminder
+		go sendReminder(s, db, id, userID, channelID, message, sendTo)
+	}
+}
+
+func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID, message, sendTo string) {
+	// Build the reminder message
+	reminderText := fmt.Sprintf("🔔 **Reminder for <@%s>**\n\n%s", userID, message)
+
+	var err error
+	var targetChannelID = channelID
+
+	if sendTo == "dm" {
+		// Create DM channel
+		dmChannel, dmErr := s.UserChannelCreate(userID)
+		if dmErr != nil {
+			sys.LogReminder("Failed to create DM channel for user %s: %v", userID, dmErr)
+			// Try to send in original channel as fallback
+			sendTo = "channel"
+		} else {
+			targetChannelID = dmChannel.ID
+		}
+	}
+
+	// Create v2container with TextDisplay component
+	container := sys.NewV2Container(sys.NewTextDisplay(reminderText))
+
+	// Send to channel or DM with v2container
+	_, err = s.ChannelMessageSendComplex(targetChannelID, &discordgo.MessageSend{
+		Components: []discordgo.MessageComponent{container},
+		Flags:      sys.MessageFlagsIsComponentsV2,
+	})
+
+	if err != nil {
+		sys.LogReminder("Failed to send reminder %d: %v", id, err)
+		// Don't delete if we can't send - try again next tick
+		return
+	}
+
+	// Delete the reminder from database
+	_, err = db.Exec("DELETE FROM reminders WHERE id = ?", id)
+	if err != nil {
+		sys.LogReminder("Failed to delete sent reminder %d: %v", id, err)
+	} else {
+		sys.LogReminder("Sent and deleted reminder %d for user %s", id, userID)
+	}
+}

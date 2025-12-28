@@ -16,6 +16,7 @@ discloud.config
 # Build Output
 bin/
 dist/
+tmp/
 
 # Runtime & Process
 .bot.pid
@@ -27,6 +28,11 @@ dist/
 coverage.txt
 coverage.html
 *.coverprofile
+*.old
+.tmp/
+.air.toml
+minder
+backup
 
 # IDE
 .vscode/
