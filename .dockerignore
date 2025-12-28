@@ -1,0 +1,17 @@
+.git
+.env
+.bot.pid
+*.db
+*.db-shm
+*.db-wal
+*.log
+minder
+backup
+bin/
+dist/
+tmp/
+.tmp/
+.backups/
+.bck/
+.discloudignore
+discloud.config

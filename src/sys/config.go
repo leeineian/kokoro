@@ -24,9 +24,14 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf(MsgConfigMissingToken)
 	}
 
+	dbPath := os.Getenv("DATABASE_PATH")
+	if dbPath == "" {
+		dbPath = "./data.db"
+	}
+
 	return &Config{
 		Token:        token,
 		GuildID:      os.Getenv("GUILD_ID"),
-		DatabasePath: "./data.db?_journal_mode=WAL&_timeout=5000",
+		DatabasePath: fmt.Sprintf("%s?_journal_mode=WAL&_timeout=5000", dbPath),
 	}, nil
 }

@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    container_name: minder-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_PATH=/app/data/minder.db
+    volumes:
+      - ./data:/app/data
