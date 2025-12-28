@@ -98,40 +98,48 @@ flowchart TB
     class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
     class Discord,CatAPI,UndertaleAPI externalStyle
 ```
-```diff
-- minder/
-+ ├── main.go                       # Go entry point
-+ ├── go.mod                        # Go module definition
-+ ├── go.sum                        # Go dependency checksums
-- └──src/
--    ├──cmd/
-+    │  ├── cat.go                  # /cat command handler
-+    │  ├── cat.fact.go             # Cat fact subcommand
-+    │  ├── cat.image.go            # Cat image subcommand  
-+    │  ├── cat.say.go              # Cowsay-style cat subcommand
-+    |  |
-+    │  ├── debug.go                # /debug command handler
-+    │  ├── debug.echo.go           # Echo subcommand
-+    │  ├── debug.loop.go           # Loop management subcommand
-+    │  ├── debug.rolecolor.go      # Role color control subcommand
-+    │  ├── debug.stats.go          # Bot statistics subcommand
-+    │  ├── debug.status.go         # Status control subcommand
-+    |  |
-+    │  ├── reminder.go             # /reminder command handler
-+    │  ├── reminder.set.go         # Set reminders subcommand
-+    │  ├── reminder.list.go        # List reminders subcommand
-+    |  |
-+    │  ├── undertext.go            # /undertext command handler
-+    │  └── undertext.handler.go    # Text box generator subcommand
--    ├──proc/
-+    │  ├── looprotator.go          # Webhook loop message daemon
-+    │  ├── reminderscheduler.go    # Reminder scheduler daemon
-+    │  ├── rolecolorrotator.go     # Role color rotation daemon
-+    │  └── statusrotator.go        # Status rotation daemon
--    └──sys/
-+       ├── components.go           # Discord V2 component builders
-+       ├── config.go               # Environment configuration
-+       ├── database.go             # SQLite database layer
-+       ├── loader.go               # Session & command registration
-+       └── logger.go               # Color-coded logging & daemon registry
+```
+minder/
+|
+├── main.go                       # Go entry point
+├── go.mod                        # Go module definition
+├── go.sum                        # Go dependency checksums
+|
+└──src/
+   |
+   ├──cmd/
+   |  |
+   │  ├── cat.go                  # /cat command handler
+   │  ├── cat.fact.go             # Cat fact subcommand
+   │  ├── cat.image.go            # Cat image subcommand  
+   │  ├── cat.say.go              # Cowsay-style cat subcommand
+   │  |
+   │  ├── debug.go                # /debug command handler
+   │  ├── debug.echo.go           # Echo subcommand
+   │  ├── debug.loop.go           # Loop management subcommand
+   │  ├── debug.rolecolor.go      # Role color control subcommand
+   │  ├── debug.stats.go          # Bot statistics subcommand
+   │  ├── debug.status.go         # Status control subcommand
+   │  |
+   │  ├── reminder.go             # /reminder command handler
+   │  ├── reminder.set.go         # Set reminders subcommand
+   │  ├── reminder.list.go        # List reminders subcommand
+   │  |
+   │  ├── undertext.go            # /undertext command handler
+   │  └── undertext.handler.go    # Text box generator subcommand
+   |
+   ├──proc/
+   |  |
+   │  ├── looprotator.go          # Webhook loop message daemon
+   │  ├── reminderscheduler.go    # Reminder scheduler daemon
+   │  ├── rolecolorrotator.go     # Role color rotation daemon
+   │  └── statusrotator.go        # Status rotation daemon
+   |
+   └──sys/
+      |
+      ├── components.go           # Discord V2 component builders
+      ├── config.go               # Environment configuration
+      ├── database.go             # SQLite database layer
+      ├── loader.go               # Session & command registration
+      └── logger.go               # Color-coded logging & daemon registry
 ```
