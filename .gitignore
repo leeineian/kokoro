@@ -30,6 +30,8 @@ coverage.html
 *.coverprofile
 *.old
 .tmp/
+.backups/
+.bck/
 .air.toml
 minder
 backup
