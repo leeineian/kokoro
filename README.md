@@ -98,38 +98,38 @@ flowchart TB
     class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
     class Discord,CatAPI,UndertaleAPI externalStyle
 ```
-```
-minder/
-├── main.go                    # Entry point, process management, initialization
-├── src/
-│   ├── cmd/                   # Slash command handlers
-│   │   ├── cat.go             # /cat command registration
-│   │   ├── cat.fact.go        # Cat fact subcommand
-│   │   ├── cat.image.go       # Cat image subcommand  
-│   │   ├── cat.say.go         # Cowsay-style cat subcommand
-│   │   ├── debug.go           # /debug command registration
-│   │   ├── debug.echo.go      # Echo subcommand
-│   │   ├── debug.loop.go      # Loop management subcommand
-│   │   ├── debug.rolecolor.go # Role color rotation control
-│   │   ├── debug.stats.go     # Bot statistics
-│   │   ├── debug.status.go    # Status rotation control
-│   │   ├── reminder.go        # /reminder command registration
-│   │   ├── reminder.set.go    # Set reminder subcommand
-│   │   ├── reminder.list.go   # List/dismiss reminders
-│   │   ├── undertext.go       # /undertext command registration
-│   │   └── undertext.handler.go
-│   ├── proc/                  # Background daemons/processes
-│   │   ├── looprotator.go     # Webhook loop message daemon
-│   │   ├── reminderscheduler.go
-│   │   ├── rolecolorrotator.go
-│   │   └── statusrotator.go
-│   └── sys/                   # Core system utilities
-│       ├── components.go      # Discord V2 component builders
-│       ├── config.go          # Environment configuration
-│       ├── database.go        # SQLite database layer
-│       ├── loader.go          # Session & command registration
-│       └── logger.go          # Color-coded logging & daemon registry
-├── data.db                    # SQLite database
-├── go.mod                     # Go module definition
-└── go.sum                     # Dependency checksums
+```diff
+ minder/
++ ├── main.go                    # Entry point, process management, initialization
+  ├── src/
++ │   ├── cmd/                   # Slash command handlers (Green)
++ │   │   ├── cat.go
++ │   │   ├── cat.fact.go
++ │   │   ├── cat.image.go
++ │   │   ├── cat.say.go
++ │   │   ├── debug.go
++ │   │   ├── debug.echo.go
++ │   │   ├── debug.loop.go
++ │   │   ├── debug.rolecolor.go
++ │   │   ├── debug.stats.go
++ │   │   ├── debug.status.go
++ │   │   ├── reminder.go
++ │   │   ├── reminder.set.go
++ │   │   ├── reminder.list.go
++ │   │   ├── undertext.go
++ │   │   └── undertext.handler.go
+- │   ├── proc/                  # Background daemons/processes (Red)
+- │   │   ├── looprotator.go
+- │   │   ├── reminderscheduler.go
+- │   │   ├── rolecolorrotator.go
+- │   │   └── statusrotator.go
++ │   └── sys/                   # Core system utilities (Green)
++ │       ├── components.go
++ │       ├── config.go
++ │       ├── database.go
++ │       ├── loader.go
++ │       └── logger.go
+  ├── data.db                    # SQLite database
+  ├── go.mod                     # Go module definition
+  └── go.sum                     # Dependency checksums
 ```
