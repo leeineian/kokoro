@@ -4,7 +4,7 @@ flowchart TB
         Main["main.go"]
     end
 
-    subgraph Core["🔧 Core Systems (src/sys)"]
+    subgraph Core["Core Systems (src/sys)"]
         Config["config.go<br/>━━━━━━━━━<br/>LoadConfig()"]
         Database["database.go<br/>━━━━━━━━━<br/>SQLite DB<br/>• Reminders<br/>• Guild Configs<br/>• Bot Config<br/>• Loop Channels"]
         Loader["loader.go<br/>━━━━━━━━━<br/>CreateSession()<br/>RegisterCommand()<br/>InteractionHandler()"]
@@ -12,7 +12,7 @@ flowchart TB
         Components["components.go<br/>━━━━━━━━━<br/>Discord V2 Components<br/>• MediaGallery<br/>• TextDisplay<br/>• Containers"]
     end
 
-    subgraph Commands["🎮 Commands (src/cmd)"]
+    subgraph Commands["Commands (src/cmd)"]
         direction TB
         
         subgraph CatCmd["/cat"]
