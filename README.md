@@ -1,6 +1,6 @@
 ```mermaid
 flowchart TB
-    subgraph Entry["⚡ Entry Point"]
+    subgraph Entry["Entry Point"]
         Main["main.go"]
     end
 
@@ -15,13 +15,13 @@ flowchart TB
     subgraph Commands["🎮 Commands (src/cmd)"]
         direction TB
         
-        subgraph CatCmd["🐱 /cat"]
+        subgraph CatCmd["/cat"]
             CatFact["fact"]
             CatImage["image"]
             CatSay["say"]
         end
         
-        subgraph DebugCmd["🔍 /debug"]
+        subgraph DebugCmd["/debug"]
             DebugStats["stats"]
             DebugEcho["echo"]
             DebugStatus["status"]
@@ -29,24 +29,24 @@ flowchart TB
             DebugLoop["loop"]
         end
         
-        subgraph ReminderCmd["⏰ /reminder"]
+        subgraph ReminderCmd["/reminder"]
             ReminderSet["set"]
             ReminderList["list"]
         end
         
-        subgraph UndertextCmd["💀 /undertext"]
+        subgraph UndertextCmd["/undertext"]
             UndertextGen["Generate Undertale<br/>Text Box"]
         end
     end
 
-    subgraph Daemons["👻 Background Daemons (src/proc)"]
+    subgraph Daemons["Background Daemons (src/proc)"]
         ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>Polls DB for due reminders<br/>Sends notifications"]
         StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>Rotates bot status<br/>Rich presence"]
         RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>Cycles role colors<br/>RGB effects"]
         LoopRotator["looprotator.go<br/>━━━━━━━━━<br/>Webhook loop messages<br/>Channel management"]
     end
 
-    subgraph External["🌐 External Services"]
+    subgraph External["External Services"]
         Discord["Discord API"]
         CatAPI["Cat APIs<br/>• catfact.ninja<br/>• thecatapi.com"]
         UndertaleAPI["Demirramon's<br/>Undertale Generator"]
@@ -98,9 +98,6 @@ flowchart TB
     class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
     class Discord,CatAPI,UndertaleAPI externalStyle
 ```
-
-## Project Structure
-
 ```
 minder/
 ├── main.go                    # Entry point, process management, initialization
