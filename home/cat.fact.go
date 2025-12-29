@@ -1,4 +1,4 @@
-package cmd
+package home
 
 import (
 	"encoding/json"

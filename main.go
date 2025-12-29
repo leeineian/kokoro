@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/leeineian/minder/cmd"
+	_ "github.com/leeineian/minder/home"
 	_ "github.com/leeineian/minder/proc"
 	"github.com/leeineian/minder/sys"
 )

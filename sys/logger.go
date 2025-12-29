@@ -133,29 +133,6 @@ func LogDebug(format string, v ...interface{}) {
 	log.Println(debugColor.Sprintf("[DEBUG] %s", msg))
 }
 
-// Daemon registry
-type daemonEntry struct {
-	starter func()
-	logger  func(format string, v ...interface{})
-}
-
-var registeredDaemons []daemonEntry
-
-// RegisterDaemon registers a background daemon with a logger and start function
-func RegisterDaemon(logger func(format string, v ...interface{}), starter func()) {
-	registeredDaemons = append(registeredDaemons, daemonEntry{starter: starter, logger: logger})
-}
-
-// StartDaemons starts all registered daemons with their individual colored logging
-func StartDaemons() {
-	for _, daemon := range registeredDaemons {
-		go func(d daemonEntry) {
-			d.logger("Starting...")
-			d.starter()
-		}(daemon)
-	}
-}
-
 // @config
 const (
 	// Error messages

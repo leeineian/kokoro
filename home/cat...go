@@ -1,4 +1,4 @@
-package cmd
+package home
 
 import (
 	"net/http"
