@@ -4,7 +4,7 @@ flowchart TB
         Main["main.go<br/>━━━━━━━━━<br/>Parallel Startup<br/>Silent Mode Flag"]
     end
 
-    subgraph Core["Core Systems (src/sys)"]
+    subgraph Core["Core Systems (sys)"]
         Config["config.go<br/>━━━━━━━━━<br/>Environment Logic<br/>Custom Prefixes"]
         Database["database.go<br/>━━━━━━━━━<br/>SQLite WAL Mode<br/>• reminders<br/>• guild_configs<br/>• bot_config<br/>• loop_channels"]
         Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>V2 Component Logic"]
@@ -12,7 +12,7 @@ flowchart TB
         Components["components.go<br/>━━━━━━━━━<br/>Discord V2 System<br/>• MediaGalleries<br/>• Sections / Files<br/>• TextDisplays"]
     end
 
-    subgraph Commands["Commands (src/cmd)"]
+    subgraph Commands["Commands (home)"]
         direction TB
         
         subgraph CatCmd["/cat"]
@@ -39,7 +39,7 @@ flowchart TB
         end
     end
 
-    subgraph Daemons["Background Daemons (src/proc)"]
+    subgraph Daemons["Background Daemons (proc)"]
         ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>DM/Channel Alerts"]
         StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>15-60s Random Cycle<br/>5 Dynamic States"]
         RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Guild-Specific"]
@@ -101,46 +101,38 @@ flowchart TB
 
 ```
 minder/
-|
+│
 ├── main.go                       # Go entry point
 ├── go.mod                        # Go module dependencies
 ├── go.sum                        # Go dependency checksums
-|
-└──src/
-   |
-   ├──cmd/
-   |  |
-   │  ├── cat...go                # /cat command registration & shared logic
-   │  ├── cat.fact.go             # Cat fact (catfact.ninja) handler
-   │  ├── cat.image.go            # Cat image (thecatapi.com) handler
-   │  ├── cat.say.go              # ASCII cowsay-style cat generator
-   │  |
-   │  ├── debug...go              # /debug command registration & shared logic
-   │  ├── debug.echo.go           # Basic echoed message
-   │  ├── debug.loop.go           # Webhook loop manager
-   │  ├── debug.rolecolor.go      # RGB role color cycle configuration
-   │  ├── debug.stats.go          # Live system metrics
-   │  ├── debug.status.go         # Presence visibility configuration
-   │  |
-   │  ├── reminder...go           # /reminder command registration & shared logic
-   │  ├── reminder.set.go         # Natural language time parsing & storage
-   │  ├── reminder.list.go        # Interactive view of pending reminders
-   │  |
-   │  ├── undertext...go          # /undertext command registration & shared logic
-   │  └── undertext.handler.go    # Demirramon API bridge (Static/Animated)
-   |
-   ├──proc/
-   |  |
-   │  ├── looprotator.go          # Webhook loop daemon
-   │  ├── reminderscheduler.go    # Reminder notification daemon
-   │  ├── rolecolorrotator.go     # Role color cycle daemon
-   │  └── statusrotator.go        # Status cycle daemon
-   |
-   └──sys/
-      |
-      ├── components.go           # Discord V2 Component wrappers
-      ├── config.go               # Environment validation
-      ├── database.go             # SQLite database layer
-      ├── loader.go               # Session creation & command registration
-      └── logger.go               # Prefix-based color logging
+│
+├── home/                         # [Discord Commands]
+│   ├── cat...go                  # /cat command logic
+│   ├── cat.fact.go               # /cat fact (catfact.ninja) handler
+│   ├── cat.image.go              # /cat image (thecatapi.com) handler
+│   ├── cat.say.go                # /cat say (ANSI ASCII) handler
+│   ├── debug...go                # /debug command logic
+│   ├── debug.echo.go             # /debug echo (ANSI ASCII) handler
+│   ├── debug.loop.go             # /debug loop (Webhook) handler
+│   ├── debug.rolecolor.go        # /debug rolecolor (RGB) handler
+│   ├── debug.stats.go            # /debug stats (Live System Metrics) handler
+│   ├── debug.status.go           # /debug status (Presence Visibility) handler
+│   ├── reminder...go             # /reminder command logic
+│   ├── reminder.set.go           # /reminder set (Natural Language Time) handler
+│   ├── reminder.list.go          # /reminder list (Interactive View) handler
+│   ├── undertext...go            # /undertext command logic
+│   └── undertext.handler.go      # /undertext (Demirramon API bridge) handler
+│
+├── proc/                         # [Background Daemons]
+│   ├── looprotator.go            # Webhook loop daemon
+│   ├── reminderscheduler.go      # Reminder notification daemon
+│   ├── rolecolorrotator.go       # Role color cycle daemon
+│   └── statusrotator.go          # Status cycle daemon
+│
+└── sys/                          # [Core Systems]
+    ├── components.go             # Discord V2 Component wrappers
+    ├── config.go                 # Environment configuration
+    ├── database.go               # SQLite database layer
+    ├── loader.go                 # Session creation & command registration
+    └── logger.go                 # Prefix-based color logging
 ```
