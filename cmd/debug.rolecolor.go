@@ -5,8 +5,8 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/leeineian/minder/src/proc"
-	"github.com/leeineian/minder/src/sys"
+	"github.com/leeineian/minder/proc"
+	"github.com/leeineian/minder/sys"
 )
 
 func handleDebugRoleColor(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {

@@ -29,6 +29,7 @@ coverage.txt
 coverage.html
 *.coverprofile
 *.old
+tmp/
 .tmp/
 .backups/
 .bck/

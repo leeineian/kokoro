@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/src/sys"
+	"github.com/leeineian/minder/sys"
 )
 
 // Cat say ASCII art constants

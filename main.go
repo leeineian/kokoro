@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/leeineian/minder/src/cmd"
-	_ "github.com/leeineian/minder/src/proc"
-	"github.com/leeineian/minder/src/sys"
+	_ "github.com/leeineian/minder/cmd"
+	_ "github.com/leeineian/minder/proc"
+	"github.com/leeineian/minder/sys"
 )
 
 func main() {

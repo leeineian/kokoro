@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/src/proc"
-	"github.com/leeineian/minder/src/sys"
+	"github.com/leeineian/minder/proc"
+	"github.com/leeineian/minder/sys"
 )
 
 // handleDebugWebhookLooper routes webhook looper subcommands

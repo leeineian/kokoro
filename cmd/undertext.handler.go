@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/src/sys"
+	"github.com/leeineian/minder/sys"
 )
 
 // processUndertextColors converts user-friendly color syntax to API format
