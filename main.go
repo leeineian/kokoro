@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/leeineian/minder/src/cmd"
-	"github.com/leeineian/minder/src/proc"
+	_ "github.com/leeineian/minder/src/cmd"
+	_ "github.com/leeineian/minder/src/proc"
 	"github.com/leeineian/minder/src/sys"
 )
 
@@ -65,6 +65,7 @@ func main() {
 }
 
 func run(pid int, shutdownChan <-chan os.Signal, silent bool) error {
+	// Load configuration
 	cfg, err := sys.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("Failed to load config: %w", err)
@@ -76,33 +77,25 @@ func run(pid int, shutdownChan <-chan os.Signal, silent bool) error {
 	}
 	defer sys.CloseDatabase()
 
+	// Create Discord session
 	s, err := sys.CreateSession(cfg.Token)
 	if err != nil {
 		return fmt.Errorf("Failed to create Discord session: %w", err)
 	}
 	defer s.Close()
 
-	// 1. Memory registrations (Instant)
-	cmd.RegisterCatHandlers()
-	cmd.RegisterDebugHandlers()
-	cmd.RegisterReminderHandlers()
-	cmd.RegisterUndertextHandlers()
-
-	// 2. Background Command Registration (Parallel)
+	// 1. Background Command Registration (Parallel)
 	go func() {
 		if err := sys.RegisterCommands(s, cfg.GuildID); err != nil {
 			sys.LogError("Background command registration failed: %v", err)
 		}
 	}()
 
-	// 3. Background Daemons (Parallel)
-	sys.RegisterDaemon(sys.LogReminder, func() { proc.StartReminderScheduler(s, sys.DB) })
-	sys.RegisterDaemon(sys.LogRoleColorRotator, func() { proc.StartRoleColorRotator(s, sys.DB) })
-	sys.RegisterDaemon(sys.LogStatusRotator, func() { proc.StartStatusRotator(s) })
-	sys.RegisterDaemon(sys.LogLoopRotator, func() { proc.InitLoopRotator(s) })
+	// 2. Background Daemons (Automated via init() functions in /src/proc)
+	sys.TriggerSessionReady(s)
 	sys.StartDaemons()
 
-	// 4. Success Message & Wait
+	// 3. Success Message & Wait
 	sys.LogInfo("%s is online! (ID: %s) (PID: %d)", s.State.User.Username, s.State.User.ID, pid)
 	<-shutdownChan
 	if !silent {

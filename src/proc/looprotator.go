@@ -19,6 +19,12 @@ const (
 	LoopBatchSize   = 25
 )
 
+func init() {
+	sys.OnSessionReady(func(s *discordgo.Session) {
+		sys.RegisterDaemon(sys.LogLoopRotator, func() { InitLoopRotator(s) })
+	})
+}
+
 // WebhookData holds a webhook and its channel info
 type WebhookData struct {
 	Webhook     *discordgo.Webhook

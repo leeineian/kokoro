@@ -16,6 +16,12 @@ const (
 	maxMinutes = 10
 )
 
+func init() {
+	sys.OnSessionReady(func(s *discordgo.Session) {
+		sys.RegisterDaemon(sys.LogRoleColorRotator, func() { StartRoleColorRotator(s, sys.DB) })
+	})
+}
+
 var (
 	// Map to store active timers: map[guildID]*time.Timer
 	rotatorTimers sync.Map

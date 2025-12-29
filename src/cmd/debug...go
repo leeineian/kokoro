@@ -71,7 +71,7 @@ func debugStrPtr(s string) *string {
 	return &s
 }
 
-func RegisterDebugHandlers() {
+func init() {
 	sys.RegisterCommand(&discordgo.ApplicationCommand{
 		Name:                     "debug",
 		Description:              "Debug and Stress Testing Utilities (Admin Only)",

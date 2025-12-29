@@ -10,6 +10,7 @@ var commands = []*discordgo.ApplicationCommand{}
 var commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
 var autocompleteHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
 var componentHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
+var onSessionReadyCallbacks []func(s *discordgo.Session)
 
 // CreateSession creates and opens a Discord session with all required intents and handlers configured.
 func CreateSession(token string) (*discordgo.Session, error) {
@@ -45,6 +46,16 @@ func RegisterAutocompleteHandler(cmdName string, handler func(s *discordgo.Sessi
 
 func RegisterComponentHandler(customID string, handler func(s *discordgo.Session, i *discordgo.InteractionCreate)) {
 	componentHandlers[customID] = handler
+}
+
+func OnSessionReady(cb func(s *discordgo.Session)) {
+	onSessionReadyCallbacks = append(onSessionReadyCallbacks, cb)
+}
+
+func TriggerSessionReady(s *discordgo.Session) {
+	for _, cb := range onSessionReadyCallbacks {
+		cb(s)
+	}
 }
 
 func RegisterCommands(s *discordgo.Session, guildID string) error {

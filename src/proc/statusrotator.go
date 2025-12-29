@@ -9,6 +9,12 @@ import (
 	"github.com/leeineian/minder/src/sys"
 )
 
+func init() {
+	sys.OnSessionReady(func(s *discordgo.Session) {
+		sys.RegisterDaemon(sys.LogStatusRotator, func() { StartStatusRotator(s) })
+	})
+}
+
 func GetRotationInterval() time.Duration {
 	return time.Duration(15+rand.Intn(46)) * time.Second
 }

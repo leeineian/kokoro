@@ -11,6 +11,12 @@ import (
 
 var reminderSchedulerRunning = false
 
+func init() {
+	sys.OnSessionReady(func(s *discordgo.Session) {
+		sys.RegisterDaemon(sys.LogReminder, func() { StartReminderScheduler(s, sys.DB) })
+	})
+}
+
 // StartReminderScheduler starts the reminder scheduler daemon
 func StartReminderScheduler(s *discordgo.Session, db *sql.DB) {
 	if reminderSchedulerRunning {

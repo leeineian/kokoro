@@ -88,7 +88,7 @@ func reminderTruncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func RegisterReminderHandlers() {
+func init() {
 	initReminderParser()
 
 	// Register reminder command

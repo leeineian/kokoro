@@ -7,7 +7,7 @@ import (
 	"github.com/leeineian/minder/src/sys"
 )
 
-func RegisterUndertextHandlers() {
+func init() {
 	sys.RegisterCommand(&discordgo.ApplicationCommand{
 		Name:        "undertext",
 		Description: "Generate an Undertale/Deltarune style text box image",

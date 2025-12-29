@@ -29,7 +29,7 @@ func catRespondErrorFollowup(s *discordgo.Session, i *discordgo.InteractionCreat
 	}
 }
 
-func RegisterCatHandlers() {
+func init() {
 	sys.RegisterCommand(&discordgo.ApplicationCommand{
 		Name:        "cat",
 		Description: "Cat related commands",
