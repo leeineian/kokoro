@@ -84,10 +84,9 @@ func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
 	}
 
 	activity := &discordgo.Activity{
-		Name:          text,
-		Type:          discordgo.ActivityTypeStreaming,
-		URL:           "https://www.twitch.tv/videos/1110069047",
-		ApplicationID: s.State.User.ID,
+		Name: text,
+		Type: discordgo.ActivityTypeStreaming,
+		URL:  sys.StreamingURL,
 	}
 
 	err = s.UpdateStatusComplex(discordgo.UpdateStatusData{

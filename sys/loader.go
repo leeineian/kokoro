@@ -12,6 +12,8 @@ var autocompleteHandlers = map[string]func(s *discordgo.Session, i *discordgo.In
 var componentHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
 var onSessionReadyCallbacks []func(s *discordgo.Session)
 
+const StreamingURL = "https://www.twitch.tv/videos/1110069047"
+
 // CreateSession creates and opens a Discord session with all required intents and handlers configured.
 func CreateSession(token string) (*discordgo.Session, error) {
 	s, err := discordgo.New("Bot " + token)
@@ -27,6 +29,14 @@ func CreateSession(token string) (*discordgo.Session, error) {
 		discordgo.IntentsGuildPresences |
 		discordgo.IntentMessageContent |
 		discordgo.IntentsGuildMessageReactions
+
+	s.Identify.Presence = discordgo.GatewayStatusUpdate{
+		Status: "online",
+		Game: discordgo.Activity{
+			Type: discordgo.ActivityTypeStreaming,
+			URL:  StreamingURL,
+		},
+	}
 
 	if err := s.Open(); err != nil {
 		return nil, err
@@ -152,9 +162,7 @@ func RegisterDaemon(logger func(format string, v ...interface{}), starter func()
 // StartDaemons starts all registered daemons with their individual colored logging
 func StartDaemons() {
 	for _, daemon := range registeredDaemons {
-		go func(d daemonEntry) {
-			d.logger("Starting...")
-			d.starter()
-		}(daemon)
+		daemon.logger("Starting...")
+		daemon.starter()
 	}
 }

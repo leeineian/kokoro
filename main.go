@@ -65,38 +65,40 @@ func main() {
 }
 
 func run(pid int, shutdownChan <-chan os.Signal, silent bool) error {
-	// Load configuration
+	// 1. Load configuration
 	cfg, err := sys.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("Failed to load config: %w", err)
 	}
 
-	// Initialize database
-	if err := sys.InitDatabase(cfg.DatabasePath); err != nil {
-		return fmt.Errorf("Failed to initialize database: %w", err)
-	}
-	defer sys.CloseDatabase()
-
-	// Create Discord session
+	// 2. Create Discord session (needed to get the bot's username for logging)
 	s, err := sys.CreateSession(cfg.Token)
 	if err != nil {
 		return fmt.Errorf("Failed to create Discord session: %w", err)
 	}
 	defer s.Close()
 
-	// 1. Background Command Registration (Parallel)
-	go func() {
-		if err := sys.RegisterCommands(s, cfg.GuildID); err != nil {
-			sys.LogError("Background command registration failed: %v", err)
-		}
-	}()
+	sys.LogInfo("Starting %s...", s.State.User.Username)
 
-	// 2. Background Daemons (Automated via init() functions in /src/proc)
+	// 3. Initialize database
+	if err := sys.InitDatabase(cfg.DatabasePath); err != nil {
+		return fmt.Errorf("Failed to initialize database: %w", err)
+	}
+	defer sys.CloseDatabase()
+
+	// 4. Command Registration (Sequential)
+	if err := sys.RegisterCommands(s, cfg.GuildID); err != nil {
+		sys.LogError("Command registration failed: %v", err)
+	}
+
+	// 5. Background Daemons
 	sys.TriggerSessionReady(s)
 	sys.StartDaemons()
 
-	// 3. Success Message & Wait
+	// 6. Final Status
 	sys.LogInfo("%s is online! (ID: %s) (PID: %d)", s.State.User.Username, s.State.User.ID, pid)
+	sys.LogInfo("%s is now fully operational.", s.State.User.Username)
+
 	<-shutdownChan
 	if !silent {
 		fmt.Println()

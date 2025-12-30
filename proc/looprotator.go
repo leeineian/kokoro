@@ -390,14 +390,42 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 			go func(hd WebhookData) {
 				defer wg.Done()
 
-				_, err := s.WebhookExecute(hd.Webhook.ID, hd.Webhook.Token, false, &discordgo.WebhookParams{
-					Content:         content,
-					Username:        webhookAuthor,
-					AvatarURL:       webhookAvatar,
-					AllowedMentions: allowedMentions,
-				})
-				if err != nil {
+				// Add jitter to prevent simultaneous bursts across multiple channels
+				time.Sleep(time.Duration(rand.Intn(250)) * time.Millisecond)
+
+				for attempt := 0; attempt < 3; attempt++ {
+					if !isAlive() {
+						return
+					}
+
+					_, err := s.WebhookExecute(hd.Webhook.ID, hd.Webhook.Token, false, &discordgo.WebhookParams{
+						Content:         content,
+						Username:        webhookAuthor,
+						AvatarURL:       webhookAvatar,
+						AllowedMentions: allowedMentions,
+					})
+
+					if err == nil {
+						return // Success
+					}
+
+					// Handle Rate Limits (HTTP 429)
+					if rerr, ok := err.(*discordgo.RESTError); ok && rerr.Response != nil && rerr.Response.StatusCode == 429 {
+						retryAfter := time.Duration(attempt+1) * time.Second
+						if ra := rerr.Response.Header.Get("Retry-After"); ra != "" {
+							if s, err := strconv.ParseFloat(ra, 64); err == nil {
+								retryAfter = time.Duration(s * float64(time.Second))
+							}
+						}
+
+						sys.LogLoopRotator("[%s] Rate limited. Retrying in %v (Attempt %d/3)", hd.ChannelName, retryAfter, attempt+1)
+						time.Sleep(retryAfter)
+						continue
+					}
+
+					// Non-rate-limit error, log and give up
 					sys.LogLoopRotator("Failed to send to %s: %v", hd.ChannelName, err)
+					break
 				}
 			}(hookData)
 		}
