@@ -78,7 +78,7 @@ func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, op
 	`, i.GuildID, role.ID, role.ID)
 
 		if err != nil {
-			sys.LogError("Failed to update guild config: %v", err)
+			sys.LogError(sys.MsgDebugRoleColorUpdateFail, err)
 			roleColorEdit(s, i, "❌ Failed to save configuration.")
 			return
 		}
@@ -103,7 +103,7 @@ func handleRoleColorReset(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	go func() {
 		_, err := sys.DB.Exec("UPDATE guild_configs SET random_color_role_id = NULL WHERE guild_id = ?", i.GuildID)
 		if err != nil {
-			sys.LogError("Failed to reset guild config: %v", err)
+			sys.LogError(sys.MsgDebugRoleColorResetFail, err)
 			roleColorEdit(s, i, "❌ Failed to reset configuration.")
 			return
 		}

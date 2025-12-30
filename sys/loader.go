@@ -12,10 +12,8 @@ var autocompleteHandlers = map[string]func(s *discordgo.Session, i *discordgo.In
 var componentHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
 var onSessionReadyCallbacks []func(s *discordgo.Session)
 
-const StreamingURL = "https://www.twitch.tv/videos/1110069047"
-
 // CreateSession creates and opens a Discord session with all required intents and handlers configured.
-func CreateSession(token string) (*discordgo.Session, error) {
+func CreateSession(token string, streamingURL string) (*discordgo.Session, error) {
 	s, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, err
@@ -34,7 +32,7 @@ func CreateSession(token string) (*discordgo.Session, error) {
 		Status: "online",
 		Game: discordgo.Activity{
 			Type: discordgo.ActivityTypeStreaming,
-			URL:  StreamingURL,
+			URL:  streamingURL,
 		},
 	}
 
@@ -69,7 +67,7 @@ func TriggerSessionReady(s *discordgo.Session) {
 }
 
 func RegisterCommands(s *discordgo.Session, guildID string) error {
-	LogInfo("Registering commands...")
+	LogInfo(MsgLoaderRegistering)
 
 	// If a guild ID is provided, register to guild and clear global simultaneously
 	if guildID != "" {
@@ -78,13 +76,13 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 
 		// 1. Register to Guild
 		go func() {
-			LogInfo("Registering commands to guild: %s", guildID)
+			LogInfo(MsgLoaderGuildRegister, guildID)
 			createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, guildID, commands)
 			if err != nil {
 				errGuild = err
 			} else {
 				for _, cmd := range createdCommands {
-					LogInfo("Registered guild command: %s", cmd.Name)
+					LogInfo(MsgLoaderCommandRegistered, cmd.Name)
 				}
 			}
 			done <- true
@@ -92,12 +90,12 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 
 		// 2. Clear Global
 		go func() {
-			LogInfo("Clearing global commands...")
+			LogInfo(MsgLoaderGlobalClear)
 			_, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", []*discordgo.ApplicationCommand{})
 			if err != nil {
 				errGlobal = err
 			} else {
-				LogInfo("Global commands cleared.")
+				LogInfo(MsgLoaderGlobalCleared)
 			}
 			done <- true
 		}()
@@ -110,21 +108,21 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 			return fmt.Errorf("failed to register guild commands: %w", errGuild)
 		}
 		if errGlobal != nil {
-			LogWarn("Failed to clear global commands: %v", errGlobal)
+			LogWarn(MsgLoaderGlobalClearFail, errGlobal)
 		}
 
 		return nil
 	}
 
 	// Otherwise, register commands globally
-	LogInfo("Registering commands globally...")
+	LogInfo(MsgLoaderRegisteringGlobal)
 	createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands)
 	// ... (the rest remains the same)
 	if err != nil {
-		return fmt.Errorf("[ERROR] Failed to register global commands: %w", err)
+		return fmt.Errorf(MsgLoaderRegisterGlobalFail, err)
 	}
 	for _, cmd := range createdCommands {
-		LogInfo("Registered global command: %s", cmd.Name)
+		LogInfo(MsgLoaderGlobalRegistered, cmd.Name)
 	}
 	return nil
 }

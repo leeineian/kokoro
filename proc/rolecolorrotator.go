@@ -37,9 +37,9 @@ func StartRoleColorRotator(s *discordgo.Session, db *sql.DB) {
 	roleRotatorDB = db
 
 	// Load all configured guilds
-	rows, err := db.Query("SELECT guild_id, random_color_role_id FROM guild_configs WHERE random_color_role_id IS NOT NULL AND random_color_role_id != ''")
+	rows, err := roleRotatorDB.Query("SELECT guild_id, random_color_role_id FROM guild_configs WHERE random_color_role_id IS NOT NULL AND random_color_role_id != ''")
 	if err != nil {
-		sys.LogRoleColorRotator("Failed to fetch configs: %v", err)
+		sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
 		return
 	}
 	defer rows.Close()
@@ -106,7 +106,7 @@ func ScheduleNextUpdate(s *discordgo.Session, guildID, roleID string) {
 		}
 	}
 
-	sys.LogRoleColorRotator("Guild %s next update in %d minutes", guildID, minutes)
+	sys.LogRoleColorRotator(sys.MsgRoleColorNextUpdate, guildID, minutes)
 
 	timer := time.AfterFunc(duration, func() {
 		UpdateRoleColor(s, guildID, roleID)
@@ -128,12 +128,12 @@ func UpdateRoleColor(s *discordgo.Session, guildID, roleID string) error {
 	})
 
 	if err != nil {
-		sys.LogRoleColorRotator("Failed to update role %s in guild %s: %v", roleID, guildID, err)
+		sys.LogRoleColorRotator(sys.MsgRoleColorUpdateFail, roleID, guildID, err)
 		return err
 	}
 
 	hexColor := fmt.Sprintf("#%06X", newColor)
-	sys.LogRoleColorRotator("Updated role %s in guild %s to %s", roleID, guildID, hexColor)
+	sys.LogRoleColorRotator(sys.MsgRoleColorUpdated, roleID, guildID, hexColor)
 
 	currentColorMap.Store(guildID, hexColor)
 	return nil

@@ -127,10 +127,9 @@ minder/
 │   ├── rolecolorrotator.go       # Role color cycle daemon
 │   └── statusrotator.go          # Status cycle daemon
 │
-├── sys/                          # [Core Systems]
-│   ├── config.go                 # Environment configuration
-│   ├── database.go               # SQLite database layer
-│   ├── loader.go                 # Session creation & command registration
-│   └── logger.go                 # Prefix-based color logging
-└── README.md                     # Project documentation
+└── sys/                          # [Core Systems]
+    ├── config.go                 # Environment configuration
+    ├── database.go               # SQLite database layer
+    ├── loader.go                 # Session creation & command registration
+    └── logger.go                 # Prefix-based color logging
 ```

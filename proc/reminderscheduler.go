@@ -45,7 +45,7 @@ func checkAndSendReminders(s *discordgo.Session, db *sql.DB) {
 	`, now)
 
 	if err != nil {
-		sys.LogReminder("Failed to query due reminders: %v", err)
+		sys.LogReminder(sys.MsgReminderFailedToQueryDue, err)
 		return
 	}
 	defer rows.Close()
@@ -56,7 +56,7 @@ func checkAndSendReminders(s *discordgo.Session, db *sql.DB) {
 
 		err := rows.Scan(&id, &userID, &channelID, &message, &sendTo)
 		if err != nil {
-			sys.LogReminder("Failed to scan reminder: %v", err)
+			sys.LogReminder(sys.MsgReminderFailedToScan, err)
 			continue
 		}
 
@@ -76,7 +76,7 @@ func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID,
 		// Create DM channel
 		dmChannel, dmErr := s.UserChannelCreate(userID)
 		if dmErr != nil {
-			sys.LogReminder("Failed to create DM channel for user %s: %v", userID, dmErr)
+			sys.LogReminder(sys.MsgReminderFailedToCreateDM, userID, dmErr)
 			// Try to send in original channel as fallback
 			sendTo = "channel"
 		} else {
@@ -97,7 +97,7 @@ func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID,
 	})
 
 	if err != nil {
-		sys.LogReminder("Failed to send reminder %d: %v", id, err)
+		sys.LogReminder(sys.MsgReminderFailedToSend, id, err)
 		// Don't delete if we can't send - try again next tick
 		return
 	}
@@ -105,8 +105,8 @@ func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID,
 	// Delete the reminder from database
 	_, err = db.Exec("DELETE FROM reminders WHERE id = ?", id)
 	if err != nil {
-		sys.LogReminder("Failed to delete sent reminder %d: %v", id, err)
+		sys.LogReminder(sys.MsgReminderFailedToDelete, id, err)
 	} else {
-		sys.LogReminder("Sent and deleted reminder %d for user %s", id, userID)
+		sys.LogReminder(sys.MsgReminderSentAndDeleted, id, userID)
 	}
 }

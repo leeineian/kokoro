@@ -278,13 +278,27 @@ func init() {
 					},
 				},
 			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "test-error",
+				Description: "Preview user-facing error constants",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:         discordgo.ApplicationCommandOptionString,
+						Name:         "key",
+						Description:  "The error constant to preview",
+						Required:     true,
+						Autocomplete: true,
+					},
+				},
+			},
 		},
 	}, handleDebugCommand)
 
 	sys.RegisterComponentHandler("ping_refresh", handleDebugPingRefresh)
 	sys.RegisterComponentHandler("delete_loop_config", handleDebugLoopConfigDelete)
 	sys.RegisterComponentHandler("stop_loop_select", handleDebugStopLoopSelect)
-	sys.RegisterAutocompleteHandler("debug", debugWebhookLooperAutocomplete)
+	sys.RegisterAutocompleteHandler("debug", handleDebugAutocomplete)
 }
 
 func handleDebugCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -312,6 +326,8 @@ func handleDebugCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		handleDebugStatus(s, i, options[0].Options)
 	case "loop":
 		handleDebugWebhookLooper(s, i, options[0].Options)
+	case "test-error":
+		handleTestError(s, i, options[0].Options)
 	default:
 		log.Printf("Unknown debug subcommand: %s", options[0].Name)
 	}

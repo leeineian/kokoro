@@ -86,7 +86,7 @@ func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
 	activity := &discordgo.Activity{
 		Name: text,
 		Type: discordgo.ActivityTypeStreaming,
-		URL:  sys.StreamingURL,
+		URL:  sys.GlobalConfig.StreamingURL,
 	}
 
 	err = s.UpdateStatusComplex(discordgo.UpdateStatusData{
@@ -95,14 +95,15 @@ func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
 	})
 
 	if err != nil {
-		sys.LogStatusRotator("Update failed: %v", err)
+		sys.LogStatusRotator(sys.MsgStatusUpdateFail, err)
 	} else {
 		if nextInterval > 0 {
-			sys.LogStatusRotator("Status rotated to: %s (Next rotate in %v)", text, nextInterval)
+			sys.LogStatusRotator(sys.MsgStatusRotated, text, nextInterval)
 		} else {
-			sys.LogStatusRotator("Status rotated to: %s", text)
+			sys.LogStatusRotator(sys.MsgStatusRotatedNoInterval, text)
 		}
 	}
+
 }
 
 // Generators

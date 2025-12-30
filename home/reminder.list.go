@@ -31,8 +31,8 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 				// Delete all reminders for this user
 				result, err := sys.DB.Exec("DELETE FROM reminders WHERE user_id = ?", userID)
 				if err != nil {
-					sys.LogReminder("Failed to delete all reminders: %v", err)
-					reminderRespondWithV2Container(s, i, "❌ Failed to dismiss all reminders.")
+					sys.LogReminder(sys.MsgReminderFailedToDeleteAll, err)
+					reminderRespondWithV2Container(s, i, sys.ErrReminderDismissAllFail)
 					return
 				}
 
@@ -43,11 +43,11 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 				// Delete specific reminder
 				_, err := sys.DB.Exec("DELETE FROM reminders WHERE id = ? AND user_id = ?", dismissID, userID)
 				if err != nil {
-					sys.LogReminder("Failed to delete reminder: %v", err)
-					reminderRespondWithV2Container(s, i, "❌ Failed to dismiss reminder.")
+					sys.LogReminder(sys.MsgReminderFailedToDeleteGeneral, err)
+					reminderRespondWithV2Container(s, i, sys.ErrReminderDismissFailed)
 					return
 				}
-				reminderRespondWithV2Container(s, i, "✅ Reminder dismissed!")
+				reminderRespondWithV2Container(s, i, sys.MsgReminderDismissed)
 				return
 			}
 		}
@@ -61,8 +61,8 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 		`, userID)
 
 		if err != nil {
-			sys.LogReminder("Failed to query reminders: %v", err)
-			reminderRespondWithV2Container(s, i, "❌ Failed to fetch reminders.")
+			sys.LogReminder(sys.MsgReminderFailedToQuery, err)
+			reminderRespondWithV2Container(s, i, sys.ErrReminderFetchFailed)
 			return
 		}
 		defer rows.Close()
@@ -85,14 +85,14 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 			}
 			err := rows.Scan(&r.ID, &r.Message, &r.RemindAt, &r.SendTo, &r.ChannelID)
 			if err != nil {
-				sys.LogReminder("Failed to scan reminder: %v", err)
+				sys.LogReminder(sys.MsgReminderFailedToScan, err)
 				continue
 			}
 			reminders = append(reminders, r)
 		}
 
 		if len(reminders) == 0 {
-			reminderRespondWithV2Container(s, i, "📭 You have no active reminders.")
+			reminderRespondWithV2Container(s, i, sys.MsgReminderNoActive)
 			return
 		}
 
@@ -154,7 +154,7 @@ func handleReminderAutocomplete(s *discordgo.Session, i *discordgo.InteractionCr
 		`, userID)
 
 		if err != nil {
-			sys.LogReminder("Failed to query reminders for autocomplete: %v", err)
+			sys.LogReminder(sys.MsgReminderAutocompleteFailed, err)
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 				Data: &discordgo.InteractionResponseData{

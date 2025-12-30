@@ -2,12 +2,12 @@ package home
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/leeineian/minder/sys"
 )
 
 // processUndertextColors converts user-friendly color syntax to API format
@@ -32,12 +32,16 @@ func processUndertextColors(input string) string {
 }
 
 func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Flags: discordgo.MessageFlagsIsComponentsV2,
 		},
 	})
+	if err != nil {
+		sys.LogUndertext(sys.MsgUndertextRespondError, err)
+		return
+	}
 
 	options := i.ApplicationCommandData().Options
 	params := make(map[string]string)
@@ -124,7 +128,7 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	generatedURL := sb.String()
 
-	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+	_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Components: &[]discordgo.MessageComponent{
 			&discordgo.Container{
 				Components: []discordgo.MessageComponent{
@@ -140,6 +144,16 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		},
 	})
 	if err != nil {
-		log.Printf("[UNDERTEXT] Error editing interaction response: %v", err)
+		sys.LogUndertext(sys.MsgUndertextEditResponseError, err)
+		// Fallback: Notify the user using the constant (V2)
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Components: &[]discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: sys.ErrUndertextGenerateFailed},
+					},
+				},
+			},
+		})
 	}
 }

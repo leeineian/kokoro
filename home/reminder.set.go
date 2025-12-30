@@ -36,13 +36,13 @@ func handleReminderSet(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 		now := time.Now()
 		result, err := reminderParser.ParseDate(whenStr, now)
 		if err != nil || result == nil {
-			reminderRespondWithV2Container(s, i, "❌ Failed to parse the date/time. Try formats like 'tomorrow', 'in 2 hours', 'next friday at 3pm'.")
+			reminderRespondWithV2Container(s, i, sys.ErrReminderParseFailed)
 			return
 		}
 
 		remindAt := *result
 		if remindAt.Before(now) {
-			reminderRespondWithV2Container(s, i, "❌ The reminder time must be in the future!")
+			reminderRespondWithV2Container(s, i, sys.ErrReminderPastTime)
 			return
 		}
 
@@ -56,8 +56,8 @@ func handleReminderSet(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 		`, i.Member.User.ID, channelID, guildID, message, remindAt, sendTo)
 
 		if err != nil {
-			sys.LogReminder("Failed to save reminder: %v", err)
-			reminderRespondWithV2Container(s, i, "❌ Failed to save reminder. Please try again.")
+			sys.LogReminder(sys.MsgReminderFailedToSave, err)
+			reminderRespondWithV2Container(s, i, sys.ErrReminderSaveFailed)
 			return
 		}
 

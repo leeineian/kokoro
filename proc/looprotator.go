@@ -55,11 +55,13 @@ var (
 func InitLoopRotator(s *discordgo.Session) {
 	configs, err := sys.GetAllLoopConfigs()
 	if err != nil {
-		sys.LogLoopRotator("Failed to load configs: %v", err)
+		sys.LogLoopRotator(sys.MsgLoopFailedToLoadConfigs, err)
 		return
 	}
 
-	sys.LogLoopRotator("Loading %d configured channels from DB...", len(configs))
+	sys.LogLoopRotator(sys.MsgLoopLoadingChannels, len(configs))
+	// Internal looper storage
+	// looperData := make(map[string]*LooperData) // This line was in the diff but not used in the final code, removing.
 
 	for _, config := range configs {
 		configuredChannels.Store(config.ChannelID, &ChannelData{
@@ -68,33 +70,34 @@ func InitLoopRotator(s *discordgo.Session) {
 		})
 	}
 
-	sys.LogLoopRotator("Loaded configuration for %d channels (Lazy).", len(configs))
+	sys.LogLoopRotator(sys.MsgLoopLoadedChannels, len(configs))
 
 	// Auto-resume running loops
 	resumeCount := 0
 	for _, config := range configs {
 		if config.IsRunning {
-			resumeCount++
+			// resumeCount++ // This increment was moved inside the successful resume block
 			go func(cfg *sys.LoopConfig) {
-				data, ok := configuredChannels.Load(cfg.ChannelID)
+				dataVal, ok := configuredChannels.Load(cfg.ChannelID)
 				if !ok {
 					return
 				}
-				channelData := data.(*ChannelData)
+				channelData := dataVal.(*ChannelData)
 
 				// Load webhooks
 				if err := loadWebhooksForChannel(s, channelData); err != nil {
-					sys.LogLoopRotator("Failed to resume %s: %v", cfg.ChannelName, err)
+					sys.LogLoopRotator(sys.MsgLoopFailedToResume, cfg.ChannelName, err)
 					return
 				}
 
 				startLoopInternal(cfg.ChannelID, channelData, s)
+				resumeCount++ // Increment only if successfully started
 			}(config)
 		}
 	}
 
 	if resumeCount > 0 {
-		sys.LogLoopRotator("Resuming %d active loops...", resumeCount)
+		sys.LogLoopRotator(sys.MsgLoopResuming, resumeCount)
 	}
 }
 
@@ -194,7 +197,7 @@ func prepareWebhooksForSingleChannel(s *discordgo.Session, channel *discordgo.Ch
 	// Create if not exists
 	if hook == nil {
 		if len(webhooks) >= 10 {
-			sys.LogLoopRotator("Channel %s has 10 webhooks, skipping", channel.Name)
+			sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, channel.Name)
 			return nil
 		}
 		hook, err = s.WebhookCreate(channel.ID, LoopWebhookName, s.State.User.AvatarURL("128"))
@@ -204,7 +207,7 @@ func prepareWebhooksForSingleChannel(s *discordgo.Session, channel *discordgo.Ch
 	}
 
 	data.Hooks = []WebhookData{{Webhook: hook, ChannelName: channel.Name}}
-	sys.LogLoopRotator("Prepared webhook for channel: %s", channel.Name)
+	sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, channel.Name)
 	return nil
 }
 
@@ -226,7 +229,7 @@ func prepareWebhooksForCategory(s *discordgo.Session, category *discordgo.Channe
 
 		webhooks, err := s.ChannelWebhooks(ch.ID)
 		if err != nil {
-			sys.LogLoopRotator("Failed to fetch webhooks for %s: %v", ch.Name, err)
+			sys.LogLoopRotator(sys.MsgLoopFailedToFetchWebhooks, ch.Name, err)
 			continue
 		}
 
@@ -240,22 +243,22 @@ func prepareWebhooksForCategory(s *discordgo.Session, category *discordgo.Channe
 
 		if hook == nil {
 			if len(webhooks) >= 10 {
-				sys.LogLoopRotator("Channel %s has 10 webhooks, skipping", ch.Name)
+				sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, ch.Name)
 				continue
 			}
 			hook, err = s.WebhookCreate(ch.ID, LoopWebhookName, s.State.User.AvatarURL("128"))
 			if err != nil {
-				sys.LogLoopRotator("Failed to create webhook for %s: %v", ch.Name, err)
+				sys.LogLoopRotator(sys.MsgLoopFailedToCreateWebhook, ch.Name, err)
 				continue
 			}
 		}
 
 		hooks = append(hooks, WebhookData{Webhook: hook, ChannelName: ch.Name})
-		sys.LogLoopRotator("Prepared webhook for channel: %s", ch.Name)
+		sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, ch.Name)
 	}
 
 	data.Hooks = hooks
-	sys.LogLoopRotator("Prepared %d webhooks for category: %s", len(hooks), category.Name)
+	sys.LogLoopRotator(sys.MsgLoopPreparedCategoryHooks, len(hooks), category.Name)
 	return nil
 }
 
@@ -296,13 +299,13 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 		isRandomMode := interval == 0
 
 		if isTimedMode {
-			sys.LogLoopRotator("Starting timed loop for %s", FormatInterval(interval))
+			sys.LogLoopRotator(sys.MsgLoopStartingTimed, FormatInterval(interval))
 			state.IntervalTimeout = time.AfterFunc(interval, func() {
-				sys.LogLoopRotator("Time limit reached for %s", data.Config.ChannelName)
+				sys.LogLoopRotator(sys.MsgLoopTimeLimitReached, data.Config.ChannelName)
 				StopLoopInternal(channelID, s)
 			})
 		} else if isRandomMode {
-			sys.LogLoopRotator("Starting infinite random mode for %s", data.Config.ChannelName)
+			sys.LogLoopRotator(sys.MsgLoopStartingRandom, data.Config.ChannelName)
 		}
 
 		for isAlive() {
@@ -314,7 +317,7 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 				state.RoundsTotal = randomRounds
 				state.CurrentRound = 0
 
-				sys.LogLoopRotator("[%s] Random: %d rounds, next delay: %s",
+				sys.LogLoopRotator(sys.MsgLoopRandomStatus,
 					data.Config.ChannelName, randomRounds, FormatInterval(randomDelay))
 
 				for i := 0; i < randomRounds && isAlive(); i++ {
@@ -417,14 +420,15 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 								retryAfter = time.Duration(s * float64(time.Second))
 							}
 						}
-
-						sys.LogLoopRotator("[%s] Rate limited. Retrying in %v (Attempt %d/3)", hd.ChannelName, retryAfter, attempt+1)
-						time.Sleep(retryAfter)
-						continue
+						if retryAfter > 0 {
+							sys.LogLoopRotator(sys.MsgLoopRateLimited, hd.ChannelName, retryAfter, attempt+1)
+							time.Sleep(retryAfter)
+							continue
+						}
 					}
 
 					// Non-rate-limit error, log and give up
-					sys.LogLoopRotator("Failed to send to %s: %v", hd.ChannelName, err)
+					sys.LogLoopRotator(sys.MsgLoopSendFail, hd.ChannelName, err)
 					break
 				}
 			}(hookData)
@@ -437,7 +441,7 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 func renameChannel(s *discordgo.Session, channelID, newName string) {
 	_, err := s.ChannelEdit(channelID, &discordgo.ChannelEdit{Name: newName})
 	if err != nil {
-		sys.LogLoopRotator("Failed to rename channel: %v", err)
+		sys.LogLoopRotator(sys.MsgLoopRenameFail, err)
 	}
 }
 
@@ -463,7 +467,7 @@ func StopLoopInternal(channelID string, s *discordgo.Session) bool {
 		if data.Config.InactiveChannelName != "" {
 			renameChannel(s, channelID, data.Config.InactiveChannelName)
 		}
-		sys.LogLoopRotator("Stopped loop for: %s", data.Config.ChannelName)
+		sys.LogLoopRotator(sys.MsgLoopStopped, data.Config.ChannelName)
 	}
 
 	return true
@@ -491,14 +495,13 @@ func GetConfiguredChannels() map[string]*ChannelData {
 
 // SetLoopConfig configures a channel for looping (called from command handler)
 func SetLoopConfig(s *discordgo.Session, channelID string, config *sys.LoopConfig) error {
+	sys.LogLoopRotator(sys.MsgLoopConfigured, config.ChannelName)
 	if err := sys.AddLoopConfig(channelID, config); err != nil {
 		return err
 	}
 
 	data := &ChannelData{Config: config, Hooks: nil}
 	configuredChannels.Store(channelID, data)
-
-	sys.LogLoopRotator("Configured channel: %s", config.ChannelName)
 	return nil
 }
 

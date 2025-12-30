@@ -16,7 +16,7 @@ func initReminderParser() {
 	var err error
 	reminderParser, err = naturaltime.New()
 	if err != nil {
-		sys.LogFatal("Failed to initialize naturaltime parser: %v", err)
+		sys.LogFatal(sys.MsgReminderNaturalTimeInitFail, err)
 	}
 }
 
@@ -31,7 +31,7 @@ func reminderRespondWithV2Container(s *discordgo.Session, i *discordgo.Interacti
 		},
 	})
 	if err != nil {
-		sys.LogReminder("Error editing interaction response: %v", err)
+		sys.LogReminder(sys.MsgReminderEditResponseError, err)
 	}
 }
 

@@ -14,10 +14,7 @@ func handleDebugStatus(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 	}
 
 	visible := options[0].BoolValue()
-	valStr := "false"
-	if visible {
-		valStr = "true"
-	}
+	valStr := fmt.Sprintf("%t", visible)
 
 	err := sys.SetBotConfig("status_visible", valStr)
 	if err != nil {
@@ -40,25 +37,14 @@ func handleDebugStatus(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 	// Force update
 	proc.TriggerStatusUpdate(s)
 
-	statusStr := "DISABLED"
-	if visible {
-		statusStr = "ENABLED"
-	}
-
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: fmt.Sprintf("Status rotation has been **%s**.", statusStr)},
-					},
-				},
-			},
-			Flags: discordgo.MessageFlagsIsComponentsV2,
+			Content: fmt.Sprintf("Status visibility set to: **%v**", visible),
+			Flags:   discordgo.MessageFlagsEphemeral,
 		},
 	})
 	if err != nil {
-		sys.LogError("Failed to respond to status command: %v", err)
+		sys.LogError(sys.MsgDebugStatusCmdFail, err)
 	}
 }

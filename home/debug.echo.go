@@ -41,6 +41,6 @@ func handleDebugEcho(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 		Data: data,
 	})
 	if err != nil {
-		sys.LogDebug("Failed to respond to echo: %v", err)
+		sys.LogDebug(sys.MsgDebugEchoFail, err)
 	}
 }

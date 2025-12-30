@@ -29,7 +29,7 @@ func InitDatabase(dataSourceName string) error {
 	}
 	for _, p := range pragmas {
 		if _, err := DB.Exec(p); err != nil {
-			return fmt.Errorf("failed to set pragma %s: %w", p, err)
+			return fmt.Errorf(MsgDatabasePragmaError, p, err)
 		}
 	}
 
@@ -83,7 +83,7 @@ func InitDatabase(dataSourceName string) error {
 
 	for _, q := range tableQueries {
 		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("failed to create table: %w", err)
+			return fmt.Errorf(MsgDatabaseTableError, err)
 		}
 	}
 
@@ -91,7 +91,7 @@ func InitDatabase(dataSourceName string) error {
 		return err
 	}
 
-	LogDatabase("Database initialized successfully")
+	LogDatabase(MsgDatabaseInitSuccess)
 	return nil
 }
 
