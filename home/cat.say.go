@@ -34,48 +34,44 @@ func getCatAnsiCode(color string) string {
 }
 
 func handleCatSay(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	var message, msgColor, bubColor, catColor, expression string
+	for _, opt := range options {
+		switch opt.Name {
+		case "message":
+			message = opt.StringValue()
+		case "msgcolor":
+			msgColor = opt.StringValue()
+		case "bubcolor":
+			bubColor = opt.StringValue()
+		case "catcolor":
+			catColor = opt.StringValue()
+		case "expression":
+			expression = opt.StringValue()
+		}
+	}
+
+	// Generate ASCII
+	output := generateCatSay(message, msgColor, bubColor, catColor, expression)
+
+	// Wrap in ansi block
+	content := fmt.Sprintf("```ansi\n%s\n```", output)
+
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Flags: discordgo.MessageFlagsIsComponentsV2,
-		},
-	})
-	go func() {
-		var message, msgColor, bubColor, catColor, expression string
-		for _, opt := range options {
-			switch opt.Name {
-			case "message":
-				message = opt.StringValue()
-			case "msgcolor":
-				msgColor = opt.StringValue()
-			case "bubcolor":
-				bubColor = opt.StringValue()
-			case "catcolor":
-				catColor = opt.StringValue()
-			case "expression":
-				expression = opt.StringValue()
-			}
-		}
-
-		// Generate ASCII
-		output := generateCatSay(message, msgColor, bubColor, catColor, expression)
-
-		// Wrap in ansi block
-		content := fmt.Sprintf("```ansi\n%s\n```", output)
-
-		_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Components: &[]discordgo.MessageComponent{
+			Components: []discordgo.MessageComponent{
 				&discordgo.Container{
 					Components: []discordgo.MessageComponent{
 						&discordgo.TextDisplay{Content: content},
 					},
 				},
 			},
-		})
-		if err != nil {
-			sys.LogCat(sys.MsgCatErrorEditingResponse, err)
-		}
-	}()
+		},
+	})
+	if err != nil {
+		sys.LogCat(sys.MsgCatFailedToSendErrorResponse, err)
+	}
 }
 
 func getCatExpressionChoices() []*discordgo.ApplicationCommandOptionChoice {

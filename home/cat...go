@@ -15,6 +15,30 @@ var catHttpClient = &http.Client{
 	Timeout: catHttpClientTimeout,
 }
 
+func catRespondErrorSync(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
+	if s == nil || i == nil || i.Interaction == nil {
+		sys.LogCat(sys.MsgCatCannotSendErrorResponse)
+		return
+	}
+
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Flags: discordgo.MessageFlagsIsComponentsV2,
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: msg},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		sys.LogCat(sys.MsgCatFailedToSendErrorResponse, err)
+	}
+}
+
 func catRespondErrorFollowup(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
 	if s == nil || i == nil || i.Interaction == nil {
 		sys.LogCat(sys.MsgCatCannotSendErrorFollowup)
@@ -22,8 +46,14 @@ func catRespondErrorFollowup(s *discordgo.Session, i *discordgo.InteractionCreat
 	}
 
 	if _, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content: msg,
-		Flags:   discordgo.MessageFlagsEphemeral,
+		Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
+		Components: []discordgo.MessageComponent{
+			&discordgo.Container{
+				Components: []discordgo.MessageComponent{
+					&discordgo.TextDisplay{Content: msg},
+				},
+			},
+		},
 	}); err != nil {
 		sys.LogCat(sys.MsgCatFailedToSendErrorFollowup, err)
 	}

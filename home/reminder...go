@@ -20,6 +20,25 @@ func initReminderParser() {
 	}
 }
 
+func reminderRespondImmediate(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Flags: discordgo.MessageFlagsIsComponentsV2,
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: content},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		sys.LogReminder(sys.MsgReminderRespondError, err)
+	}
+}
+
 func reminderRespondWithV2Container(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
 	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Components: &[]discordgo.MessageComponent{

@@ -40,8 +40,14 @@ func handleDebugStatus(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Status visibility set to: **%v**", visible),
-			Flags:   discordgo.MessageFlagsEphemeral,
+			Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: fmt.Sprintf("Status visibility set to: **%v**", visible)},
+					},
+				},
+			},
 		},
 	})
 	if err != nil {

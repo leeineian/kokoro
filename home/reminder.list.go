@@ -10,115 +10,106 @@ import (
 )
 
 func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-		},
-	})
+	var dismissID string
+	if len(options) > 0 {
+		dismissID = options[0].StringValue()
+	}
 
-	go func() {
-		var dismissID string
-		if len(options) > 0 {
-			dismissID = options[0].StringValue()
-		}
+	userID := i.Member.User.ID
 
-		userID := i.Member.User.ID
-
-		// Handle dismissal
-		if dismissID != "" {
-			if dismissID == "all" {
-				// Delete all reminders for this user
-				result, err := sys.DB.Exec("DELETE FROM reminders WHERE user_id = ?", userID)
-				if err != nil {
-					sys.LogReminder(sys.MsgReminderFailedToDeleteAll, err)
-					reminderRespondWithV2Container(s, i, sys.ErrReminderDismissAllFail)
-					return
-				}
-
-				rowsAffected, _ := result.RowsAffected()
-				reminderRespondWithV2Container(s, i, fmt.Sprintf("✅ Dismissed all %d reminder(s)!", rowsAffected))
-				return
-			} else {
-				// Delete specific reminder
-				_, err := sys.DB.Exec("DELETE FROM reminders WHERE id = ? AND user_id = ?", dismissID, userID)
-				if err != nil {
-					sys.LogReminder(sys.MsgReminderFailedToDeleteGeneral, err)
-					reminderRespondWithV2Container(s, i, sys.ErrReminderDismissFailed)
-					return
-				}
-				reminderRespondWithV2Container(s, i, sys.MsgReminderDismissed)
+	// Handle dismissal
+	if dismissID != "" {
+		if dismissID == "all" {
+			// Delete all reminders for this user
+			result, err := sys.DB.Exec("DELETE FROM reminders WHERE user_id = ?", userID)
+			if err != nil {
+				sys.LogReminder(sys.MsgReminderFailedToDeleteAll, err)
+				reminderRespondImmediate(s, i, sys.ErrReminderDismissAllFail)
 				return
 			}
-		}
 
-		// List all reminders
-		rows, err := sys.DB.Query(`
-			SELECT id, message, remind_at, send_to, channel_id
-			FROM reminders
-			WHERE user_id = ?
-			ORDER BY remind_at ASC
-		`, userID)
-
-		if err != nil {
-			sys.LogReminder(sys.MsgReminderFailedToQuery, err)
-			reminderRespondWithV2Container(s, i, sys.ErrReminderFetchFailed)
+			rowsAffected, _ := result.RowsAffected()
+			reminderRespondImmediate(s, i, fmt.Sprintf("✅ Dismissed all %d reminder(s)!", rowsAffected))
+			return
+		} else {
+			// Delete specific reminder
+			_, err := sys.DB.Exec("DELETE FROM reminders WHERE id = ? AND user_id = ?", dismissID, userID)
+			if err != nil {
+				sys.LogReminder(sys.MsgReminderFailedToDeleteGeneral, err)
+				reminderRespondImmediate(s, i, sys.ErrReminderDismissFailed)
+				return
+			}
+			reminderRespondImmediate(s, i, sys.MsgReminderDismissed)
 			return
 		}
-		defer rows.Close()
+	}
 
-		var reminders []struct {
+	// List all reminders
+	rows, err := sys.DB.Query(`
+		SELECT id, message, remind_at, send_to, channel_id
+		FROM reminders
+		WHERE user_id = ?
+		ORDER BY remind_at ASC
+	`, userID)
+
+	if err != nil {
+		sys.LogReminder(sys.MsgReminderFailedToQuery, err)
+		reminderRespondImmediate(s, i, sys.ErrReminderFetchFailed)
+		return
+	}
+	defer rows.Close()
+
+	var reminders []struct {
+		ID        int64
+		Message   string
+		RemindAt  time.Time
+		SendTo    string
+		ChannelID string
+	}
+
+	for rows.Next() {
+		var r struct {
 			ID        int64
 			Message   string
 			RemindAt  time.Time
 			SendTo    string
 			ChannelID string
 		}
+		err := rows.Scan(&r.ID, &r.Message, &r.RemindAt, &r.SendTo, &r.ChannelID)
+		if err != nil {
+			sys.LogReminder(sys.MsgReminderFailedToScan, err)
+			continue
+		}
+		reminders = append(reminders, r)
+	}
 
-		for rows.Next() {
-			var r struct {
-				ID        int64
-				Message   string
-				RemindAt  time.Time
-				SendTo    string
-				ChannelID string
-			}
-			err := rows.Scan(&r.ID, &r.Message, &r.RemindAt, &r.SendTo, &r.ChannelID)
-			if err != nil {
-				sys.LogReminder(sys.MsgReminderFailedToScan, err)
-				continue
-			}
-			reminders = append(reminders, r)
+	if len(reminders) == 0 {
+		reminderRespondImmediate(s, i, sys.MsgReminderNoActive)
+		return
+	}
+
+	// Build response
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📝 **You have %d active reminder(s):**\n\n", len(reminders)))
+
+	for idx, r := range reminders {
+		location := fmt.Sprintf("<#%s>", r.ChannelID)
+		if r.SendTo == "dm" {
+			location = "Direct Message"
 		}
 
-		if len(reminders) == 0 {
-			reminderRespondWithV2Container(s, i, sys.MsgReminderNoActive)
-			return
-		}
+		// Use Discord timestamp for relative time
+		sb.WriteString(fmt.Sprintf("%d. **%s**\n   📍 %s | ⏰ <t:%d:R>\n\n",
+			idx+1,
+			reminderTruncate(r.Message, 50),
+			location,
+			r.RemindAt.Unix(),
+		))
+	}
 
-		// Build response
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("📝 **You have %d active reminder(s):**\n\n", len(reminders)))
+	sb.WriteString("\n💡 Use `/reminder list dismiss:<reminder>` to dismiss a specific reminder or all reminders.")
 
-		for idx, r := range reminders {
-			location := fmt.Sprintf("<#%s>", r.ChannelID)
-			if r.SendTo == "dm" {
-				location = "Direct Message"
-			}
-
-			// Use Discord timestamp for relative time
-			sb.WriteString(fmt.Sprintf("%d. **%s**\n   📍 %s | ⏰ <t:%d:R>\n\n",
-				idx+1,
-				reminderTruncate(r.Message, 50),
-				location,
-				r.RemindAt.Unix(),
-			))
-		}
-
-		sb.WriteString("\n💡 Use `/reminder list dismiss:<reminder>` to dismiss a specific reminder or all reminders.")
-
-		reminderRespondWithV2Container(s, i, sb.String())
-	}()
+	reminderRespondImmediate(s, i, sb.String())
 }
 
 func handleReminderAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {

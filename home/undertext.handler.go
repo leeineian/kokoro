@@ -32,17 +32,6 @@ func processUndertextColors(input string) string {
 }
 
 func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-		},
-	})
-	if err != nil {
-		sys.LogUndertext(sys.MsgUndertextRespondError, err)
-		return
-	}
-
 	options := i.ApplicationCommandData().Options
 	params := make(map[string]string)
 	var messageText string
@@ -79,7 +68,9 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			animated = opt.BoolValue()
 		case "image":
 			// Get attachment ID from the option value
-			imageAttachmentID = opt.Value.(string)
+			if val, ok := opt.Value.(string); ok {
+				imageAttachmentID = val
+			}
 		case "user":
 			// Get user ID from the option value
 			if userID, ok := opt.Value.(string); ok {
@@ -128,14 +119,18 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	generatedURL := sb.String()
 
-	_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Components: &[]discordgo.MessageComponent{
-			&discordgo.Container{
-				Components: []discordgo.MessageComponent{
-					&discordgo.MediaGallery{
-						Items: []discordgo.MediaGalleryItem{
-							{
-								Media: discordgo.UnfurledMediaItem{URL: generatedURL},
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Flags: discordgo.MessageFlagsIsComponentsV2,
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.MediaGallery{
+							Items: []discordgo.MediaGalleryItem{
+								{
+									Media: discordgo.UnfurledMediaItem{URL: generatedURL},
+								},
 							},
 						},
 					},
@@ -144,16 +139,6 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		},
 	})
 	if err != nil {
-		sys.LogUndertext(sys.MsgUndertextEditResponseError, err)
-		// Fallback: Notify the user using the constant (V2)
-		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Components: &[]discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: sys.ErrUndertextGenerateFailed},
-					},
-				},
-			},
-		})
+		sys.LogUndertext(sys.MsgUndertextRespondError, err)
 	}
 }

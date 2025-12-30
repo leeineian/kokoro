@@ -63,79 +63,55 @@ func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, op
 		return
 	}
 
-	// Defer
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
-
-	go func() {
-		// Update DB
-		_, err := sys.DB.Exec(`
+	// Update DB
+	_, err := sys.DB.Exec(`
 		INSERT INTO guild_configs (guild_id, random_color_role_id, updated_at) 
 		VALUES (?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(guild_id) DO UPDATE SET random_color_role_id = ?, updated_at = CURRENT_TIMESTAMP
 	`, i.GuildID, role.ID, role.ID)
 
-		if err != nil {
-			sys.LogError(sys.MsgDebugRoleColorUpdateFail, err)
-			roleColorEdit(s, i, "❌ Failed to save configuration.")
-			return
-		}
+	if err != nil {
+		sys.LogError(sys.MsgDebugRoleColorUpdateFail, err)
+		roleColorRespond(s, i, "❌ Failed to save configuration.")
+		return
+	}
 
-		// Start Rotator
-		proc.StartRotationForGuild(s, i.GuildID, role.ID)
+	// Start Rotator
+	proc.StartRotationForGuild(s, i.GuildID, role.ID)
 
-		// Trigger immediate update
-		proc.UpdateRoleColor(s, i.GuildID, role.ID)
+	// Trigger immediate update
+	proc.UpdateRoleColor(s, i.GuildID, role.ID)
 
-		roleColorEdit(s, i, fmt.Sprintf("✅ **Random Color Role Set**\nTarget Role: <@&%s>\n\nThe color will now update periodically.", role.ID))
-	}()
+	roleColorRespond(s, i, fmt.Sprintf("✅ **Random Color Role Set**\nTarget Role: <@&%s>\n\nThe color will now update periodically.", role.ID))
 }
 
 func handleRoleColorReset(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Defer
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
+	_, err := sys.DB.Exec("UPDATE guild_configs SET random_color_role_id = NULL WHERE guild_id = ?", i.GuildID)
+	if err != nil {
+		sys.LogError(sys.MsgDebugRoleColorResetFail, err)
+		roleColorRespond(s, i, "❌ Failed to reset configuration.")
+		return
+	}
 
-	go func() {
-		_, err := sys.DB.Exec("UPDATE guild_configs SET random_color_role_id = NULL WHERE guild_id = ?", i.GuildID)
-		if err != nil {
-			sys.LogError(sys.MsgDebugRoleColorResetFail, err)
-			roleColorEdit(s, i, "❌ Failed to reset configuration.")
-			return
-		}
+	proc.StopRotationForGuild(i.GuildID)
 
-		proc.StopRotationForGuild(i.GuildID)
-
-		roleColorEdit(s, i, "✅ **Configuration Reset**\nRandom role color disabled.")
-	}()
+	roleColorRespond(s, i, "✅ **Configuration Reset**\nRandom role color disabled.")
 }
 
 func handleRoleColorRefresh(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Defer
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
+	// Fetch role ID from DB
+	var roleID string
+	err := sys.DB.QueryRow("SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", i.GuildID).Scan(&roleID)
+	if err != nil || roleID == "" {
+		roleColorRespond(s, i, "❌ No role configured. Use `/debug rolecolor set` first.")
+		return
+	}
 
-	go func() {
-		// Fetch role ID from DB
-		var roleID string
-		err := sys.DB.QueryRow("SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", i.GuildID).Scan(&roleID)
-		if err != nil || roleID == "" {
-			roleColorEdit(s, i, "❌ No role configured. Use `/debug rolecolor set` first.")
-			return
-		}
+	err = proc.UpdateRoleColor(s, i.GuildID, roleID)
+	if err != nil {
+		roleColorRespond(s, i, "❌ Failed to refresh role color.")
+		return
+	}
 
-		err = proc.UpdateRoleColor(s, i.GuildID, roleID)
-		if err != nil {
-			roleColorEdit(s, i, "❌ Failed to refresh role color.")
-			return
-		}
-
-		roleColorEdit(s, i, "🎨 Role color has been refreshed!")
-	}()
+	roleColorRespond(s, i, "🎨 Role color has been refreshed!")
 }

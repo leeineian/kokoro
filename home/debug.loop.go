@@ -124,19 +124,23 @@ func handleLoopList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: content,
+			Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
+				&discordgo.Container{
 					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							CustomID:    "delete_loop_config",
-							Placeholder: "Select a configuration to delete",
-							Options:     selectOptions,
+						&discordgo.TextDisplay{Content: content},
+						discordgo.ActionsRow{
+							Components: []discordgo.MessageComponent{
+								discordgo.SelectMenu{
+									CustomID:    "delete_loop_config",
+									Placeholder: "Select a configuration to delete",
+									Options:     selectOptions,
+								},
+							},
 						},
 					},
 				},
 			},
-			Flags: discordgo.MessageFlagsEphemeral,
 		},
 	})
 }
@@ -168,67 +172,59 @@ func handleLoopSet(s *discordgo.Session, i *discordgo.InteractionCreate, options
 		return
 	}
 
-	// Defer reply
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
+	channel, err := s.Channel(channelID)
+	if err != nil {
+		loopRespond(s, i, "❌ Failed to fetch channel.", true)
+		return
+	}
 
-	go func() {
-		channel, err := s.Channel(channelID)
-		if err != nil {
-			loopEdit(s, i, "❌ Failed to fetch channel.")
-			return
-		}
+	// Determine channel type
+	channelType := "channel"
+	if channel.Type == discordgo.ChannelTypeGuildCategory {
+		channelType = "category"
+	}
 
-		// Determine channel type
-		channelType := "channel"
-		if channel.Type == discordgo.ChannelTypeGuildCategory {
-			channelType = "category"
+	if message == "" {
+		message = "@everyone"
+	}
+	if webhookAuthor == "" {
+		webhookAuthor = "LoopHook"
+	}
+	if webhookAvatar == "" && i.GuildID != "" {
+		guild, _ := s.Guild(i.GuildID)
+		if guild != nil && guild.Icon != "" {
+			webhookAvatar = guild.IconURL("128")
 		}
+	}
 
-		if message == "" {
-			message = "@everyone"
-		}
-		if webhookAuthor == "" {
-			webhookAuthor = "LoopHook"
-		}
-		if webhookAvatar == "" && i.GuildID != "" {
-			guild, _ := s.Guild(i.GuildID)
-			if guild != nil && guild.Icon != "" {
-				webhookAvatar = guild.IconURL("128")
-			}
-		}
+	config := &sys.LoopConfig{
+		ChannelID:           channelID,
+		ChannelName:         channel.Name,
+		ChannelType:         channelType,
+		Rounds:              0,
+		Interval:            0, // Default to infinite random mode
+		ActiveChannelName:   activeChannelName,
+		InactiveChannelName: inactiveChannelName,
+		Message:             message,
+		WebhookAuthor:       webhookAuthor,
+		WebhookAvatar:       webhookAvatar,
+		UseThread:           false,
+	}
 
-		config := &sys.LoopConfig{
-			ChannelID:           channelID,
-			ChannelName:         channel.Name,
-			ChannelType:         channelType,
-			Rounds:              0,
-			Interval:            0, // Default to infinite random mode
-			ActiveChannelName:   activeChannelName,
-			InactiveChannelName: inactiveChannelName,
-			Message:             message,
-			WebhookAuthor:       webhookAuthor,
-			WebhookAvatar:       webhookAvatar,
-			UseThread:           false,
-		}
+	if err := sys.AddLoopConfig(channelID, config); err != nil {
+		loopRespond(s, i, fmt.Sprintf("❌ Failed to save configuration: %v", err), true)
+		return
+	}
 
-		if err := sys.AddLoopConfig(channelID, config); err != nil {
-			loopEdit(s, i, fmt.Sprintf("❌ Failed to save configuration: %v", err))
-			return
-		}
+	typeStr := "Channel"
+	if channelType == "category" {
+		typeStr = "Category"
+	}
 
-		typeStr := "Channel"
-		if channelType == "category" {
-			typeStr = "Category"
-		}
-
-		loopEdit(s, i, fmt.Sprintf(
-			"✅ **%s Configured**\n> **%s**\n> Interval: ∞ (Random)\n> Run `/debug loop start` to begin.",
-			typeStr, channel.Name,
-		))
-	}()
+	loopRespond(s, i, fmt.Sprintf(
+		"✅ **%s Configured**\n> **%s**\n> Interval: ∞ (Random)\n> Run `/debug loop start` to begin.",
+		typeStr, channel.Name,
+	), true)
 }
 
 // handleLoopStart starts loop(s)
@@ -244,50 +240,42 @@ func handleLoopStart(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 		}
 	}
 
-	// Defer reply
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
+	interval := proc.IntervalMsToDuration(0)
+	if intervalStr != "" {
+		parsed, err := proc.ParseIntervalString(intervalStr)
+		if err != nil {
+			loopRespond(s, i, fmt.Sprintf("❌ Invalid interval: %v", err), true)
+			return
+		}
+		interval = parsed
+	}
 
-	go func() {
-		interval := proc.IntervalMsToDuration(0)
-		if intervalStr != "" {
-			parsed, err := proc.ParseIntervalString(intervalStr)
-			if err != nil {
-				loopEdit(s, i, fmt.Sprintf("❌ Invalid interval: %v", err))
-				return
-			}
-			interval = parsed
+	if targetID == "all" || targetID == "" {
+		// Start all configured loops
+		configs, _ := sys.GetAllLoopConfigs()
+		if len(configs) == 0 {
+			loopRespond(s, i, "❌ No channels configured! Use `/debug loop set` first.", true)
+			return
 		}
 
-		if targetID == "all" || targetID == "" {
-			// Start all configured loops
-			configs, _ := sys.GetAllLoopConfigs()
-			if len(configs) == 0 {
-				loopEdit(s, i, "❌ No channels configured! Use `/debug loop set` first.")
-				return
+		started := 0
+		for _, cfg := range configs {
+			err := proc.StartLoop(s, cfg.ChannelID, interval)
+			if err == nil {
+				started++
 			}
-
-			started := 0
-			for _, cfg := range configs {
-				err := proc.StartLoop(s, cfg.ChannelID, interval)
-				if err == nil {
-					started++
-				}
-			}
-
-			loopEdit(s, i, fmt.Sprintf("🚀 Started **%d** loop(s).", started))
-		} else {
-			err := proc.StartLoop(s, targetID, interval)
-			if err != nil {
-				loopEdit(s, i, fmt.Sprintf("❌ Failed to start: %v", err))
-				return
-			}
-
-			loopEdit(s, i, "🚀 Loop started!")
 		}
-	}()
+
+		loopRespond(s, i, fmt.Sprintf("🚀 Started **%d** loop(s).", started), true)
+	} else {
+		err := proc.StartLoop(s, targetID, interval)
+		if err != nil {
+			loopRespond(s, i, fmt.Sprintf("❌ Failed to start: %v", err), true)
+			return
+		}
+
+		loopRespond(s, i, "🚀 Loop started!", true)
+	}
 }
 
 // handleLoopStop stops loop(s)
@@ -300,84 +288,84 @@ func handleLoopStop(s *discordgo.Session, i *discordgo.InteractionCreate, option
 		}
 	}
 
-	// Defer reply
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
+	if targetID == "all" {
+		activeLoops := proc.GetActiveLoops()
+		if len(activeLoops) == 0 {
+			loopRespond(s, i, "ℹ️ No loops are currently running.", true)
+			return
+		}
 
-	go func() {
-		if targetID == "all" {
-			activeLoops := proc.GetActiveLoops()
-			if len(activeLoops) == 0 {
-				loopEdit(s, i, "ℹ️ No loops are currently running.")
-				return
+		stopped := 0
+		for channelID := range activeLoops {
+			if proc.StopLoopInternal(channelID, s) {
+				stopped++
 			}
+		}
 
-			stopped := 0
-			for channelID := range activeLoops {
-				if proc.StopLoopInternal(channelID, s) {
-					stopped++
-				}
-			}
-
-			loopEdit(s, i, fmt.Sprintf("🛑 Stopped **%d** loop(s).", stopped))
-		} else if targetID != "" {
-			if proc.StopLoopInternal(targetID, s) {
-				loopEdit(s, i, "✅ Stopped the selected loop.")
-			} else {
-				loopEdit(s, i, "❌ Could not find or stop the loop.")
-			}
+		loopRespond(s, i, fmt.Sprintf("🛑 Stopped **%d** loop(s).", stopped), true)
+	} else if targetID != "" {
+		if proc.StopLoopInternal(targetID, s) {
+			loopRespond(s, i, "✅ Stopped the selected loop.", true)
 		} else {
-			// Show selection UI
-			activeLoops := proc.GetActiveLoops()
-			if len(activeLoops) == 0 {
-				loopEdit(s, i, "ℹ️ No loops are currently running.")
-				return
-			}
+			loopRespond(s, i, "❌ Could not find or stop the loop.", true)
+		}
+	} else {
+		// Show selection UI
+		activeLoops := proc.GetActiveLoops()
+		if len(activeLoops) == 0 {
+			loopRespond(s, i, "ℹ️ No loops are currently running.", true)
+			return
+		}
 
-			var selectOptions []discordgo.SelectMenuOption
-			configs, _ := sys.GetAllLoopConfigs()
+		var selectOptions []discordgo.SelectMenuOption
+		configs, _ := sys.GetAllLoopConfigs()
 
-			selectOptions = append(selectOptions, discordgo.SelectMenuOption{
-				Label:       "🛑 Stop All",
-				Value:       "all",
-				Description: fmt.Sprintf("Stop all %d running loops", len(activeLoops)),
-			})
+		selectOptions = append(selectOptions, discordgo.SelectMenuOption{
+			Label:       "🛑 Stop All",
+			Value:       "all",
+			Description: fmt.Sprintf("Stop all %d running loops", len(activeLoops)),
+		})
 
-			for _, cfg := range configs {
-				if state, running := activeLoops[cfg.ChannelID]; running {
-					emoji := "💬"
-					if cfg.ChannelType == "category" {
-						emoji = "📁"
-					}
-					selectOptions = append(selectOptions, discordgo.SelectMenuOption{
-						Label:       cfg.ChannelName,
-						Value:       cfg.ChannelID,
-						Description: fmt.Sprintf("Round %d/%d", state.CurrentRound, state.RoundsTotal),
-						Emoji: &discordgo.ComponentEmoji{
-							Name: emoji,
-						},
-					})
+		for _, cfg := range configs {
+			if state, running := activeLoops[cfg.ChannelID]; running {
+				emoji := "💬"
+				if cfg.ChannelType == "category" {
+					emoji = "📁"
 				}
+				selectOptions = append(selectOptions, discordgo.SelectMenuOption{
+					Label:       cfg.ChannelName,
+					Value:       cfg.ChannelID,
+					Description: fmt.Sprintf("Round %d/%d", state.CurrentRound, state.RoundsTotal),
+					Emoji: &discordgo.ComponentEmoji{
+						Name: emoji,
+					},
+				})
 			}
+		}
 
-			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content: debugStrPtr("**Active Loops:**\n\nSelect a loop to stop."),
-				Components: &[]discordgo.MessageComponent{
-					discordgo.ActionsRow{
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
+				Components: []discordgo.MessageComponent{
+					&discordgo.Container{
 						Components: []discordgo.MessageComponent{
-							discordgo.SelectMenu{
-								CustomID:    "stop_loop_select",
-								Placeholder: "Select loop(s) to stop",
-								Options:     selectOptions,
+							&discordgo.TextDisplay{Content: "**Active Loops:**\n\nSelect a loop to stop."},
+							discordgo.ActionsRow{
+								Components: []discordgo.MessageComponent{
+									discordgo.SelectMenu{
+										CustomID:    "stop_loop_select",
+										Placeholder: "Select loop(s) to stop",
+										Options:     selectOptions,
+									},
+								},
 							},
 						},
 					},
 				},
-			})
-		}
-	}()
+			},
+		})
+	}
 }
 
 // handleLoopPurge purges webhooks from a category
@@ -395,50 +383,42 @@ func handleLoopPurge(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 		return
 	}
 
-	// Defer reply
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
-	})
+	category, err := s.Channel(categoryID)
+	if err != nil || category.Type != discordgo.ChannelTypeGuildCategory {
+		loopRespond(s, i, "❌ Invalid category.", true)
+		return
+	}
 
-	go func() {
-		category, err := s.Channel(categoryID)
-		if err != nil || category.Type != discordgo.ChannelTypeGuildCategory {
-			loopEdit(s, i, "❌ Invalid category.")
-			return
+	guild, err := s.State.Guild(category.GuildID)
+	if err != nil {
+		guild, _ = s.Guild(category.GuildID)
+	}
+
+	if guild == nil {
+		loopRespond(s, i, "❌ Failed to fetch guild.", true)
+		return
+	}
+
+	totalDeleted := 0
+	for _, ch := range guild.Channels {
+		if ch.ParentID != categoryID || ch.Type != discordgo.ChannelTypeGuildText {
+			continue
 		}
 
-		guild, err := s.State.Guild(category.GuildID)
+		webhooks, err := s.ChannelWebhooks(ch.ID)
 		if err != nil {
-			guild, _ = s.Guild(category.GuildID)
+			continue
 		}
 
-		if guild == nil {
-			loopEdit(s, i, "❌ Failed to fetch guild.")
-			return
-		}
-
-		totalDeleted := 0
-		for _, ch := range guild.Channels {
-			if ch.ParentID != categoryID || ch.Type != discordgo.ChannelTypeGuildText {
-				continue
-			}
-
-			webhooks, err := s.ChannelWebhooks(ch.ID)
-			if err != nil {
-				continue
-			}
-
-			for _, wh := range webhooks {
-				if wh.Name == proc.LoopWebhookName {
-					_ = s.WebhookDelete(wh.ID)
-					totalDeleted++
-				}
+		for _, wh := range webhooks {
+			if wh.Name == proc.LoopWebhookName {
+				_ = s.WebhookDelete(wh.ID)
+				totalDeleted++
 			}
 		}
+	}
 
-		loopEdit(s, i, fmt.Sprintf("✅ **Purge Complete**\n\nDeleted **%d** webhook(s) from **%s**.", totalDeleted, category.Name))
-	}()
+	loopRespond(s, i, fmt.Sprintf("✅ **Purge Complete**\n\nDeleted **%d** webhook(s) from **%s**.", totalDeleted, category.Name), true)
 }
 
 // debugWebhookLooperAutocomplete provides autocomplete for webhook looper commands
@@ -555,8 +535,14 @@ func handleDebugLoopConfigDelete(s *discordgo.Session, i *discordgo.InteractionC
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content:    "❌ Failed to delete configuration.",
-				Components: []discordgo.MessageComponent{},
+				Flags: discordgo.MessageFlagsIsComponentsV2,
+				Components: []discordgo.MessageComponent{
+					&discordgo.Container{
+						Components: []discordgo.MessageComponent{
+							&discordgo.TextDisplay{Content: "❌ Failed to delete configuration."},
+						},
+					},
+				},
 			},
 		})
 		return
@@ -565,8 +551,14 @@ func handleDebugLoopConfigDelete(s *discordgo.Session, i *discordgo.InteractionC
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    fmt.Sprintf("✅ Deleted configuration for **%s**.", configName),
-			Components: []discordgo.MessageComponent{},
+			Flags: discordgo.MessageFlagsIsComponentsV2,
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: fmt.Sprintf("✅ Deleted configuration for **%s**.", configName)},
+					},
+				},
+			},
 		},
 	})
 }
@@ -592,8 +584,14 @@ func handleDebugStopLoopSelect(s *discordgo.Session, i *discordgo.InteractionCre
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content:    fmt.Sprintf("🛑 Stopped all **%d** running loops.", stopped),
-				Components: []discordgo.MessageComponent{},
+				Flags: discordgo.MessageFlagsIsComponentsV2,
+				Components: []discordgo.MessageComponent{
+					&discordgo.Container{
+						Components: []discordgo.MessageComponent{
+							&discordgo.TextDisplay{Content: fmt.Sprintf("🛑 Stopped all **%d** running loops.", stopped)},
+						},
+					},
+				},
 			},
 		})
 	} else {
@@ -606,8 +604,14 @@ func handleDebugStopLoopSelect(s *discordgo.Session, i *discordgo.InteractionCre
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content:    msg,
-				Components: []discordgo.MessageComponent{},
+				Flags: discordgo.MessageFlagsIsComponentsV2,
+				Components: []discordgo.MessageComponent{
+					&discordgo.Container{
+						Components: []discordgo.MessageComponent{
+							&discordgo.TextDisplay{Content: msg},
+						},
+					},
+				},
 			},
 		})
 	}

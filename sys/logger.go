@@ -227,6 +227,7 @@ const (
 	MsgReminderFailedToQuery         = "Failed to query reminders: %v"
 	MsgReminderAutocompleteFailed    = "Failed to query reminders for autocomplete: %v"
 	MsgReminderEditResponseError     = "Error editing interaction response: %v"
+	MsgReminderRespondError          = "Failed to respond to interaction: %v"
 	MsgReminderNaturalTimeInitFail   = "Failed to initialize naturaltime parser: %v"
 
 	// User-facing messages
