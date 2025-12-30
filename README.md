@@ -8,7 +8,7 @@ flowchart TB
         Config["config.go<br/>━━━━━━━━━<br/>Environment Logic<br/>Custom Prefixes"]
         Database["database.go<br/>━━━━━━━━━<br/>SQLite WAL Mode<br/>• reminders<br/>• guild_configs<br/>• bot_config<br/>• loop_channels"]
         Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>Session Management"]
-        Logger["logger.go<br/>━━━━━━━━━<br/>Leveled Logging<br/>Daemon Tracking<br/>Color Formatting"]
+        Logger["logger.go<br/>━━━━━━━━━<br/>Dynamic AST Scanning<br/>Centralized Constants<br/>Prefix-Based Branding"]
     end
 
     subgraph Commands["Commands (home)"]
@@ -26,6 +26,7 @@ flowchart TB
             DebugStatus["status config"]
             DebugRoleColor["rolecolor cycle"]
             DebugLoop["webhook stress"]
+            DebugTest["test-error preview"]
         end
         
         subgraph ReminderCmd["/reminder"]
@@ -92,7 +93,7 @@ flowchart TB
 
     class Main entryStyle
     class Config,Database,Loader,Logger coreStyle
-    class CatFact,CatImage,CatSay,DebugStats,DebugEcho,DebugStatus,DebugRoleColor,DebugLoop,ReminderSet,ReminderList,UndertextGen cmdStyle
+    class CatFact,CatImage,CatSay,DebugStats,DebugEcho,DebugStatus,DebugRoleColor,DebugLoop,DebugTest,ReminderSet,ReminderList,UndertextGen cmdStyle
     class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
     class Discord,CatAPI,UndertaleAPI externalStyle
 ```
@@ -103,7 +104,10 @@ minder/
 ├── main.go                       # Go entry point
 ├── go.mod                        # Go module dependencies
 ├── go.sum                        # Go dependency checksums
-│
+|
+├── Dockerfile                    # Containerization instructions
+├── docker-compose.yml            # Multi-service deployment
+|
 ├── home/                         # [Discord Commands]
 │   ├── cat...go                  # /cat command logic
 │   ├── cat.fact.go               # /cat fact (catfact.ninja) handler
@@ -115,6 +119,7 @@ minder/
 │   ├── debug.rolecolor.go        # /debug rolecolor (RGB) handler
 │   ├── debug.stats.go            # /debug stats (Live System Metrics) handler
 │   ├── debug.status.go           # /debug status (Presence Visibility) handler
+│   ├── debug.test.go             # /debug test-error (AST Discovery) handler
 │   ├── reminder...go             # /reminder command logic
 │   ├── reminder.set.go           # /reminder set (Natural Language Time) handler
 │   ├── reminder.list.go          # /reminder list (Interactive View) handler
@@ -131,5 +136,5 @@ minder/
     ├── config.go                 # Environment configuration
     ├── database.go               # SQLite database layer
     ├── loader.go                 # Session creation & command registration
-    └── logger.go                 # Prefix-based color logging
+    └── logger.go                 # Dynamic AST Parsing & Leveled Logging
 ```
