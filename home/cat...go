@@ -78,6 +78,13 @@ func init() {
 						Required:    false,
 						Choices:     getCatColorChoices(),
 					},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "expression",
+						Description: "The cat's facial expression",
+						Required:    false,
+						Choices:     getCatExpressionChoices(),
+					},
 				},
 			},
 		},

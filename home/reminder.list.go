@@ -13,7 +13,7 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Flags: sys.MessageFlagsIsComponentsV2,
+			Flags: discordgo.MessageFlagsIsComponentsV2,
 		},
 	})
 

@@ -84,13 +84,16 @@ func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID,
 		}
 	}
 
-	// Create v2container with TextDisplay component
-	container := sys.NewV2Container(sys.NewTextDisplay(reminderText))
-
-	// Send to channel or DM with v2container
+	// Send to channel or DM with native container
 	_, err = s.ChannelMessageSendComplex(targetChannelID, &discordgo.MessageSend{
-		Components: []discordgo.MessageComponent{container},
-		Flags:      sys.MessageFlagsIsComponentsV2,
+		Components: []discordgo.MessageComponent{
+			&discordgo.Container{
+				Components: []discordgo.MessageComponent{
+					&discordgo.TextDisplay{Content: reminderText},
+				},
+			},
+		},
+		Flags: discordgo.MessageFlagsIsComponentsV2,
 	})
 
 	if err != nil {

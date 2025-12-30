@@ -20,8 +20,27 @@ func handleDebugEcho(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 		}
 	}
 
-	container := sys.NewV2Container(sys.NewTextDisplay(msg))
-	if err := sys.RespondInteractionV2(s, i.Interaction, container, ephemeral); err != nil {
+	var flags discordgo.MessageFlags = discordgo.MessageFlagsIsComponentsV2
+	if ephemeral {
+		flags |= discordgo.MessageFlagsEphemeral
+	}
+
+	data := &discordgo.InteractionResponseData{
+		Components: []discordgo.MessageComponent{
+			&discordgo.Container{
+				Components: []discordgo.MessageComponent{
+					&discordgo.TextDisplay{Content: msg},
+				},
+			},
+		},
+		Flags: flags,
+	}
+
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: data,
+	})
+	if err != nil {
 		sys.LogDebug("Failed to respond to echo: %v", err)
 	}
 }

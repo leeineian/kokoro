@@ -21,9 +21,19 @@ func handleDebugStatus(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 
 	err := sys.SetBotConfig("status_visible", valStr)
 	if err != nil {
-		sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(
-			sys.NewTextDisplay(fmt.Sprintf("Error saving config: %v", err)),
-		), true)
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Components: []discordgo.MessageComponent{
+					&discordgo.Container{
+						Components: []discordgo.MessageComponent{
+							&discordgo.TextDisplay{Content: fmt.Sprintf("Error saving config: %v", err)},
+						},
+					},
+				},
+				Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
+			},
+		})
 		return
 	}
 
@@ -35,7 +45,20 @@ func handleDebugStatus(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 		statusStr = "ENABLED"
 	}
 
-	sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(
-		sys.NewTextDisplay(fmt.Sprintf("Status rotation has been **%s**.", statusStr)),
-	), false)
+	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: fmt.Sprintf("Status rotation has been **%s**.", statusStr)},
+					},
+				},
+			},
+			Flags: discordgo.MessageFlagsIsComponentsV2,
+		},
+	})
+	if err != nil {
+		sys.LogError("Failed to respond to status command: %v", err)
+	}
 }

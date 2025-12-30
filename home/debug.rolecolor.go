@@ -24,21 +24,49 @@ func handleDebugRoleColor(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	case "refresh":
 		handleRoleColorRefresh(s, i)
 	default:
-		sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("Unknown subcommand")), true)
+		roleColorRespond(s, i, "Unknown subcommand")
 	}
+}
+
+func roleColorRespond(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: content},
+					},
+				},
+			},
+			Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
+		},
+	})
+}
+
+func roleColorEdit(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Components: &[]discordgo.MessageComponent{
+			&discordgo.Container{
+				Components: []discordgo.MessageComponent{
+					&discordgo.TextDisplay{Content: content},
+				},
+			},
+		},
+	})
 }
 
 func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
 	role := options[0].RoleValue(s, i.GuildID)
 	if role == nil {
-		sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("Invalid role provided.")), true)
+		roleColorRespond(s, i, "Invalid role provided.")
 		return
 	}
 
 	// Defer
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral},
+		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
 	})
 
 	go func() {
@@ -51,7 +79,7 @@ func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, op
 
 		if err != nil {
 			sys.LogError("Failed to update guild config: %v", err)
-			sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("❌ Failed to save configuration.")))
+			roleColorEdit(s, i, "❌ Failed to save configuration.")
 			return
 		}
 
@@ -61,9 +89,7 @@ func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, op
 		// Trigger immediate update
 		proc.UpdateRoleColor(s, i.GuildID, role.ID)
 
-		sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(
-			sys.NewTextDisplay(fmt.Sprintf("✅ **Random Color Role Set**\nTarget Role: <@&%s>\n\nThe color will now update periodically.", role.ID)),
-		))
+		roleColorEdit(s, i, fmt.Sprintf("✅ **Random Color Role Set**\nTarget Role: <@&%s>\n\nThe color will now update periodically.", role.ID))
 	}()
 }
 
@@ -71,22 +97,20 @@ func handleRoleColorReset(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	// Defer
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral},
+		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
 	})
 
 	go func() {
 		_, err := sys.DB.Exec("UPDATE guild_configs SET random_color_role_id = NULL WHERE guild_id = ?", i.GuildID)
 		if err != nil {
 			sys.LogError("Failed to reset guild config: %v", err)
-			sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("❌ Failed to reset configuration.")))
+			roleColorEdit(s, i, "❌ Failed to reset configuration.")
 			return
 		}
 
 		proc.StopRotationForGuild(i.GuildID)
 
-		sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(
-			sys.NewTextDisplay("✅ **Configuration Reset**\nRandom role color disabled."),
-		))
+		roleColorEdit(s, i, "✅ **Configuration Reset**\nRandom role color disabled.")
 	}()
 }
 
@@ -94,7 +118,7 @@ func handleRoleColorRefresh(s *discordgo.Session, i *discordgo.InteractionCreate
 	// Defer
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral},
+		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral | discordgo.MessageFlagsIsComponentsV2},
 	})
 
 	go func() {
@@ -102,16 +126,16 @@ func handleRoleColorRefresh(s *discordgo.Session, i *discordgo.InteractionCreate
 		var roleID string
 		err := sys.DB.QueryRow("SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", i.GuildID).Scan(&roleID)
 		if err != nil || roleID == "" {
-			sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("❌ No role configured. Use `/debug rolecolor set` first.")))
+			roleColorEdit(s, i, "❌ No role configured. Use `/debug rolecolor set` first.")
 			return
 		}
 
 		err = proc.UpdateRoleColor(s, i.GuildID, roleID)
 		if err != nil {
-			sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("❌ Failed to refresh role color.")))
+			roleColorEdit(s, i, "❌ Failed to refresh role color.")
 			return
 		}
 
-		sys.EditInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("🎨 Role color has been refreshed!")))
+		roleColorEdit(s, i, "🎨 Role color has been refreshed!")
 	}()
 }

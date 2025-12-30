@@ -21,10 +21,24 @@ func handleDebugStats(s *discordgo.Session, i *discordgo.InteractionCreate, opti
 	}
 
 	// Defer reply
-	if err := sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("⏳ Loading stats...")), ephemeral); err != nil {
-		sys.LogDebug("Failed to defer stats: %v", err)
-		return
-	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: "⏳ Loading stats..."},
+					},
+				},
+			},
+			Flags: discordgo.MessageFlagsIsComponentsV2 | (func() discordgo.MessageFlags {
+				if ephemeral {
+					return discordgo.MessageFlagsEphemeral
+				}
+				return 0
+			}()),
+		},
+	})
 
 	go func() {
 		// Calculate Metrics (Ping) - Round Trip
@@ -47,10 +61,9 @@ func handleDebugStats(s *discordgo.Session, i *discordgo.InteractionCreate, opti
 		debugCacheMu.Unlock()
 
 		container := renderDebugStats(s, metrics)
-		if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
-			sys.LogDebug("Failed to edit stats: %v", err)
-			return
-		}
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Components: &[]discordgo.MessageComponent{container},
+		})
 
 		if ephemeral {
 			ticker := time.NewTicker(1 * time.Second)
@@ -64,9 +77,9 @@ func handleDebugStats(s *discordgo.Session, i *discordgo.InteractionCreate, opti
 					liveMetrics.Ping = roundTrip
 
 					newContainer := renderDebugStats(s, liveMetrics)
-					if err := sys.EditInteractionV2(s, i.Interaction, newContainer); err != nil {
-						return
-					}
+					_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+						Components: &[]discordgo.MessageComponent{newContainer},
+					})
 				case <-timeout:
 					return
 				}
@@ -85,9 +98,24 @@ func handleDebugPing(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 		}
 	}
 
-	if err := sys.RespondInteractionV2(s, i.Interaction, sys.NewV2Container(sys.NewTextDisplay("🏓 Pinging...")), ephemeral); err != nil {
-		return
-	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Components: []discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: "🏓 Pinging..."},
+					},
+				},
+			},
+			Flags: discordgo.MessageFlagsIsComponentsV2 | (func() discordgo.MessageFlags {
+				if ephemeral {
+					return discordgo.MessageFlagsEphemeral
+				}
+				return 0
+			}()),
+		},
+	})
 
 	go func() {
 		var latency int64
@@ -102,9 +130,9 @@ func handleDebugPing(s *discordgo.Session, i *discordgo.InteractionCreate, optio
 		}
 
 		container := buildDebugPingContainer(latency, "# Pong!")
-		if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
-			sys.LogDebug("Failed to edit ping: %v", err)
-		}
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Components: &[]discordgo.MessageComponent{container},
+		})
 	}()
 }
 
@@ -114,19 +142,24 @@ func handleDebugPingRefresh(s *discordgo.Session, i *discordgo.InteractionCreate
 
 	container := buildDebugPingContainer(latency, "# 🔁 Pong!")
 
-	if err := sys.UpdateInteractionV2(s, i.Interaction, container); err != nil {
-		sys.LogDebug("Failed to update ping refresh: %v", err)
-	}
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Components: []discordgo.MessageComponent{container},
+			Flags:      discordgo.MessageFlagsIsComponentsV2,
+		},
+	})
 }
 
-func renderDebugStats(s *discordgo.Session, metrics DebugHealthMetrics) sys.Container {
+func renderDebugStats(s *discordgo.Session, metrics DebugHealthMetrics) *discordgo.Container {
 	output := getDebugSystemStats() + "\n\n" + getDebugAppStats(s, metrics)
 
-	return sys.NewV2Container(
-		sys.NewTextDisplay(fmt.Sprintf("```ansi\n%s\n```", output)),
-	)
+	return &discordgo.Container{
+		Components: []discordgo.MessageComponent{
+			&discordgo.TextDisplay{Content: fmt.Sprintf("```ansi\n%s\n```", output)},
+		},
+	}
 }
-
 func getDebugSystemStats() string {
 	debugCacheMu.RLock()
 	if time.Since(debugStatsCache.System.Timestamp) < DebugCacheTTL && debugStatsCache.System.Data != "" {
@@ -223,7 +256,7 @@ func getDebugMetrics(interactionID string, s *discordgo.Session, userID string, 
 	return metrics
 }
 
-func buildDebugPingContainer(latency int64, titleStr string) sys.Container {
+func buildDebugPingContainer(latency int64, titleStr string) *discordgo.Container {
 	latencyStyle := discordgo.SuccessButton
 	if latency >= 100 {
 		latencyStyle = discordgo.DangerButton
@@ -235,7 +268,14 @@ func buildDebugPingContainer(latency int64, titleStr string) sys.Container {
 		Style:    latencyStyle,
 	}
 
-	return sys.NewV2Container(
-		sys.NewSection(titleStr, btnLatency),
-	)
+	return &discordgo.Container{
+		Components: []discordgo.MessageComponent{
+			&discordgo.Section{
+				Components: []discordgo.MessageComponent{
+					&discordgo.TextDisplay{Content: titleStr},
+				},
+				Accessory: btnLatency,
+			},
+		},
+	}
 }

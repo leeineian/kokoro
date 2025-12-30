@@ -21,8 +21,16 @@ func initReminderParser() {
 }
 
 func reminderRespondWithV2Container(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	container := sys.NewV2Container(sys.NewTextDisplay(content))
-	if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Components: &[]discordgo.MessageComponent{
+			&discordgo.Container{
+				Components: []discordgo.MessageComponent{
+					&discordgo.TextDisplay{Content: content},
+				},
+			},
+		},
+	})
+	if err != nil {
 		sys.LogReminder("Error editing interaction response: %v", err)
 	}
 }

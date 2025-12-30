@@ -97,7 +97,6 @@ func run(pid int, shutdownChan <-chan os.Signal, silent bool) error {
 
 	// 6. Final Status
 	sys.LogInfo("%s is online! (ID: %s) (PID: %d)", s.State.User.Username, s.State.User.ID, pid)
-	sys.LogInfo("%s is now fully operational.", s.State.User.Username)
 
 	<-shutdownChan
 	if !silent {

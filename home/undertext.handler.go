@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/sys"
 )
 
 // processUndertextColors converts user-friendly color syntax to API format
@@ -33,11 +32,10 @@ func processUndertextColors(input string) string {
 }
 
 func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Defer response as image generation might take a moment
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Flags: sys.MessageFlagsIsComponentsV2,
+			Flags: discordgo.MessageFlagsIsComponentsV2,
 		},
 	})
 
@@ -126,8 +124,22 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	generatedURL := sb.String()
 
-	container := sys.NewV2Container(sys.NewMediaGallery(generatedURL))
-	if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Components: &[]discordgo.MessageComponent{
+			&discordgo.Container{
+				Components: []discordgo.MessageComponent{
+					&discordgo.MediaGallery{
+						Items: []discordgo.MediaGalleryItem{
+							{
+								Media: discordgo.UnfurledMediaItem{URL: generatedURL},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
 		log.Printf("[UNDERTEXT] Error editing interaction response: %v", err)
 	}
 }

@@ -37,11 +37,11 @@ func handleCatSay(s *discordgo.Session, i *discordgo.InteractionCreate, options 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Flags: sys.MessageFlagsIsComponentsV2,
+			Flags: discordgo.MessageFlagsIsComponentsV2,
 		},
 	})
 	go func() {
-		var message, msgColor, bubColor, catColor string
+		var message, msgColor, bubColor, catColor, expression string
 		for _, opt := range options {
 			switch opt.Name {
 			case "message":
@@ -52,20 +52,48 @@ func handleCatSay(s *discordgo.Session, i *discordgo.InteractionCreate, options 
 				bubColor = opt.StringValue()
 			case "catcolor":
 				catColor = opt.StringValue()
+			case "expression":
+				expression = opt.StringValue()
 			}
 		}
 
 		// Generate ASCII
-		output := generateCatSay(message, msgColor, bubColor, catColor)
+		output := generateCatSay(message, msgColor, bubColor, catColor, expression)
 
 		// Wrap in ansi block
 		content := fmt.Sprintf("```ansi\n%s\n```", output)
 
-		container := sys.NewV2Container(sys.NewTextDisplay(content))
-		if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
+		_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Components: &[]discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: content},
+					},
+				},
+			},
+		})
+		if err != nil {
 			sys.LogCat(sys.MsgCatErrorEditingResponse, err)
 		}
 	}()
+}
+
+func getCatExpressionChoices() []*discordgo.ApplicationCommandOptionChoice {
+	return []*discordgo.ApplicationCommandOptionChoice{
+		{Name: "Neutral", Value: "o.o"},
+		{Name: "Shocked", Value: "O.O"},
+		{Name: "Happy", Value: "^.^"},
+		{Name: "Sleeping", Value: "-.-"},
+		{Name: "Confused", Value: "o.O"},
+		{Name: "Silly", Value: ">.<"},
+		{Name: "Wink", Value: "o.~"},
+		{Name: "Dizzy", Value: "@.@"},
+		{Name: "Crying", Value: "T.T"},
+		{Name: "Angry", Value: "ò.ó"},
+		{Name: "Star Eyes", Value: "*.*"},
+		{Name: "Money", Value: "$.$"},
+		{Name: "None", Value: "   "},
+	}
 }
 
 func getCatColorChoices() []*discordgo.ApplicationCommandOptionChoice {
@@ -81,7 +109,10 @@ func getCatColorChoices() []*discordgo.ApplicationCommandOptionChoice {
 	}
 }
 
-func generateCatSay(message, msgColor, bubColor, catColor string) string {
+func generateCatSay(message, msgColor, bubColor, catColor, expression string) string {
+	if expression == "" {
+		expression = "o.o"
+	}
 	// Calculate dynamic bubble width based on message length
 	calcWidth := len(message)
 	if calcWidth < 20 {
@@ -171,7 +202,7 @@ func generateCatSay(message, msgColor, bubColor, catColor string) string {
 	sb.WriteString(fmt.Sprintf("%s    %s\\%s\n", catIndent, bubColorCode, bubReset))
 	sb.WriteString(fmt.Sprintf("%s     %s\\%s\n", catIndent, bubColorCode, bubReset))
 	sb.WriteString(fmt.Sprintf("%s      %s/\\_/\\%s\n", catIndent, catColorCode, catReset))
-	sb.WriteString(fmt.Sprintf("%s     %s( o.o )%s\n", catIndent, catColorCode, catReset))
+	sb.WriteString(fmt.Sprintf("%s     %s( %s )%s\n", catIndent, catColorCode, expression, catReset))
 	sb.WriteString(fmt.Sprintf("%s      %s> ^ <%s", catIndent, catColorCode, catReset))
 
 	return sb.String()

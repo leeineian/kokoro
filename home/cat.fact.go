@@ -12,7 +12,7 @@ func handleCatFact(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Flags: sys.MessageFlagsIsComponentsV2,
+			Flags: discordgo.MessageFlagsIsComponentsV2,
 		},
 	})
 	go func() {
@@ -39,8 +39,16 @@ func handleCatFact(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			return
 		}
 
-		container := sys.NewV2Container(sys.NewTextDisplay(data.Fact))
-		if err := sys.EditInteractionV2(s, i.Interaction, container); err != nil {
+		_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Components: &[]discordgo.MessageComponent{
+				&discordgo.Container{
+					Components: []discordgo.MessageComponent{
+						&discordgo.TextDisplay{Content: data.Fact},
+					},
+				},
+			},
+		})
+		if err != nil {
 			sys.LogCat(sys.MsgCatErrorEditingResponse, err)
 		}
 	}()
