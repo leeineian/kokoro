@@ -7,9 +7,8 @@ flowchart TB
     subgraph Core["Core Systems (sys)"]
         Config["config.go<br/>━━━━━━━━━<br/>Environment Logic<br/>Custom Prefixes"]
         Database["database.go<br/>━━━━━━━━━<br/>SQLite WAL Mode<br/>• reminders<br/>• guild_configs<br/>• bot_config<br/>• loop_channels"]
-        Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>V2 Component Logic"]
+        Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>Session Management"]
         Logger["logger.go<br/>━━━━━━━━━<br/>Leveled Logging<br/>Daemon Tracking<br/>Color Formatting"]
-        Components["components.go<br/>━━━━━━━━━<br/>Discord V2 System<br/>• MediaGalleries<br/>• Sections / Files<br/>• TextDisplays"]
     end
 
     subgraph Commands["Commands (home)"]
@@ -59,7 +58,6 @@ flowchart TB
     
     %% Core system connections
     Loader --> Logger
-    Loader --> Components
     Database --> Logger
 
     %% Command registration
@@ -93,7 +91,7 @@ flowchart TB
     classDef externalStyle fill:#2d3436,stroke:#00b894,stroke-width:2px,color:#fff
 
     class Main entryStyle
-    class Config,Database,Loader,Logger,Components coreStyle
+    class Config,Database,Loader,Logger coreStyle
     class CatFact,CatImage,CatSay,DebugStats,DebugEcho,DebugStatus,DebugRoleColor,DebugLoop,ReminderSet,ReminderList,UndertextGen cmdStyle
     class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
     class Discord,CatAPI,UndertaleAPI externalStyle
@@ -129,10 +127,10 @@ minder/
 │   ├── rolecolorrotator.go       # Role color cycle daemon
 │   └── statusrotator.go          # Status cycle daemon
 │
-└── sys/                          # [Core Systems]
-    ├── components.go             # Discord V2 Component wrappers
-    ├── config.go                 # Environment configuration
-    ├── database.go               # SQLite database layer
-    ├── loader.go                 # Session creation & command registration
-    └── logger.go                 # Prefix-based color logging
+├── sys/                          # [Core Systems]
+│   ├── config.go                 # Environment configuration
+│   ├── database.go               # SQLite database layer
+│   ├── loader.go                 # Session creation & command registration
+│   └── logger.go                 # Prefix-based color logging
+└── README.md                     # Project documentation
 ```
