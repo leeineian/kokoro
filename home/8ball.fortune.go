@@ -17,7 +17,7 @@ func handleEightballFortune(s *discordgo.Session, i *discordgo.InteractionCreate
 		}
 	}
 
-	resp, err := eightballHttpClient.Get("https://eightballapi.com/api/fortune")
+	resp, err := eightballHttpClient.Get("https://eightballapi.com/api")
 	if err != nil {
 		sys.LogEightball(sys.MsgEightballFailedToFetchFortune, err)
 		eightballRespondErrorSync(s, i, sys.ErrEightballFailedToFetchFortune)
@@ -32,7 +32,7 @@ func handleEightballFortune(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 
 	var data struct {
-		Fortune string `json:"fortune"`
+		Reading string `json:"reading"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		sys.LogEightball(sys.MsgEightballFailedToDecodeFortune, err)
@@ -40,9 +40,9 @@ func handleEightballFortune(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 
-	content := data.Fortune
+	content := data.Reading
 	if question != "" {
-		content = fmt.Sprintf("**Question:** %s\n**Fortune:** %s", question, data.Fortune)
+		content = fmt.Sprintf("**Question:** %s\n**Fortune:** %s", question, data.Reading)
 	}
 
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
