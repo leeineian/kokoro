@@ -1,9 +1,11 @@
 package proc
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
+	mrand "math/rand"
 	"sync"
 	"time"
 
@@ -76,7 +78,7 @@ func StopRotationForGuild(guildID string) {
 // ScheduleNextUpdate schedules the next color update
 func ScheduleNextUpdate(s *discordgo.Session, guildID, roleID string) {
 	// Calculate random duration
-	minutes := rand.Intn(maxMinutes-minMinutes+1) + minMinutes
+	minutes := mrand.Intn(maxMinutes-minMinutes+1) + minMinutes
 	duration := time.Duration(minutes) * time.Minute
 
 	nextUpdate := time.Now().Add(duration)
@@ -119,9 +121,29 @@ func ScheduleNextUpdate(s *discordgo.Session, guildID, roleID string) {
 
 // UpdateRoleColor performs the immediate color update
 func UpdateRoleColor(s *discordgo.Session, guildID, roleID string) error {
-	// Generate random color
-	// 0xFFFFFF is 16777215
-	newColor := rand.Intn(16777216)
+	var newColor int
+	lastHex, _ := currentColorMap.Load(guildID)
+
+	// Try up to 10 times to get a unique, non-zero color
+	for i := 0; i < 10; i++ {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			// Fallback if crypto/rand fails
+			newColor = mrand.Intn(16777215) + 1
+		} else {
+			// Ensure 24-bit color (0x0 to 0xFFFFFF)
+			newColor = int(binary.BigEndian.Uint32(b[:]) & 0xFFFFFF)
+		}
+
+		if newColor == 0 {
+			continue
+		}
+
+		hexColor := fmt.Sprintf("#%06X", newColor)
+		if lastHex == nil || hexColor != lastHex.(string) {
+			break
+		}
+	}
 
 	_, err := s.GuildRoleEdit(guildID, roleID, &discordgo.RoleParams{
 		Color: &newColor,

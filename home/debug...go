@@ -67,10 +67,6 @@ func debugTruncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-func debugStrPtr(s string) *string {
-	return &s
-}
-
 func init() {
 	sys.RegisterCommand(&discordgo.ApplicationCommand{
 		Name:                     "debug",

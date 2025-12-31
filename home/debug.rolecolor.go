@@ -44,18 +44,6 @@ func roleColorRespond(s *discordgo.Session, i *discordgo.InteractionCreate, cont
 	})
 }
 
-func roleColorEdit(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Components: &[]discordgo.MessageComponent{
-			&discordgo.Container{
-				Components: []discordgo.MessageComponent{
-					&discordgo.TextDisplay{Content: content},
-				},
-			},
-		},
-	})
-}
-
 func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
 	role := options[0].RoleValue(s, i.GuildID)
 	if role == nil {

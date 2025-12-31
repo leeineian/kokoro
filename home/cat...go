@@ -39,26 +39,6 @@ func catRespondErrorSync(s *discordgo.Session, i *discordgo.InteractionCreate, m
 	}
 }
 
-func catRespondErrorFollowup(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
-	if s == nil || i == nil || i.Interaction == nil {
-		sys.LogCat(sys.MsgCatCannotSendErrorFollowup)
-		return
-	}
-
-	if _, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
-		Components: []discordgo.MessageComponent{
-			&discordgo.Container{
-				Components: []discordgo.MessageComponent{
-					&discordgo.TextDisplay{Content: msg},
-				},
-			},
-		},
-	}); err != nil {
-		sys.LogCat(sys.MsgCatFailedToSendErrorFollowup, err)
-	}
-}
-
 func init() {
 	sys.RegisterCommand(&discordgo.ApplicationCommand{
 		Name:        "cat",

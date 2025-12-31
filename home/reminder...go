@@ -39,21 +39,6 @@ func reminderRespondImmediate(s *discordgo.Session, i *discordgo.InteractionCrea
 	}
 }
 
-func reminderRespondWithV2Container(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Components: &[]discordgo.MessageComponent{
-			&discordgo.Container{
-				Components: []discordgo.MessageComponent{
-					&discordgo.TextDisplay{Content: content},
-				},
-			},
-		},
-	})
-	if err != nil {
-		sys.LogReminder(sys.MsgReminderEditResponseError, err)
-	}
-}
-
 func formatReminderRelativeTime(from, to time.Time) string {
 	duration := to.Sub(from)
 

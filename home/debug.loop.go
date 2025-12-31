@@ -52,18 +52,6 @@ func loopRespond(s *discordgo.Session, i *discordgo.InteractionCreate, content s
 	})
 }
 
-func loopEdit(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Components: &[]discordgo.MessageComponent{
-			&discordgo.Container{
-				Components: []discordgo.MessageComponent{
-					&discordgo.TextDisplay{Content: content},
-				},
-			},
-		},
-	})
-}
-
 // handleLoopList lists configured loop channels
 func handleLoopList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	configs, err := sys.GetAllLoopConfigs()
