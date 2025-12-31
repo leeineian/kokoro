@@ -52,11 +52,7 @@ func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, op
 	}
 
 	// Update DB
-	_, err := sys.DB.Exec(`
-		INSERT INTO guild_configs (guild_id, random_color_role_id, updated_at) 
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(guild_id) DO UPDATE SET random_color_role_id = ?, updated_at = CURRENT_TIMESTAMP
-	`, i.GuildID, role.ID, role.ID)
+	err := sys.SetGuildRandomColorRole(i.GuildID, role.ID)
 
 	if err != nil {
 		sys.LogError(sys.MsgDebugRoleColorUpdateFail, err)
@@ -74,7 +70,7 @@ func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, op
 }
 
 func handleRoleColorReset(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	_, err := sys.DB.Exec("UPDATE guild_configs SET random_color_role_id = NULL WHERE guild_id = ?", i.GuildID)
+	err := sys.SetGuildRandomColorRole(i.GuildID, "")
 	if err != nil {
 		sys.LogError(sys.MsgDebugRoleColorResetFail, err)
 		roleColorRespond(s, i, "❌ Failed to reset configuration.")
@@ -88,8 +84,7 @@ func handleRoleColorReset(s *discordgo.Session, i *discordgo.InteractionCreate) 
 
 func handleRoleColorRefresh(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	// Fetch role ID from DB
-	var roleID string
-	err := sys.DB.QueryRow("SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", i.GuildID).Scan(&roleID)
+	roleID, err := sys.GetGuildRandomColorRole(i.GuildID)
 	if err != nil || roleID == "" {
 		roleColorRespond(s, i, "❌ No role configured. Use `/debug rolecolor set` first.")
 		return

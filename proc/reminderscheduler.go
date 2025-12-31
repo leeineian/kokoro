@@ -1,7 +1,6 @@
 package proc
 
 import (
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -13,12 +12,12 @@ var reminderSchedulerRunning = false
 
 func init() {
 	sys.OnSessionReady(func(s *discordgo.Session) {
-		sys.RegisterDaemon(sys.LogReminder, func() { StartReminderScheduler(s, sys.DB) })
+		sys.RegisterDaemon(sys.LogReminder, func() { StartReminderScheduler(s) })
 	})
 }
 
 // StartReminderScheduler starts the reminder scheduler daemon
-func StartReminderScheduler(s *discordgo.Session, db *sql.DB) {
+func StartReminderScheduler(s *discordgo.Session) {
 	if reminderSchedulerRunning {
 		return
 	}
@@ -29,56 +28,37 @@ func StartReminderScheduler(s *discordgo.Session, db *sql.DB) {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			checkAndSendReminders(s, db)
+			checkAndSendReminders(s)
 		}
 	}()
 }
 
-func checkAndSendReminders(s *discordgo.Session, db *sql.DB) {
-	now := time.Now()
-
-	rows, err := db.Query(`
-		SELECT id, user_id, channel_id, message, send_to
-		FROM reminders
-		WHERE remind_at <= ?
-		ORDER BY remind_at ASC
-	`, now)
-
+func checkAndSendReminders(s *discordgo.Session) {
+	reminders, err := sys.GetDueReminders()
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToQueryDue, err)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var id int64
-		var userID, channelID, message, sendTo string
-
-		err := rows.Scan(&id, &userID, &channelID, &message, &sendTo)
-		if err != nil {
-			sys.LogReminder(sys.MsgReminderFailedToScan, err)
-			continue
-		}
-
+	for _, r := range reminders {
 		// Send reminder
-		go sendReminder(s, db, id, userID, channelID, message, sendTo)
+		go sendReminder(s, r)
 	}
 }
 
-func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID, message, sendTo string) {
+func sendReminder(s *discordgo.Session, r *sys.Reminder) {
 	// Build the reminder message
-	reminderText := fmt.Sprintf("🔔 **Reminder for <@%s>**\n\n%s", userID, message)
+	reminderText := fmt.Sprintf("🔔 **Reminder for <@%s>**\n\n%s", r.UserID, r.Message)
 
 	var err error
-	var targetChannelID = channelID
+	var targetChannelID = r.ChannelID
 
-	if sendTo == "dm" {
+	if r.SendTo == "dm" {
 		// Create DM channel
-		dmChannel, dmErr := s.UserChannelCreate(userID)
+		dmChannel, dmErr := s.UserChannelCreate(r.UserID)
 		if dmErr != nil {
-			sys.LogReminder(sys.MsgReminderFailedToCreateDM, userID, dmErr)
+			sys.LogReminder(sys.MsgReminderFailedToCreateDM, r.UserID, dmErr)
 			// Try to send in original channel as fallback
-			sendTo = "channel"
 		} else {
 			targetChannelID = dmChannel.ID
 		}
@@ -97,16 +77,16 @@ func sendReminder(s *discordgo.Session, db *sql.DB, id int64, userID, channelID,
 	})
 
 	if err != nil {
-		sys.LogReminder(sys.MsgReminderFailedToSend, id, err)
+		sys.LogReminder(sys.MsgReminderFailedToSend, r.ID, err)
 		// Don't delete if we can't send - try again next tick
 		return
 	}
 
 	// Delete the reminder from database
-	_, err = db.Exec("DELETE FROM reminders WHERE id = ?", id)
+	err = sys.DeleteReminderByID(r.ID)
 	if err != nil {
-		sys.LogReminder(sys.MsgReminderFailedToDelete, id, err)
+		sys.LogReminder(sys.MsgReminderFailedToDelete, r.ID, err)
 	} else {
-		sys.LogReminder(sys.MsgReminderSentAndDeleted, id, userID)
+		sys.LogReminder(sys.MsgReminderSentAndDeleted, r.ID, r.UserID)
 	}
 }

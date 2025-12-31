@@ -239,10 +239,7 @@ func getDebugMetrics(interactionID string, s *discordgo.Session, userID string, 
 	}
 
 	start := time.Now()
-	var count int
-	if sys.DB != nil {
-		_ = sys.DB.QueryRow("SELECT COUNT(*) FROM reminders WHERE user_id = ?", userID).Scan(&count)
-	}
+	_, _ = sys.GetRemindersCountForUser(userID)
 	metrics.DBLatency = fmt.Sprintf("%.2f", float64(time.Since(start).Microseconds())/1000.0)
 
 	debugCacheMu.Lock()

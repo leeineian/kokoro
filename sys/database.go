@@ -3,6 +3,7 @@ package sys
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -95,7 +96,148 @@ func InitDatabase(dataSourceName string) error {
 	return nil
 }
 
-// LoopConfig represents a loop channel configuration
+// --- Reminder Logic ---
+
+type Reminder struct {
+	ID        int64
+	UserID    string
+	ChannelID string
+	GuildID   string
+	Message   string
+	RemindAt  time.Time
+	SendTo    string // "dm" or "channel"
+	CreatedAt time.Time
+}
+
+func AddReminder(r *Reminder) error {
+	_, err := DB.Exec(`
+		INSERT INTO reminders (user_id, channel_id, guild_id, message, remind_at, send_to)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, r.UserID, r.ChannelID, r.GuildID, r.Message, r.RemindAt, r.SendTo)
+	return err
+}
+
+func GetRemindersForUser(userID string) ([]*Reminder, error) {
+	rows, err := DB.Query(`
+		SELECT id, user_id, channel_id, guild_id, message, remind_at, send_to, created_at
+		FROM reminders WHERE user_id = ? ORDER BY remind_at ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reminders []*Reminder
+	for rows.Next() {
+		r := &Reminder{}
+		var guildID sql.NullString
+		err := rows.Scan(&r.ID, &r.UserID, &r.ChannelID, &guildID, &r.Message, &r.RemindAt, &r.SendTo, &r.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		r.GuildID = guildID.String
+		reminders = append(reminders, r)
+	}
+	return reminders, nil
+}
+
+func GetDueReminders() ([]*Reminder, error) {
+	rows, err := DB.Query(`
+		SELECT id, user_id, channel_id, guild_id, message, remind_at, send_to, created_at
+		FROM reminders WHERE remind_at <= ? ORDER BY remind_at ASC
+	`, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reminders []*Reminder
+	for rows.Next() {
+		r := &Reminder{}
+		var guildID sql.NullString
+		err := rows.Scan(&r.ID, &r.UserID, &r.ChannelID, &guildID, &r.Message, &r.RemindAt, &r.SendTo, &r.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		r.GuildID = guildID.String
+		reminders = append(reminders, r)
+	}
+	return reminders, nil
+}
+
+func DeleteReminder(id int64, userID string) (bool, error) {
+	result, err := DB.Exec("DELETE FROM reminders WHERE id = ? AND user_id = ?", id, userID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
+func DeleteAllRemindersForUser(userID string) (int64, error) {
+	result, err := DB.Exec("DELETE FROM reminders WHERE user_id = ?", userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func DeleteReminderByID(id int64) error {
+	_, err := DB.Exec("DELETE FROM reminders WHERE id = ?", id)
+	return err
+}
+
+func GetRemindersCountForUser(userID string) (int, error) {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM reminders WHERE user_id = ?", userID).Scan(&count)
+	return count, err
+}
+
+// --- Guild Config Logic ---
+
+type GuildConfig struct {
+	GuildID           string
+	RandomColorRoleID string
+	UpdatedAt         time.Time
+}
+
+func SetGuildRandomColorRole(guildID, roleID string) error {
+	_, err := DB.Exec(`
+		INSERT INTO guild_configs (guild_id, random_color_role_id) VALUES (?, ?)
+		ON CONFLICT(guild_id) DO UPDATE SET random_color_role_id = excluded.random_color_role_id, updated_at = CURRENT_TIMESTAMP
+	`, guildID, roleID)
+	return err
+}
+
+func GetGuildRandomColorRole(guildID string) (string, error) {
+	var roleID sql.NullString
+	err := DB.QueryRow("SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", guildID).Scan(&roleID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return roleID.String, err
+}
+
+func GetAllGuildRandomColorConfigs() (map[string]string, error) {
+	rows, err := DB.Query("SELECT guild_id, random_color_role_id FROM guild_configs WHERE random_color_role_id IS NOT NULL AND random_color_role_id != ''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	configs := make(map[string]string)
+	for rows.Next() {
+		var g, r string
+		if err := rows.Scan(&g, &r); err != nil {
+			continue
+		}
+		configs[g] = r
+	}
+	return configs, nil
+}
+
+// --- Loop Logic ---
+
 type LoopConfig struct {
 	ChannelID           string
 	ChannelName         string
@@ -113,7 +255,6 @@ type LoopConfig struct {
 	IsRunning           bool
 }
 
-// AddLoopConfig adds or updates a loop channel configuration
 func AddLoopConfig(channelID string, config *LoopConfig) error {
 	useThread := 0
 	if config.UseThread {
@@ -145,7 +286,6 @@ func AddLoopConfig(channelID string, config *LoopConfig) error {
 	return err
 }
 
-// GetLoopConfig retrieves a loop channel configuration
 func GetLoopConfig(channelID string) (*LoopConfig, error) {
 	row := DB.QueryRow(`
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
@@ -186,7 +326,6 @@ func GetLoopConfig(channelID string) (*LoopConfig, error) {
 	return config, nil
 }
 
-// GetAllLoopConfigs retrieves all loop channel configurations
 func GetAllLoopConfigs() ([]*LoopConfig, error) {
 	rows, err := DB.Query(`
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
@@ -233,13 +372,11 @@ func GetAllLoopConfigs() ([]*LoopConfig, error) {
 	return configs, nil
 }
 
-// DeleteLoopConfig deletes a loop channel configuration
 func DeleteLoopConfig(channelID string) error {
 	_, err := DB.Exec("DELETE FROM loop_channels WHERE channel_id = ?", channelID)
 	return err
 }
 
-// SetLoopState sets the running state of a loop
 func SetLoopState(channelID string, running bool) error {
 	val := 0
 	if running {
@@ -249,11 +386,12 @@ func SetLoopState(channelID string, running bool) error {
 	return err
 }
 
-// UpdateLoopChannelName updates the stored channel name
 func UpdateLoopChannelName(channelID, name string) error {
 	_, err := DB.Exec("UPDATE loop_channels SET channel_name = ? WHERE channel_id = ?", name, channelID)
 	return err
 }
+
+// --- General Config & Stats ---
 
 func GetRemindersCount() (int, error) {
 	var count int

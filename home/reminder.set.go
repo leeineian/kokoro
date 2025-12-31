@@ -38,13 +38,14 @@ func handleReminderSet(s *discordgo.Session, i *discordgo.InteractionCreate, opt
 	}
 
 	// Save to database
-	channelID := i.ChannelID
-	guildID := i.GuildID
-
-	_, err = sys.DB.Exec(`
-		INSERT INTO reminders (user_id, channel_id, guild_id, message, remind_at, send_to)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, i.Member.User.ID, channelID, guildID, message, remindAt, sendTo)
+	err = sys.AddReminder(&sys.Reminder{
+		UserID:    i.Member.User.ID,
+		ChannelID: i.ChannelID,
+		GuildID:   i.GuildID,
+		Message:   message,
+		RemindAt:  remindAt,
+		SendTo:    sendTo,
+	})
 
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToSave, err)

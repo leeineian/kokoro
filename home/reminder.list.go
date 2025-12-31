@@ -21,22 +21,28 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 	if dismissID != "" {
 		if dismissID == "all" {
 			// Delete all reminders for this user
-			result, err := sys.DB.Exec("DELETE FROM reminders WHERE user_id = ?", userID)
+			rowsAffected, err := sys.DeleteAllRemindersForUser(userID)
 			if err != nil {
 				sys.LogReminder(sys.MsgReminderFailedToDeleteAll, err)
 				reminderRespondImmediate(s, i, sys.ErrReminderDismissAllFail)
 				return
 			}
 
-			rowsAffected, _ := result.RowsAffected()
 			reminderRespondImmediate(s, i, fmt.Sprintf("✅ Dismissed all %d reminder(s)!", rowsAffected))
 			return
 		} else {
 			// Delete specific reminder
-			_, err := sys.DB.Exec("DELETE FROM reminders WHERE id = ? AND user_id = ?", dismissID, userID)
+			var intID int64
+			fmt.Sscanf(dismissID, "%d", &intID)
+
+			deleted, err := sys.DeleteReminder(intID, userID)
 			if err != nil {
 				sys.LogReminder(sys.MsgReminderFailedToDeleteGeneral, err)
 				reminderRespondImmediate(s, i, sys.ErrReminderDismissFailed)
+				return
+			}
+			if !deleted {
+				reminderRespondImmediate(s, i, "❌ Reminder not found or already dismissed.")
 				return
 			}
 			reminderRespondImmediate(s, i, sys.MsgReminderDismissed)
@@ -45,42 +51,12 @@ func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, op
 	}
 
 	// List all reminders
-	rows, err := sys.DB.Query(`
-		SELECT id, message, remind_at, send_to, channel_id
-		FROM reminders
-		WHERE user_id = ?
-		ORDER BY remind_at ASC
-	`, userID)
+	reminders, err := sys.GetRemindersForUser(userID)
 
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToQuery, err)
 		reminderRespondImmediate(s, i, sys.ErrReminderFetchFailed)
 		return
-	}
-	defer rows.Close()
-
-	var reminders []struct {
-		ID        int64
-		Message   string
-		RemindAt  time.Time
-		SendTo    string
-		ChannelID string
-	}
-
-	for rows.Next() {
-		var r struct {
-			ID        int64
-			Message   string
-			RemindAt  time.Time
-			SendTo    string
-			ChannelID string
-		}
-		err := rows.Scan(&r.ID, &r.Message, &r.RemindAt, &r.SendTo, &r.ChannelID)
-		if err != nil {
-			sys.LogReminder(sys.MsgReminderFailedToScan, err)
-			continue
-		}
-		reminders = append(reminders, r)
 	}
 
 	if len(reminders) == 0 {
@@ -136,13 +112,7 @@ func handleReminderAutocomplete(s *discordgo.Session, i *discordgo.InteractionCr
 		userID := i.Member.User.ID
 
 		// Query reminders
-		rows, err := sys.DB.Query(`
-			SELECT id, message, remind_at, send_to, channel_id
-			FROM reminders
-			WHERE user_id = ?
-			ORDER BY remind_at ASC
-			LIMIT 25
-		`, userID)
+		reminders, err := sys.GetRemindersForUser(userID)
 
 		if err != nil {
 			sys.LogReminder(sys.MsgReminderAutocompleteFailed, err)
@@ -154,57 +124,46 @@ func handleReminderAutocomplete(s *discordgo.Session, i *discordgo.InteractionCr
 			})
 			return
 		}
-		defer rows.Close()
 
 		choices := []*discordgo.ApplicationCommandOptionChoice{}
 
 		// Add "Dismiss All" option first
-		hasReminders := false
-		var tempChoices []*discordgo.ApplicationCommandOptionChoice
+		if len(reminders) > 0 {
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  "❌ Dismiss All",
+				Value: "all",
+			})
+		}
 
-		for rows.Next() {
-			hasReminders = true
-			var id int64
-			var message, sendTo, channelID string
-			var remindAt time.Time
-
-			err := rows.Scan(&id, &message, &remindAt, &sendTo, &channelID)
-			if err != nil {
-				continue
+		for idx, r := range reminders {
+			if idx >= 24 { // Discord limit is 25
+				break
 			}
 
 			// For autocomplete, use readable relative format (Discord timestamps don't render in autocomplete)
-			relativeTime := formatReminderRelativeTime(time.Now(), remindAt)
+			relativeTime := formatReminderRelativeTime(time.Now(), r.RemindAt)
 
 			locationLabel := "Channel"
-			if sendTo == "dm" {
+			if r.SendTo == "dm" {
 				locationLabel = "DM"
 			} else {
-				if ch, err := s.State.Channel(channelID); err == nil {
+				if ch, err := s.State.Channel(r.ChannelID); err == nil {
 					locationLabel = "#" + ch.Name
-				} else if ch, err := s.Channel(channelID); err == nil {
+				} else if ch, err := s.Channel(r.ChannelID); err == nil {
 					locationLabel = "#" + ch.Name
 				}
 			}
 
 			choiceName := fmt.Sprintf("%s | %s | %s",
-				reminderTruncate(message, 30),
+				reminderTruncate(r.Message, 30),
 				locationLabel,
 				relativeTime,
 			)
 
-			tempChoices = append(tempChoices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  choiceName,
-				Value: fmt.Sprintf("%d", id),
-			})
-		}
-
-		if hasReminders {
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  "❌ Dismiss All",
-				Value: "all",
+				Name:  choiceName,
+				Value: fmt.Sprintf("%d", r.ID),
 			})
-			choices = append(choices, tempChoices...)
 		}
 
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

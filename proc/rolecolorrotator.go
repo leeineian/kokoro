@@ -2,7 +2,6 @@ package proc
 
 import (
 	"crypto/rand"
-	"database/sql"
 	"encoding/binary"
 	"fmt"
 	mrand "math/rand"
@@ -20,14 +19,13 @@ const (
 
 func init() {
 	sys.OnSessionReady(func(s *discordgo.Session) {
-		sys.RegisterDaemon(sys.LogRoleColorRotator, func() { StartRoleColorRotator(s, sys.DB) })
+		sys.RegisterDaemon(sys.LogRoleColorRotator, func() { StartRoleColorRotator(s) })
 	})
 }
 
 var (
 	// Map to store active timers: map[guildID]*time.Timer
 	rotatorTimers sync.Map
-	roleRotatorDB *sql.DB
 
 	// Tracking for Status Rotator
 	nextUpdateMap   sync.Map // map[guildID]time.Time
@@ -35,22 +33,15 @@ var (
 )
 
 // StartRoleColorRotator initializes the role color rotator daemon
-func StartRoleColorRotator(s *discordgo.Session, db *sql.DB) {
-	roleRotatorDB = db
-
+func StartRoleColorRotator(s *discordgo.Session) {
 	// Load all configured guilds
-	rows, err := roleRotatorDB.Query("SELECT guild_id, random_color_role_id FROM guild_configs WHERE random_color_role_id IS NOT NULL AND random_color_role_id != ''")
+	configs, err := sys.GetAllGuildRandomColorConfigs()
 	if err != nil {
 		sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var guildID, roleID string
-		if err := rows.Scan(&guildID, &roleID); err != nil {
-			continue
-		}
+	for guildID, roleID := range configs {
 		// Start rotation for this guild
 		go ScheduleNextUpdate(s, guildID, roleID)
 	}
