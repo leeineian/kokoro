@@ -26,6 +26,7 @@ var (
 	loopRotatorColor   = color.New(color.FgBlue)
 	catColor           = color.New(color.FgCyan)
 	undertextColor     = color.New(color.FgRed)
+	eightballColor     = color.New(color.FgHiBlue)
 	debugColor         = color.New(color.FgHiGreen)
 	IsSilent           = false
 
@@ -141,6 +142,15 @@ func LogUndertext(format string, v ...interface{}) {
 	}
 	msg := fmt.Sprintf(format, v...)
 	log.Println(undertextColor.Sprintf("[UNDERTEXT] %s", msg))
+}
+
+// LogEightball logs an eightball command message in hi-blue
+func LogEightball(format string, v ...interface{}) {
+	if IsSilent {
+		return
+	}
+	msg := fmt.Sprintf(format, v...)
+	log.Println(eightballColor.Sprintf("[8BALL] %s", msg))
 }
 
 // LogDebug logs a debug message in hi-green
@@ -296,6 +306,21 @@ const (
 
 	// User-facing messages
 	ErrUndertextGenerateFailed = "Failed to generate text box."
+)
+
+// @eightball
+const (
+	// System logs
+	MsgEightballFailedToFetchFortune  = "Failed to fetch fortune: %v"
+	MsgEightballFortuneAPIStatusError = "Eightball API returned status %d"
+	MsgEightballFailedToDecodeFortune = "Failed to decode fortune: %v"
+	MsgEightballCannotSendError       = "Cannot send error response: nil session or interaction"
+	MsgEightballFailedToSendError     = "Failed to send error response: %v"
+
+	// User-facing messages
+	ErrEightballFailedToFetchFortune = "Failed to fetch fortune"
+	ErrEightballServiceUnavailable   = "Eightball service is unavailable"
+	ErrEightballFailedToDecode       = "Failed to decode fortune"
 )
 
 // GetUserErrors dynamically parses the source file to discover all 'Err' and 'Msg' constants.
