@@ -15,4 +15,4 @@ jobs:
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            bash /home/montas/update-minder.sh
+            bash /home/montas/minder/update-minder.sh
