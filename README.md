@@ -37,6 +37,10 @@ flowchart TB
         subgraph UndertextCmd["/undertext"]
             UndertextGen["Generated Sprites<br/>Animated GIFs<br/>Autocompletion"]
         end
+
+        subgraph EightballCmd["/8ball"]
+            EightballFortune["fortune (API)"]
+        end
     end
 
     subgraph Daemons["Background Daemons (proc)"]
@@ -50,6 +54,7 @@ flowchart TB
         Discord["Discord API v10"]
         CatAPI["Cat APIs<br/>• fact/image"]
         UndertaleAPI["Demirramon API<br/>• Box Generator"]
+        EightballAPI["Eightball API<br/>• Fortune Generator"]
     end
 
     %% Entry connections
@@ -66,6 +71,7 @@ flowchart TB
     Loader --> DebugCmd
     Loader --> ReminderCmd
     Loader --> UndertextCmd
+    Loader --> EightballCmd
 
     %% Daemon startup
     Main --> ReminderScheduler
@@ -80,6 +86,7 @@ flowchart TB
 
     %% External API connections
     CatCmd --> CatAPI
+    EightballCmd --> EightballAPI
     UndertextCmd --> UndertaleAPI
     Loader --> Discord
     Daemons --> Discord
@@ -93,9 +100,9 @@ flowchart TB
 
     class Main entryStyle
     class Config,Database,Loader,Logger coreStyle
-    class CatFact,CatImage,CatSay,DebugStats,DebugEcho,DebugStatus,DebugRoleColor,DebugLoop,DebugTest,ReminderSet,ReminderList,UndertextGen cmdStyle
+    class CatFact,CatImage,CatSay,DebugStats,DebugEcho,DebugStatus,DebugRoleColor,DebugLoop,DebugTest,ReminderSet,ReminderList,UndertextGen,EightballFortune cmdStyle
     class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
-    class Discord,CatAPI,UndertaleAPI externalStyle
+    class Discord,CatAPI,UndertaleAPI,EightballAPI externalStyle
 ```
 
 ```
@@ -113,6 +120,8 @@ minder/
 │   ├── cat.fact.go               # /cat fact (catfact.ninja) handler
 │   ├── cat.image.go              # /cat image (thecatapi.com) handler
 │   ├── cat.say.go                # /cat say (ANSI ASCII) handler
+│   ├── 8ball...go                # /8ball command logic
+│   ├── 8ball.fortune.go          # /8ball fortune (eightballapi.com) handler
 │   ├── debug...go                # /debug command logic
 │   ├── debug.echo.go             # /debug echo (ANSI ASCII) handler
 │   ├── debug.loop.go             # /debug loop (Webhook) handler
