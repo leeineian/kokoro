@@ -6,33 +6,6 @@ import (
 	"github.com/leeineian/minder/sys"
 )
 
-// Cat command shared utilities
-func getCatColorChoices() []discord.ApplicationCommandOptionChoiceString {
-	return []discord.ApplicationCommandOptionChoiceString{
-		{Name: "White", Value: "ffffff"},
-		{Name: "Black", Value: "000000"},
-		{Name: "Red", Value: "ff0000"},
-		{Name: "Orange", Value: "ff8000"},
-		{Name: "Yellow", Value: "ffff00"},
-		{Name: "Green", Value: "00ff00"},
-		{Name: "Cyan", Value: "00ffff"},
-		{Name: "Blue", Value: "0000ff"},
-		{Name: "Purple", Value: "8000ff"},
-		{Name: "Pink", Value: "ff00ff"},
-	}
-}
-
-func getCatExpressionChoices() []discord.ApplicationCommandOptionChoiceString {
-	return []discord.ApplicationCommandOptionChoiceString{
-		{Name: "Happy", Value: "happy"},
-		{Name: "Sad", Value: "sad"},
-		{Name: "Angry", Value: "angry"},
-		{Name: "Surprised", Value: "surprised"},
-		{Name: "Dead", Value: "dead"},
-		{Name: "Winking", Value: "winking"},
-	}
-}
-
 func init() {
 	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:        "cat",

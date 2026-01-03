@@ -34,6 +34,37 @@ func getCatAnsiCode(color string) string {
 	return ""
 }
 
+func getCatColorChoices() []discord.ApplicationCommandOptionChoiceString {
+	return []discord.ApplicationCommandOptionChoiceString{
+		{Name: "Gray", Value: "gray"},
+		{Name: "Red", Value: "red"},
+		{Name: "Green", Value: "green"},
+		{Name: "Yellow", Value: "yellow"},
+		{Name: "Blue", Value: "blue"},
+		{Name: "Pink", Value: "pink"},
+		{Name: "Cyan", Value: "cyan"},
+		{Name: "White", Value: "white"},
+	}
+}
+
+func getCatExpressionChoices() []discord.ApplicationCommandOptionChoiceString {
+	return []discord.ApplicationCommandOptionChoiceString{
+		{Name: "Neutral", Value: "o.o"},
+		{Name: "Shocked", Value: "O.O"},
+		{Name: "Happy", Value: "^.^"},
+		{Name: "Sleeping", Value: "-.-"},
+		{Name: "Confused", Value: "o.O"},
+		{Name: "Silly", Value: ">.<"},
+		{Name: "Wink", Value: "o.~"},
+		{Name: "Dizzy", Value: "@.@"},
+		{Name: "Crying", Value: "T.T"},
+		{Name: "Angry", Value: "ò.ó"},
+		{Name: "Star Eyes", Value: "*.*"},
+		{Name: "Money", Value: "$.$"},
+		{Name: "None", Value: "   "},
+	}
+}
+
 func handleCatSay(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	message := data.String("message")
 
