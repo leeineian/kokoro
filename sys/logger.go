@@ -100,6 +100,15 @@ func LogStatusRotator(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "status_rotator"))
 }
 
+func ColorizeHex(colorInt int) string {
+	hex := fmt.Sprintf("#%06X", colorInt)
+	r := (colorInt >> 16) & 0xFF
+	g := (colorInt >> 8) & 0xFF
+	b := colorInt & 0xFF
+	// 24-bit ANSI color: \x1b[38;2;R;G;Bm
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm⬤ %s\x1b[0m", r, g, b, hex)
+}
+
 func LogRoleColorRotator(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role_color"))
 }
@@ -199,20 +208,21 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		return true
 	})
 
-	// Format Component Tag
-	formattedComponent := ""
-	if component != "" {
-		compColor := getComponentColor(component)
-		formattedComponent = compColor.Sprintf("[%s] ", component)
-	}
-
 	// Output: 15:04:05 [INFO] [COMPONENT] Message
-	fmt.Fprintf(h.w, "%s %s %s%s\n",
-		color.New(color.FgHiBlack).Sprint(timeStr),
-		levelColor.Sprintf("[%s]", levelStr),
-		formattedComponent,
-		r.Message,
-	)
+	// Timestamp is always printed in default color.
+	fmt.Fprintf(h.w, "%s", timeStr)
+
+	if component != "" {
+		// Component-specific logs: Level tag (if not INFO) is isolated, Message bleeds component color
+		if levelStr != "INFO" {
+			fmt.Fprintf(h.w, " %s", levelColor.Sprintf("[%s]", levelStr))
+		}
+		compColor := getComponentColor(component)
+		fmt.Fprintf(h.w, " %s\n", colorizeWithResets(compColor, fmt.Sprintf("[%s] %s", component, r.Message)))
+	} else {
+		// General logs: Level tag color bleeds into the message
+		fmt.Fprintf(h.w, " %s\n", colorizeWithResets(levelColor, fmt.Sprintf("[%s] %s", levelStr, r.Message)))
+	}
 
 	return nil
 }
@@ -241,6 +251,29 @@ func getComponentColor(name string) *color.Color {
 	default:
 		return color.New(color.FgCyan)
 	}
+}
+
+// colorizeWithResets ensures that if the text contains ANSI reset codes,
+// the starting color of the Color object is re-applied after each reset.
+// This allows nested coloring (like hex codes) to work within component logs.
+func colorizeWithResets(c *color.Color, text string) string {
+	if !strings.Contains(text, "\x1b[0m") {
+		return c.Sprint(text)
+	}
+
+	// Extract starting ANSI sequence
+	marker := "@@@MSG@@@"
+	wrapped := c.Sprint(marker)
+	idx := strings.Index(wrapped, marker)
+	if idx <= 0 {
+		return text // No color applied or something went wrong
+	}
+	startSeq := wrapped[:idx]
+
+	// Re-apply start sequences after each reset to maintain the outer color
+	// Also re-apply it at the beginning of the string to be safe (Sprint handles it)
+	modifiedText := strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+startSeq)
+	return c.Sprint(modifiedText)
 }
 
 // @src
@@ -343,8 +376,8 @@ const (
 // @status
 const (
 	MsgStatusUpdateFail        = "Update failed: %v"
-	MsgStatusRotated           = "Status rotated to: %s (Next rotate in %v)"
-	MsgStatusRotatedNoInterval = "Status rotated to: %s"
+	MsgStatusRotated           = "Status rotated to: \"%s\" (Next rotate in %v)"
+	MsgStatusRotatedNoInterval = "Status rotated to: \"%s\""
 )
 
 // @loop

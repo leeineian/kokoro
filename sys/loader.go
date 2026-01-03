@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
@@ -88,51 +89,35 @@ func TriggerClientReady(client *bot.Client) {
 func RegisterCommands(client *bot.Client, guildIDStr string) error {
 	LogInfo(MsgLoaderRegistering)
 
-	// If a guild ID is provided, register to guild and clear global simultaneously
+	// If a guild ID is provided, register to guild and then clear global sequentially
 	if guildIDStr != "" {
 		guildID, err := snowflake.Parse(guildIDStr)
 		if err != nil {
 			return err
 		}
 
-		var errGuild, errGlobal error
-		done := make(chan bool, 2)
-
 		// 1. Register to Guild
-		go func() {
-			LogInfo(MsgLoaderGuildRegister, guildIDStr)
-			createdCommands, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands)
-			if err != nil {
-				errGuild = err
-			} else {
-				for _, cmd := range createdCommands {
-					LogInfo(MsgLoaderCommandRegistered, cmd.Name())
-				}
+		LogInfo(MsgLoaderGuildRegister, guildIDStr)
+		createdCommands, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands)
+		if err != nil {
+			// If we hit a rate limit here, we should still try to proceed or return
+			LogWarn("Guild command registration hit a bottleneck: %v", err)
+		} else {
+			for _, cmd := range createdCommands {
+				LogInfo(MsgLoaderCommandRegistered, cmd.Name())
 			}
-			done <- true
-		}()
+		}
+
+		// Brief pause to satisfy Discord rate limits during rapid restarts
+		time.Sleep(1 * time.Second)
 
 		// 2. Clear Global
-		go func() {
-			LogInfo(MsgLoaderGlobalClear)
-			_, err := client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
-			if err != nil {
-				errGlobal = err
-			} else {
-				LogInfo(MsgLoaderGlobalCleared)
-			}
-			done <- true
-		}()
-
-		// Wait for both
-		<-done
-		<-done
-
-		if errGuild != nil {
-			return errGuild
-		}
-		if errGlobal != nil {
-			LogWarn(MsgLoaderGlobalClearFail, errGlobal)
+		LogInfo(MsgLoaderGlobalClear)
+		_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
+		if err != nil {
+			LogWarn(MsgLoaderGlobalClearFail, err)
+		} else {
+			LogInfo(MsgLoaderGlobalCleared)
 		}
 
 		return nil

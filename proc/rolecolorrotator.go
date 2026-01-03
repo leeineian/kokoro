@@ -44,23 +44,26 @@ var (
 
 // StartRoleColorRotator initializes the role color rotator daemon
 func StartRoleColorRotator(client *bot.Client) {
-	// Load all configured guilds
-	configs, err := sys.GetAllGuildRandomColorConfigs(context.Background())
-	if err != nil {
-		sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
-		return
-	}
-
-	for gID, rID := range configs {
-		state := &roleState{
-			guildID: gID,
-			roleID:  rID,
+	// Move the startup logic into a goroutine to avoid blocking other daemons
+	go func() {
+		// Load all configured guilds
+		configs, err := sys.GetAllGuildRandomColorConfigs(context.Background())
+		if err != nil {
+			sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
+			return
 		}
-		roleStates.Store(gID, state)
 
-		// Start rotation for this guild
-		go ScheduleNextUpdate(client, gID, rID)
-	}
+		for gID, rID := range configs {
+			state := &roleState{
+				guildID: gID,
+				roleID:  rID,
+			}
+			roleStates.Store(gID, state)
+
+			// Start rotation for this guild
+			ScheduleNextUpdate(client, gID, rID)
+		}
+	}()
 }
 
 // StartRotationForGuild starts or restarts the rotation for a specific guild
@@ -108,7 +111,17 @@ func ScheduleNextUpdate(client *bot.Client, guildID, roleID snowflake.ID) {
 		}
 	}
 
-	sys.LogRoleColorRotator(sys.MsgRoleColorNextUpdate, guildID.String(), minutes)
+	// Format guild identifier
+	guildLabel := guildID.String()
+	if guild, ok := client.Caches.Guild(guildID); ok {
+		guildLabel = fmt.Sprintf("%s (%s)", guild.Name, guildID)
+	} else {
+		// Fallback to Rest if cache is empty (useful on startup)
+		if g, err := client.Rest.GetGuild(guildID, false); err == nil {
+			guildLabel = fmt.Sprintf("%s (%s)", g.Name, guildID)
+		}
+	}
+	sys.LogRoleColorRotator(sys.MsgRoleColorNextUpdate, guildLabel, minutes)
 
 	timer := time.AfterFunc(duration, func() {
 		UpdateRoleColor(client, guildID, roleID)
@@ -129,7 +142,7 @@ func UpdateRoleColor(client *bot.Client, guildID, roleID snowflake.ID) error {
 	}
 
 	// Try up to 10 times to get a unique, non-zero color
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		var b [4]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			// Fallback if crypto/rand fails
@@ -153,16 +166,36 @@ func UpdateRoleColor(client *bot.Client, guildID, roleID snowflake.ID) error {
 		Color: &newColor,
 	})
 
+	// Format identifiers for logging
+	roleLabel := roleID.String()
+	if role, ok := client.Caches.Role(guildID, roleID); ok {
+		roleLabel = fmt.Sprintf("%s (%s)", role.Name, roleID)
+	} else if roles, err := client.Rest.GetRoles(guildID); err == nil {
+		for _, r := range roles {
+			if r.ID == roleID {
+				roleLabel = fmt.Sprintf("%s (%s)", r.Name, roleID)
+				break
+			}
+		}
+	}
+
+	guildLabel := guildID.String()
+	if guild, ok := client.Caches.Guild(guildID); ok {
+		guildLabel = fmt.Sprintf("%s (%s)", guild.Name, guildID)
+	} else if g, err := client.Rest.GetGuild(guildID, false); err == nil {
+		guildLabel = fmt.Sprintf("%s (%s)", g.Name, guildID)
+	}
+
 	if err != nil {
-		sys.LogRoleColorRotator(sys.MsgRoleColorUpdateFail, roleID.String(), guildID.String(), err)
+		sys.LogRoleColorRotator(sys.MsgRoleColorUpdateFail, roleLabel, guildLabel, err)
 		return err
 	}
 
-	hexColor := fmt.Sprintf("#%06X", newColor)
-	sys.LogRoleColorRotator(sys.MsgRoleColorUpdated, roleID.String(), guildID.String(), hexColor)
+	hexColor := sys.ColorizeHex(newColor)
+	sys.LogRoleColorRotator(sys.MsgRoleColorUpdated, roleLabel, guildLabel, hexColor)
 
 	if val, ok := roleStates.Load(guildID); ok {
-		val.(*roleState).lastColor = hexColor
+		val.(*roleState).lastColor = fmt.Sprintf("#%06X", newColor)
 	}
 	return nil
 }
@@ -189,19 +222,34 @@ func GetNextUpdate() (time.Time, snowflake.ID, bool) {
 
 // GetCurrentColor returns the current color for a guild, prioritizing cache
 func GetCurrentColor(client *bot.Client, guildID snowflake.ID) string {
-	val, ok := roleStates.Load(guildID)
+	val, ok, _ := GetCurrentColorInt(client, guildID)
 	if !ok {
 		return ""
+	}
+	return fmt.Sprintf("#%06X", val)
+}
+
+// GetCurrentColorInt returns the current color for a guild as an integer
+func GetCurrentColorInt(client *bot.Client, guildID snowflake.ID) (int, bool, bool) {
+	val, ok := roleStates.Load(guildID)
+	if !ok {
+		return 0, false, false
 	}
 	state := val.(*roleState)
 
 	// 1. Try Cache First (reflects reality)
 	if role, ok := client.Caches.Role(state.guildID, state.roleID); ok {
-		return fmt.Sprintf("#%06X", role.Color)
+		return role.Color, true, true
 	}
 
-	// 2. Fallback to our internal record (useful during startup/late cache)
-	return state.lastColor
+	// 2. Fallback to our internal record
+	if state.lastColor != "" {
+		var colorInt int
+		fmt.Sscanf(state.lastColor, "#%X", &colorInt)
+		return colorInt, true, false
+	}
+
+	return 0, false, false
 }
 
 // ForceColorUpdate is unused but required for interface

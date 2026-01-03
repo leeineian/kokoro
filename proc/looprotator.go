@@ -59,50 +59,52 @@ var (
 
 // InitLoopRotator initializes the loop rotator daemon
 func InitLoopRotator(client *bot.Client) {
-	configs, err := sys.GetAllLoopConfigs(context.Background())
-	if err != nil {
-		sys.LogLoopRotator(sys.MsgLoopFailedToLoadConfigs, err)
-		return
-	}
-
-	sys.LogLoopRotator(sys.MsgLoopLoadingChannels, len(configs))
-
-	for _, config := range configs {
-		configuredChannels.Store(config.ChannelID, &ChannelData{
-			Config:    config,
-			ChannelID: config.ChannelID,
-			Hooks:     nil, // Lazy load
-		})
-	}
-
-	sys.LogLoopRotator(sys.MsgLoopLoadedChannels, len(configs))
-
-	// Auto-resume running loops
-	resumeCount := 0
-	for _, config := range configs {
-		if config.IsRunning {
-			go func(cfg *sys.LoopConfig) {
-				dataVal, ok := configuredChannels.Load(cfg.ChannelID)
-				if !ok {
-					return
-				}
-				channelData := dataVal.(*ChannelData)
-
-				// Load webhooks
-				if err := loadWebhooksForChannel(client, channelData); err != nil {
-					sys.LogLoopRotator(sys.MsgLoopFailedToResume, cfg.ChannelName, err)
-					return
-				}
-
-				startLoopInternal(cfg.ChannelID, channelData, client)
-			}(config)
-			resumeCount++
+	go func() {
+		configs, err := sys.GetAllLoopConfigs(context.Background())
+		if err != nil {
+			sys.LogLoopRotator(sys.MsgLoopFailedToLoadConfigs, err)
+			return
 		}
-	}
 
-	if resumeCount > 0 {
-		sys.LogLoopRotator(sys.MsgLoopResuming, resumeCount)
-	}
+		sys.LogLoopRotator(sys.MsgLoopLoadingChannels, len(configs))
+
+		for _, config := range configs {
+			configuredChannels.Store(config.ChannelID, &ChannelData{
+				Config:    config,
+				ChannelID: config.ChannelID,
+				Hooks:     nil, // Lazy load
+			})
+		}
+
+		sys.LogLoopRotator(sys.MsgLoopLoadedChannels, len(configs))
+
+		// Auto-resume running loops
+		resumeCount := 0
+		for _, config := range configs {
+			if config.IsRunning {
+				go func(cfg *sys.LoopConfig) {
+					dataVal, ok := configuredChannels.Load(cfg.ChannelID)
+					if !ok {
+						return
+					}
+					channelData := dataVal.(*ChannelData)
+
+					// Load webhooks
+					if err := loadWebhooksForChannel(client, channelData); err != nil {
+						sys.LogLoopRotator(sys.MsgLoopFailedToResume, cfg.ChannelName, err)
+						return
+					}
+
+					startLoopInternal(cfg.ChannelID, channelData, client)
+				}(config)
+				resumeCount++
+			}
+		}
+
+		if resumeCount > 0 {
+			sys.LogLoopRotator(sys.MsgLoopResuming, resumeCount)
+		}
+	}()
 }
 
 // parseInterval parses an interval string to duration

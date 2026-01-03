@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
@@ -26,8 +28,8 @@ var (
 	StartTime       = time.Now()
 	statusList      []func(*bot.Client) string
 	statusStopChan  chan struct{}
-	lastStatusIdx   int = -1
-	configKeyStatus     = "status_visible"
+	lastStatusText  string
+	configKeyStatus = "status_visible"
 )
 
 func StartStatusRotator(client *bot.Client) {
@@ -72,30 +74,57 @@ func updateStatus(client *bot.Client, nextInterval time.Duration) {
 		return
 	}
 
-	idx := rand.Intn(len(statusList))
-	if lastStatusIdx != -1 && len(statusList) > 1 && idx == lastStatusIdx {
-		idx = (idx + 1) % len(statusList)
+	// 1. Gather all non-empty statuses
+	var availableStatuses []string
+	for _, gen := range statusList {
+		if text := gen(client); text != "" {
+			availableStatuses = append(availableStatuses, text)
+		}
 	}
-	lastStatusIdx = idx
 
-	gen := statusList[idx]
-	text := gen(client)
-	if text == "" {
-		text = GetUptimeStatus(client)
+	// 2. Fallback to Uptime if everything is empty (shouldn't happen as Uptime is always non-empty)
+	if len(availableStatuses) == 0 {
+		availableStatuses = append(availableStatuses, GetUptimeStatus(client))
 	}
+
+	// 3. Filter out the last shown status to prevent repeats
+	var finalChoices []string
+	for _, s := range availableStatuses {
+		if s != lastStatusText {
+			finalChoices = append(finalChoices, s)
+		}
+	}
+
+	// 4. Pick a status
+	var selectedStatus string
+	if len(finalChoices) > 0 {
+		selectedStatus = finalChoices[rand.Intn(len(finalChoices))]
+	} else {
+		// If lastStatusText was the only option, we have to use it
+		selectedStatus = availableStatuses[0]
+	}
+	lastStatusText = selectedStatus
 
 	err = client.SetPresence(context.Background(),
 		gateway.WithOnlineStatus(discord.OnlineStatusOnline),
-		gateway.WithStreamingActivity(text, sys.GlobalConfig.StreamingURL),
+		gateway.WithStreamingActivity(selectedStatus, sys.GlobalConfig.StreamingURL),
 	)
 
 	if err != nil {
 		sys.LogStatusRotator(sys.MsgStatusUpdateFail, err)
 	} else {
+		// Colorize hex codes in the log but not the presence
+		logStatus := selectedStatus
+		re := regexp.MustCompile(`#([A-Fa-f0-9]{6})`)
+		logStatus = re.ReplaceAllStringFunc(selectedStatus, func(match string) string {
+			colorInt, _ := strconv.ParseUint(match[1:], 16, 64)
+			return sys.ColorizeHex(int(colorInt))
+		})
+
 		if nextInterval > 0 {
-			sys.LogStatusRotator(sys.MsgStatusRotated, text, nextInterval)
+			sys.LogStatusRotator(sys.MsgStatusRotated, logStatus, nextInterval)
 		} else {
-			sys.LogStatusRotator(sys.MsgStatusRotatedNoInterval, text)
+			sys.LogStatusRotator(sys.MsgStatusRotatedNoInterval, logStatus)
 		}
 	}
 }
@@ -125,7 +154,7 @@ func GetColorStatus(client *bot.Client) string {
 
 func GetUptimeStatus(client *bot.Client) string {
 	uptime := time.Since(StartTime)
-	return fmt.Sprintf("Uptime: %dh %dm", int(uptime.Hours()), int(uptime.Minutes())%60)
+	return fmt.Sprintf("Uptime: %dh %dm %ds", int(uptime.Hours()), int(uptime.Minutes())%60, int(uptime.Seconds())%60)
 }
 
 func GetLatencyStatus(client *bot.Client) string {
@@ -137,5 +166,5 @@ func GetLatencyStatus(client *bot.Client) string {
 }
 
 func GetTimeStatus(client *bot.Client) string {
-	return "Time: " + time.Now().UTC().Format("15:04") + " UTC"
+	return "Time: " + time.Now().Local().Format("15:04:05") + " (Local)"
 }

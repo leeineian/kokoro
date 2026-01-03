@@ -77,11 +77,8 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 		description += fmt.Sprintf("%s **%s** - Interval: %s\n└ %s\n\n", typeIcon, cfg.ChannelName, intervalStr, status)
 	}
 
-	embed := discord.NewEmbedBuilder().
-		SetTitle("📋 Loop Configurations").
-		SetDescription(description).
-		SetColor(0x5865F2).
-		Build()
+	// Build the content for the V2 component
+	content := "# 📋 Loop Configurations\n\n" + description
 
 	// Build select menu for deletion
 	var selectOptions []discord.StringSelectMenuOption
@@ -99,10 +96,15 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 	}
 
 	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
 		SetEphemeral(true).
-		SetEmbeds(embed).
-		AddActionRow(
-			discord.NewStringSelectMenu("delete_loop_config", "Select a configuration to delete", selectOptions...),
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay(content),
+				discord.NewActionRow(
+					discord.NewStringSelectMenu("delete_loop_config", "Select a configuration to delete", selectOptions...),
+				),
+			),
 		).
 		Build())
 }
