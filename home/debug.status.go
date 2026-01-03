@@ -1,56 +1,39 @@
 package home
 
 import (
-	"fmt"
+	"context"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/proc"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 )
 
-func handleDebugStatus(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	if len(options) == 0 {
-		return
+func handleDebugStatus(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+	visible := data.Bool("visible")
+
+	if visible {
+		sys.SetBotConfig(context.Background(), "status_visible", "true")
+	} else {
+		sys.SetBotConfig(context.Background(), "status_visible", "false")
 	}
 
-	visible := options[0].BoolValue()
-	valStr := fmt.Sprintf("%t", visible)
-
-	err := sys.SetBotConfig("status_visible", valStr)
-	if err != nil {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Components: []discordgo.MessageComponent{
-					&discordgo.Container{
-						Components: []discordgo.MessageComponent{
-							&discordgo.TextDisplay{Content: fmt.Sprintf("Error saving config: %v", err)},
-						},
-					},
-				},
-				Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
+	content := "✅ Status visibility updated!"
+	if visible {
+		content = "✅ Status rotation enabled!"
+	} else {
+		content = "✅ Status rotation disabled!"
 	}
 
-	// Force update
-	proc.TriggerStatusUpdate(s)
-
-	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: fmt.Sprintf("Status visibility set to: **%v**", visible)},
-					},
-				},
-			},
-		},
-	})
+	err := event.CreateMessage(discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay(content),
+			),
+		).
+		SetEphemeral(true).
+		Build())
 	if err != nil {
-		sys.LogError(sys.MsgDebugStatusCmdFail, err)
+		sys.LogDebug(sys.MsgDebugStatusCmdFail, err)
 	}
 }

@@ -2,62 +2,81 @@ package home
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"time"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/sys"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 )
 
-func handleCatImage(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	resp, err := catHttpClient.Get("https://api.thecatapi.com/v1/images/search")
+const catImageApiURL = "https://api.thecatapi.com/v1/images/search"
+
+type CatImage struct {
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(catImageApiURL)
 	if err != nil {
-		sys.LogCat(sys.MsgCatFailedToFetchImage, err)
-		catRespondErrorSync(s, i, sys.ErrCatFailedToFetchImage)
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ Failed to fetch cat image."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		sys.LogCat(sys.MsgCatImageAPIStatusError, resp.StatusCode)
-		catRespondErrorSync(s, i, sys.ErrCatImageServiceUnavailable)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ Failed to read response."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
 		return
 	}
 
-	var data []struct {
-		URL string `json:"url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		sys.LogCat(sys.MsgCatFailedToDecodeImage, err)
-		catRespondErrorSync(s, i, sys.ErrCatFailedToDecodeImage)
+	var data []CatImage
+	if err := json.Unmarshal(body, &data); err != nil || len(data) == 0 {
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ Failed to parse cat image."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
 		return
 	}
 
-	if len(data) == 0 {
-		sys.LogCat(sys.MsgCatImageAPIEmptyArray)
-		catRespondErrorSync(s, i, sys.ErrCatNoImagesAvailable)
-		return
-	}
-
-	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.MediaGallery{
-							Items: []discordgo.MediaGalleryItem{
-								{
-									Media: discordgo.UnfurledMediaItem{URL: data[0].URL},
-								},
-							},
+	// Display image using MediaGallery V2 component
+	event.CreateMessage(discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewMediaGallery(
+					discord.MediaGalleryItem{
+						Media: discord.UnfurledMediaItem{
+							URL: data[0].URL,
 						},
 					},
-				},
-			},
-		},
-	})
-	if err != nil {
-		sys.LogCat(sys.MsgCatFailedToSendErrorResponse, err)
-	}
+				),
+			),
+		).
+		Build())
 }

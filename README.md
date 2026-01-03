@@ -6,9 +6,9 @@ flowchart TB
 
     subgraph Core["Core Systems (sys)"]
         Config["config.go<br/>━━━━━━━━━<br/>Environment Logic<br/>Custom Prefixes"]
-        Database["database.go<br/>━━━━━━━━━<br/>SQLite WAL Mode<br/>• reminders<br/>• guild_configs<br/>• bot_config<br/>• loop_channels"]
-        Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>Session Management"]
-        Logger["logger.go<br/>━━━━━━━━━<br/>Dynamic AST Scanning<br/>Centralized Constants<br/>Prefix-Based Branding"]
+        Database["database.go<br/>━━━━━━━━━<br/>Context-Aware SQLite<br/>• Standardized Snowflake IDs<br/>• WAL-Mode Performance"]
+        Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>V2 Component Support"]
+        Logger["logger.go<br/>━━━━━━━━━<br/>Structured slog Logging<br/>Dynamic AST Discovery<br/>Custom Colored Handler"]
     end
 
     subgraph Commands["Commands (home)"]
@@ -44,10 +44,10 @@ flowchart TB
     end
 
     subgraph Daemons["Background Daemons (proc)"]
-        ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>DM/Channel Alerts"]
-        StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>15-60s Random Cycle<br/>5 Dynamic States"]
-        RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Guild-Specific"]
-        LoopRotator["looprotator.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>Channel Spammer"]
+        ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
+        StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
+        RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
+        LoopRotator["looprotator.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
     end
 
     subgraph External["External Services"]
@@ -112,7 +112,7 @@ minder/
 ├── go.mod                        # Go module dependencies
 ├── go.sum                        # Go dependency checksums
 |
-├── Dockerfile                    # Containerization instructions
+├── Dockerfile                    # Multi-stage build
 ├── docker-compose.yml            # Multi-service deployment
 |
 ├── home/                         # [Discord Commands]

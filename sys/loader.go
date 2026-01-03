@@ -1,88 +1,112 @@
 package sys
 
 import (
-	"fmt"
+	"context"
+	"log/slog"
+	"os"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/snowflake/v2"
 )
 
-var commands = []*discordgo.ApplicationCommand{}
-var commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
-var autocompleteHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
-var componentHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
-var onSessionReadyCallbacks []func(s *discordgo.Session)
+var commands = []discord.ApplicationCommandCreate{}
+var commandHandlers = map[string]func(event *events.ApplicationCommandInteractionCreate){}
+var autocompleteHandlers = map[string]func(event *events.AutocompleteInteractionCreate){}
+var componentHandlers = map[string]func(event *events.ComponentInteractionCreate){}
+var onClientReadyCallbacks []func(client *bot.Client)
 
-// CreateSession creates and opens a Discord session with all required intents and handlers configured.
-func CreateSession(token string, streamingURL string) (*discordgo.Session, error) {
-	s, err := discordgo.New("Bot " + token)
+// CreateClient creates and configures a disgo client
+func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
+	client, err := disgo.New(cfg.Token,
+		bot.WithGatewayConfigOpts(
+			gateway.WithIntents(
+				gateway.IntentGuilds,
+				gateway.IntentGuildMessages,
+				gateway.IntentGuildMembers,
+				gateway.IntentGuildPresences,
+				gateway.IntentMessageContent,
+				gateway.IntentGuildMessageReactions,
+			),
+			gateway.WithPresenceOpts(
+				gateway.WithPlayingActivity("Starting..."),
+				gateway.WithOnlineStatus(discord.OnlineStatusOnline),
+			),
+		),
+		bot.WithCacheConfigOpts(
+			cache.WithCaches(cache.FlagGuilds, cache.FlagMembers, cache.FlagRoles, cache.FlagChannels),
+		),
+		bot.WithEventListenerFunc(onApplicationCommandInteraction),
+		bot.WithEventListenerFunc(onAutocompleteInteraction),
+		bot.WithEventListenerFunc(onComponentInteraction),
+		bot.WithEventListenerFunc(onReady),
+		// Disable slog output if silent
+		bot.WithLogger(slog.Default()),
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	s.AddHandler(InteractionHandler)
-
-	s.Identify.Intents = discordgo.IntentsGuilds |
-		discordgo.IntentsGuildMessages |
-		discordgo.IntentsGuildMembers |
-		discordgo.IntentsGuildPresences |
-		discordgo.IntentMessageContent |
-		discordgo.IntentsGuildMessageReactions
-
-	s.Identify.Presence = discordgo.GatewayStatusUpdate{
-		Status: "online",
-		Game: discordgo.Activity{
-			Type: discordgo.ActivityTypeStreaming,
-			URL:  streamingURL,
-		},
-	}
-
-	if err := s.Open(); err != nil {
-		return nil, err
-	}
-
-	return s, nil
+	return client, nil
 }
 
-func RegisterCommand(cmd *discordgo.ApplicationCommand, handler func(s *discordgo.Session, i *discordgo.InteractionCreate)) {
+func RegisterCommand(cmd discord.ApplicationCommandCreate, handler func(event *events.ApplicationCommandInteractionCreate)) {
 	commands = append(commands, cmd)
-	commandHandlers[cmd.Name] = handler
+	// Extract name based on command type
+	switch c := cmd.(type) {
+	case discord.SlashCommandCreate:
+		commandHandlers[c.CommandName()] = handler
+	case discord.UserCommandCreate:
+		commandHandlers[c.CommandName()] = handler
+	case discord.MessageCommandCreate:
+		commandHandlers[c.CommandName()] = handler
+	}
 }
 
-func RegisterAutocompleteHandler(cmdName string, handler func(s *discordgo.Session, i *discordgo.InteractionCreate)) {
+func RegisterAutocompleteHandler(cmdName string, handler func(event *events.AutocompleteInteractionCreate)) {
 	autocompleteHandlers[cmdName] = handler
 }
 
-func RegisterComponentHandler(customID string, handler func(s *discordgo.Session, i *discordgo.InteractionCreate)) {
+func RegisterComponentHandler(customID string, handler func(event *events.ComponentInteractionCreate)) {
 	componentHandlers[customID] = handler
 }
 
-func OnSessionReady(cb func(s *discordgo.Session)) {
-	onSessionReadyCallbacks = append(onSessionReadyCallbacks, cb)
+func OnClientReady(cb func(client *bot.Client)) {
+	onClientReadyCallbacks = append(onClientReadyCallbacks, cb)
 }
 
-func TriggerSessionReady(s *discordgo.Session) {
-	for _, cb := range onSessionReadyCallbacks {
-		cb(s)
+func TriggerClientReady(client *bot.Client) {
+	for _, cb := range onClientReadyCallbacks {
+		cb(client)
 	}
 }
 
-func RegisterCommands(s *discordgo.Session, guildID string) error {
+func RegisterCommands(client *bot.Client, guildIDStr string) error {
 	LogInfo(MsgLoaderRegistering)
 
 	// If a guild ID is provided, register to guild and clear global simultaneously
-	if guildID != "" {
+	if guildIDStr != "" {
+		guildID, err := snowflake.Parse(guildIDStr)
+		if err != nil {
+			return err
+		}
+
 		var errGuild, errGlobal error
 		done := make(chan bool, 2)
 
 		// 1. Register to Guild
 		go func() {
-			LogInfo(MsgLoaderGuildRegister, guildID)
-			createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, guildID, commands)
+			LogInfo(MsgLoaderGuildRegister, guildIDStr)
+			createdCommands, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands)
 			if err != nil {
 				errGuild = err
 			} else {
 				for _, cmd := range createdCommands {
-					LogInfo(MsgLoaderCommandRegistered, cmd.Name)
+					LogInfo(MsgLoaderCommandRegistered, cmd.Name())
 				}
 			}
 			done <- true
@@ -91,7 +115,7 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 		// 2. Clear Global
 		go func() {
 			LogInfo(MsgLoaderGlobalClear)
-			_, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", []*discordgo.ApplicationCommand{})
+			_, err := client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
 			if err != nil {
 				errGlobal = err
 			} else {
@@ -105,7 +129,7 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 		<-done
 
 		if errGuild != nil {
-			return fmt.Errorf("failed to register guild commands: %w", errGuild)
+			return errGuild
 		}
 		if errGlobal != nil {
 			LogWarn(MsgLoaderGlobalClearFail, errGlobal)
@@ -116,32 +140,47 @@ func RegisterCommands(s *discordgo.Session, guildID string) error {
 
 	// Otherwise, register commands globally
 	LogInfo(MsgLoaderRegisteringGlobal)
-	createdCommands, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands)
-	// ... (the rest remains the same)
+	createdCommands, err := client.Rest.SetGlobalCommands(client.ApplicationID, commands)
 	if err != nil {
-		return fmt.Errorf(MsgLoaderRegisterGlobalFail, err)
+		return err
 	}
 	for _, cmd := range createdCommands {
-		LogInfo(MsgLoaderGlobalRegistered, cmd.Name)
+		LogInfo(MsgLoaderGlobalRegistered, cmd.Name())
 	}
 	return nil
 }
 
-func InteractionHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	switch i.Type {
-	case discordgo.InteractionApplicationCommand:
-		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
-			go h(s, i)
-		}
-	case discordgo.InteractionApplicationCommandAutocomplete:
-		if h, ok := autocompleteHandlers[i.ApplicationCommandData().Name]; ok {
-			go h(s, i)
-		}
-	case discordgo.InteractionMessageComponent:
-		if h, ok := componentHandlers[i.MessageComponentData().CustomID]; ok {
-			go h(s, i)
-		}
+func onApplicationCommandInteraction(event *events.ApplicationCommandInteractionCreate) {
+	data := event.Data
+	if h, ok := commandHandlers[data.CommandName()]; ok {
+		go h(event)
 	}
+}
+
+func onAutocompleteInteraction(event *events.AutocompleteInteractionCreate) {
+	data := event.Data
+	if h, ok := autocompleteHandlers[data.CommandName]; ok {
+		go h(event)
+	}
+}
+
+func onComponentInteraction(event *events.ComponentInteractionCreate) {
+	customID := event.Data.CustomID()
+	if h, ok := componentHandlers[customID]; ok {
+		go h(event)
+	}
+}
+
+func onReady(event *events.Ready) {
+	client := event.Client()
+	botUser := event.User
+
+	// 1. Background Daemons
+	TriggerClientReady(client)
+	StartDaemons()
+
+	// 2. Final Status
+	LogInfo(MsgBotOnline, botUser.Username, botUser.ID.String(), os.Getpid())
 }
 
 // Daemon registry

@@ -1,176 +1,97 @@
 package home
 
 import (
+	"context"
 	"fmt"
-	"strings"
+	"strconv"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 )
 
-func handleReminderList(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	var dismissID string
-	if len(options) > 0 {
-		dismissID = options[0].StringValue()
-	}
+func handleReminderList(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+	userID := event.User().ID
 
-	userID := i.Member.User.ID
-
-	// Handle dismissal
-	if dismissID != "" {
-		if dismissID == "all" {
-			// Delete all reminders for this user
-			rowsAffected, err := sys.DeleteAllRemindersForUser(userID)
+	// Check for dismiss parameter
+	if dismissIDStr, ok := data.OptString("dismiss"); ok {
+		// Handle dismissal
+		if dismissIDStr == "all" {
+			count, err := sys.DeleteAllRemindersForUser(context.Background(), userID)
 			if err != nil {
 				sys.LogReminder(sys.MsgReminderFailedToDeleteAll, err)
-				reminderRespondImmediate(s, i, sys.ErrReminderDismissAllFail)
+				reminderRespondImmediate(event, sys.ErrReminderDismissAllFail)
 				return
 			}
-
-			reminderRespondImmediate(s, i, fmt.Sprintf("✅ Dismissed all %d reminder(s)!", rowsAffected))
+			reminderRespondImmediate(event, fmt.Sprintf("Dismissed %d reminders!", count))
 			return
-		} else {
-			// Delete specific reminder
-			var intID int64
-			fmt.Sscanf(dismissID, "%d", &intID)
+		}
 
-			deleted, err := sys.DeleteReminder(intID, userID)
-			if err != nil {
-				sys.LogReminder(sys.MsgReminderFailedToDeleteGeneral, err)
-				reminderRespondImmediate(s, i, sys.ErrReminderDismissFailed)
+		dismissID, err := strconv.ParseInt(dismissIDStr, 10, 64)
+		if err == nil {
+			deleted, err := sys.DeleteReminder(context.Background(), dismissID, userID)
+			if err != nil || !deleted {
+				reminderRespondImmediate(event, sys.ErrReminderDismissFailed)
 				return
 			}
-			if !deleted {
-				reminderRespondImmediate(s, i, "❌ Reminder not found or already dismissed.")
-				return
-			}
-			reminderRespondImmediate(s, i, sys.MsgReminderDismissed)
+			reminderRespondImmediate(event, sys.MsgReminderDismissed)
 			return
 		}
 	}
 
-	// List all reminders
-	reminders, err := sys.GetRemindersForUser(userID)
-
+	// List reminders
+	reminders, err := sys.GetRemindersForUser(context.Background(), userID)
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToQuery, err)
-		reminderRespondImmediate(s, i, sys.ErrReminderFetchFailed)
+		reminderRespondImmediate(event, sys.ErrReminderFetchFailed)
 		return
 	}
 
 	if len(reminders) == 0 {
-		reminderRespondImmediate(s, i, sys.MsgReminderNoActive)
+		reminderRespondImmediate(event, sys.MsgReminderNoActive)
 		return
 	}
 
-	// Build response
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📝 **You have %d active reminder(s):**\n\n", len(reminders)))
-
-	for idx, r := range reminders {
-		location := fmt.Sprintf("<#%s>", r.ChannelID)
-		if r.SendTo == "dm" {
-			location = "Direct Message"
-		}
-
-		// Use Discord timestamp for relative time
-		sb.WriteString(fmt.Sprintf("%d. **%s**\n   📍 %s | ⏰ <t:%d:R>\n\n",
-			idx+1,
-			reminderTruncate(r.Message, 50),
-			location,
-			r.RemindAt.Unix(),
-		))
+	// Build reminder list
+	var content string
+	content = fmt.Sprintf("📋 **Your Reminders** (%d active)\n\n", len(reminders))
+	for i, r := range reminders {
+		relTime := formatReminderRelativeTime(time.Now(), r.RemindAt)
+		content += fmt.Sprintf("%d. **%s** - %s\n", i+1, reminderTruncate(r.Message, 50), relTime)
 	}
 
-	sb.WriteString("\n💡 Use `/reminder list dismiss:<reminder>` to dismiss a specific reminder or all reminders.")
-
-	reminderRespondImmediate(s, i, sb.String())
+	reminderRespondImmediate(event, content)
 }
 
-func handleReminderAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	data := i.ApplicationCommandData()
+func handleReminderAutocomplete(event *events.AutocompleteInteractionCreate) {
+	userID := event.User().ID
 
-	// Find the focused option
-	var focusedOption *discordgo.ApplicationCommandInteractionDataOption
-	for _, opt := range data.Options {
-		if opt.Name == "list" {
-			for _, subOpt := range opt.Options {
-				if subOpt.Focused {
-					focusedOption = subOpt
-					break
-				}
-			}
-		}
-	}
-
-	if focusedOption == nil {
+	reminders, err := sys.GetRemindersForUser(context.Background(), userID)
+	if err != nil {
+		sys.LogReminder(sys.MsgReminderAutocompleteFailed, err)
 		return
 	}
 
-	go func() {
-		userID := i.Member.User.ID
-
-		// Query reminders
-		reminders, err := sys.GetRemindersForUser(userID)
-
-		if err != nil {
-			sys.LogReminder(sys.MsgReminderAutocompleteFailed, err)
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionApplicationCommandAutocompleteResult,
-				Data: &discordgo.InteractionResponseData{
-					Choices: []*discordgo.ApplicationCommandOptionChoice{},
-				},
-			})
-			return
-		}
-
-		choices := []*discordgo.ApplicationCommandOptionChoice{}
-
-		// Add "Dismiss All" option first
-		if len(reminders) > 0 {
-			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  "❌ Dismiss All",
-				Value: "all",
-			})
-		}
-
-		for idx, r := range reminders {
-			if idx >= 24 { // Discord limit is 25
-				break
-			}
-
-			// For autocomplete, use readable relative format (Discord timestamps don't render in autocomplete)
-			relativeTime := formatReminderRelativeTime(time.Now(), r.RemindAt)
-
-			locationLabel := "Channel"
-			if r.SendTo == "dm" {
-				locationLabel = "DM"
-			} else {
-				if ch, err := s.State.Channel(r.ChannelID); err == nil {
-					locationLabel = "#" + ch.Name
-				} else if ch, err := s.Channel(r.ChannelID); err == nil {
-					locationLabel = "#" + ch.Name
-				}
-			}
-
-			choiceName := fmt.Sprintf("%s | %s | %s",
-				reminderTruncate(r.Message, 30),
-				locationLabel,
-				relativeTime,
-			)
-
-			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  choiceName,
-				Value: fmt.Sprintf("%d", r.ID),
-			})
-		}
-
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
-			Data: &discordgo.InteractionResponseData{
-				Choices: choices,
-			},
+	var choices []discord.AutocompleteChoice
+	// Add "dismiss all" option if there are reminders
+	if len(reminders) > 0 {
+		choices = append(choices, discord.AutocompleteChoiceString{
+			Name:  fmt.Sprintf("Dismiss All (%d reminders)", len(reminders)),
+			Value: "all",
 		})
-	}()
+	}
+
+	for _, r := range reminders {
+		displayName := reminderTruncate(r.Message, 80)
+		choices = append(choices, discord.AutocompleteChoiceString{
+			Name:  displayName,
+			Value: strconv.FormatInt(r.ID, 10),
+		})
+		if len(choices) >= 25 {
+			break
+		}
+	}
+
+	event.AutocompleteResult(choices)
 }

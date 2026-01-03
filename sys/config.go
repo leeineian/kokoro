@@ -3,6 +3,7 @@ package sys
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -40,7 +41,13 @@ func LoadConfig() (*Config, error) {
 	token := os.Getenv("DISCORD_TOKEN")
 	dbPath := os.Getenv("DATABASE_PATH")
 	if dbPath == "" {
-		dbPath = "./data.db"
+		// Smart directory: if a 'data' folder exists (like in Docker), use it.
+		// Otherwise, stay in the current directory.
+		folder := "."
+		if info, err := os.Stat("data"); err == nil && info.IsDir() {
+			folder = "./data"
+		}
+		dbPath = filepath.Join(folder, GetProjectName()+".db")
 	}
 
 	silent, _ := strconv.ParseBool(os.Getenv("SILENT"))
@@ -78,4 +85,26 @@ func LoadConfig() (*Config, error) {
 
 	GlobalConfig = cfg
 	return cfg, nil
+}
+
+// GetProjectName returns the name of the project dynamically
+func GetProjectName() string {
+	exePath, err := os.Executable()
+	projectName := "bot"
+	if err == nil {
+		projectName = filepath.Base(exePath)
+		projectName = strings.TrimSuffix(projectName, ".exe")
+
+		// If running via 'go run' or unnamed binary, try to get name from go.mod
+		if projectName == "main" || strings.HasPrefix(projectName, "go_build_") {
+			if modData, err := os.ReadFile("go.mod"); err == nil {
+				lines := strings.Split(string(modData), "\n")
+				if len(lines) > 0 && strings.HasPrefix(lines[0], "module ") {
+					parts := strings.Split(lines[0], "/")
+					projectName = strings.TrimSpace(parts[len(parts)-1])
+				}
+			}
+		}
+	}
+	return projectName
 }

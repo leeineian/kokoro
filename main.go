@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -23,86 +23,134 @@ func main() {
 		sys.SetSilentMode(true)
 	}
 
-	// 1. Check for and kill old process
-	if pidData, err := os.ReadFile(".bot.pid"); err == nil {
-		if oldPid, err := strconv.Atoi(string(pidData)); err == nil && oldPid != os.Getpid() {
-			if process, err := os.FindProcess(oldPid); err == nil {
-				// Check if it's still running
-				if err := process.Signal(syscall.Signal(0)); err == nil {
-					sys.LogInfo(sys.MsgBotKillingOld, oldPid)
-					if err := process.Signal(syscall.SIGTERM); err == nil {
-						// Wait for it to exit (up to 5 seconds)
-						for i := 0; i < 50; i++ {
-							if err := process.Signal(syscall.Signal(0)); err != nil {
-								break // Process is gone
-							}
-							time.Sleep(100 * time.Millisecond)
-						}
-						sys.LogInfo(sys.MsgBotOldTerminated)
-					} else {
-						sys.LogWarn(sys.MsgBotKillFail, err)
-					}
-				}
-			}
+	// 1. Open or create the PID file
+	f, err := os.OpenFile(".bot.pid", os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		sys.LogFatal("Failed to open PID file: %v", err)
+	}
+	defer f.Close()
+
+	// 2. Try to acquire an exclusive lock
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break // Lock acquired!
 		}
+
+		if err != syscall.EWOULDBLOCK {
+			sys.LogFatal("Failed to lock PID file: %v", err)
+		}
+
+		// Lock is held by another process. Read the PID and kill it.
+		var oldPid int
+		_, _ = f.Seek(0, 0)
+		if _, scanErr := fmt.Fscanf(f, "%d", &oldPid); scanErr != nil {
+			// File is empty or corrupt but locked? Wait a moment and retry.
+			time.Sleep(100 * time.Millisecond)
+			_ = f.Close()
+			f, _ = os.OpenFile(".bot.pid", os.O_RDWR|os.O_CREATE, 0644)
+			continue
+		}
+
+		if oldPid == os.Getpid() {
+			break // Should not happen with LOCK_EX, but safety first
+		}
+
+		process, procErr := os.FindProcess(oldPid)
+		if procErr != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		sys.LogInfo(sys.MsgBotKillingOld, oldPid)
+		_ = process.Signal(syscall.SIGTERM)
+
+		// Wait up to 5 seconds for it to exit
+		terminated := false
+		for i := 0; i < 50; i++ {
+			if err := process.Signal(syscall.Signal(0)); err != nil {
+				terminated = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		if !terminated {
+			sys.LogWarn("Old process %d is stubborn. Sending SIGKILL...", oldPid)
+			_ = process.Signal(syscall.SIGKILL)
+			time.Sleep(200 * time.Millisecond) // Give OS time to clean up
+		}
+
+		sys.LogInfo(sys.MsgBotOldTerminated)
+		// Loop will retry Flock on next iteration
 	}
 
-	// 2. Write PID file
-	pid := os.Getpid()
-	if err := os.WriteFile(".bot.pid", []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
-		sys.LogWarn(sys.MsgBotPIDWriteFail, err)
-	}
-	defer os.Remove(".bot.pid")
+	// 3. We have the lock. Write our PID.
+	_ = f.Truncate(0)
+	_, _ = f.Seek(0, 0)
+	_, _ = fmt.Fprintf(f, "%d", os.Getpid())
+	_ = f.Sync()
+
+	// Ensure the lock is held for the duration and the file is cleaned up on exit
+	defer func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = os.Remove(".bot.pid")
+	}()
 
 	// 3. Setup shutdown signal
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 
 	// 4. Run bot (blocks until shutdown signal)
-	if err := run(pid, sc, *silent); err != nil {
+	if err := run(sc, *silent); err != nil {
 		sys.LogFatal(sys.MsgGenericError, err)
 	}
 }
 
-func run(pid int, shutdownChan <-chan os.Signal, silent bool) error {
+func run(shutdownChan <-chan os.Signal, silent bool) error {
+	ctx := context.Background()
+
 	// 1. Load configuration
 	cfg, err := sys.LoadConfig()
 	if err != nil {
 		return fmt.Errorf(sys.MsgConfigFailedToLoad, err)
 	}
 
-	// 2. Create Discord session (needed to get the bot's username for logging)
-	s, err := sys.CreateSession(cfg.Token, cfg.StreamingURL)
+	// 2. Create disgo client
+	client, err := sys.CreateClient(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("Failed to create Discord session: %w", err)
+		return fmt.Errorf("failed to create Discord client: %w", err)
 	}
-	defer s.Close()
-
-	sys.LogInfo(sys.MsgBotStarting, s.State.User.Username)
+	defer client.Close(ctx)
 
 	// 3. Initialize database
 	if err := sys.InitDatabase(cfg.DatabasePath); err != nil {
-		return fmt.Errorf("Failed to initialize database: %w", err)
+		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 	defer sys.CloseDatabase()
 
-	// 4. Command Registration (Sequential)
-	if err := sys.RegisterCommands(s, cfg.GuildID); err != nil {
+	// 4. Command Registration
+	if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
 		sys.LogError(sys.MsgBotRegisterFail, err)
 	}
 
-	// 5. Background Daemons
-	sys.TriggerSessionReady(s)
-	sys.StartDaemons()
-
-	// 6. Final Status
-	sys.LogInfo(sys.MsgBotOnline, s.State.User.Username, s.State.User.ID, pid)
+	// 5. Connect to Gateway
+	sys.LogInfo(sys.MsgBotStarting, sys.GetProjectName())
+	if err := client.OpenGateway(ctx); err != nil {
+		return fmt.Errorf("failed to open gateway: %w", err)
+	}
 
 	<-shutdownChan
 	if !silent {
 		fmt.Println()
 	}
-	sys.LogInfo(sys.MsgBotShutdown, s.State.User.Username)
+
+	// Dynamic shutdown logging
+	if botUser, ok := client.Caches.SelfUser(); ok {
+		sys.LogInfo(sys.MsgBotShutdown, botUser.Username)
+	} else {
+		sys.LogInfo(sys.MsgBotShutdown, sys.GetProjectName())
+	}
 
 	return nil
 }

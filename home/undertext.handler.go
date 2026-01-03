@@ -6,7 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 )
 
@@ -31,67 +32,60 @@ func processUndertextColors(input string) string {
 	})
 }
 
-func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	options := i.ApplicationCommandData().Options
-	params := make(map[string]string)
-	var messageText string
-	var animated bool
-	var imageAttachmentID string
+func handleUndertext(event *events.ApplicationCommandInteractionCreate) {
+	data := event.SlashCommandInteractionData()
 
-	for _, opt := range options {
-		switch opt.Name {
-		case "message":
-			messageText = opt.StringValue()
-		case "character":
-			params["character"] = opt.StringValue()
-		case "expression":
-			params["expression"] = opt.StringValue()
-		case "box":
-			params["box"] = opt.StringValue()
-		case "mode":
-			params["mode"] = opt.StringValue()
-		case "size":
-			params["size"] = fmt.Sprintf("%d", opt.IntValue())
-		case "custom_url":
-			params["url"] = opt.StringValue()
-		case "boxcolor":
-			params["boxcolor"] = opt.StringValue()
-		case "charcolor":
-			params["charcolor"] = opt.StringValue()
-		case "font":
-			params["font"] = opt.StringValue()
-		case "margin":
-			params["margin"] = fmt.Sprintf("%t", opt.BoolValue())
-		case "asterisk":
-			params["asterisk"] = opt.StringValue()
-		case "animated":
-			animated = opt.BoolValue()
-		case "image":
-			// Get attachment ID from the option value
-			if val, ok := opt.Value.(string); ok {
-				imageAttachmentID = val
-			}
-		case "user":
-			// Get user ID from the option value
-			if userID, ok := opt.Value.(string); ok {
-				if resolved := i.ApplicationCommandData().Resolved; resolved != nil {
-					if user, ok := resolved.Users[userID]; ok {
-						params["character"] = "custom"
-						params["expression"] = user.AvatarURL("256")
-					}
-				}
-			}
-		}
+	message := data.String("message")
+	params := make(map[string]string)
+	var animated bool
+
+	if char, ok := data.OptString("character"); ok {
+		params["character"] = char
+	}
+	if expr, ok := data.OptString("expression"); ok {
+		params["expression"] = expr
+	}
+	if box, ok := data.OptString("box"); ok {
+		params["box"] = box
+	}
+	if mode, ok := data.OptString("mode"); ok {
+		params["mode"] = mode
+	}
+	if size, ok := data.OptInt("size"); ok {
+		params["size"] = fmt.Sprintf("%d", size)
+	}
+	if customURL, ok := data.OptString("custom_url"); ok {
+		params["url"] = customURL
+	}
+	if boxcolor, ok := data.OptString("boxcolor"); ok {
+		params["boxcolor"] = boxcolor
+	}
+	if charcolor, ok := data.OptString("charcolor"); ok {
+		params["charcolor"] = charcolor
+	}
+	if font, ok := data.OptString("font"); ok {
+		params["font"] = font
+	}
+	if margin, ok := data.OptBool("margin"); ok {
+		params["margin"] = fmt.Sprintf("%t", margin)
+	}
+	if asterisk, ok := data.OptString("asterisk"); ok {
+		params["asterisk"] = asterisk
+	}
+	if anim, ok := data.OptBool("animated"); ok {
+		animated = anim
 	}
 
-	// If image attachment is provided, use it as custom character (overrides user)
-	if imageAttachmentID != "" {
-		if resolved := i.ApplicationCommandData().Resolved; resolved != nil {
-			if attachment, ok := resolved.Attachments[imageAttachmentID]; ok {
-				params["character"] = "custom"
-				params["expression"] = attachment.URL
-			}
-		}
+	// Handle image attachment - overrides user avatar
+	if attachment, ok := data.OptAttachment("image"); ok {
+		params["character"] = "custom"
+		params["expression"] = attachment.URL
+	}
+
+	// Handle user avatar
+	if user, ok := data.OptUser("user"); ok {
+		params["character"] = "custom"
+		params["expression"] = user.EffectiveAvatarURL()
 	}
 
 	// Build URL with proper query parameters
@@ -101,7 +95,7 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	// Process color syntax: [color]text[/] → color=X text text=join color=white
-	processedText := processUndertextColors(messageText)
+	processedText := processUndertextColors(message)
 
 	// Start with base URL and text parameter
 	encodedText := url.QueryEscape(processedText)
@@ -119,25 +113,18 @@ func handleUndertext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	generatedURL := sb.String()
 
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.MediaGallery{
-							Items: []discordgo.MediaGalleryItem{
-								{
-									Media: discordgo.UnfurledMediaItem{URL: generatedURL},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	})
+	// Build response with V2 components and MediaGallery
+	builder := discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewMediaGallery(
+					discord.MediaGalleryItem{Media: discord.UnfurledMediaItem{URL: generatedURL}},
+				),
+			),
+		)
+
+	err := event.CreateMessage(builder.Build())
 	if err != nil {
 		sys.LogUndertext(sys.MsgUndertextRespondError, err)
 	}

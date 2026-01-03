@@ -1,100 +1,133 @@
 package home
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/bwmarrin/discordgo"
-
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/proc"
 	"github.com/leeineian/minder/sys"
 )
 
-func handleDebugRoleColor(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	if len(options) == 0 {
+func handleDebugRoleColor(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData, subCmd string) {
+	guildID := event.GuildID()
+	if guildID == nil {
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ This command can only be used in a server."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
 		return
 	}
 
-	subCommand := options[0]
-
-	switch subCommand.Name {
+	switch subCmd {
 	case "set":
-		handleRoleColorSet(s, i, subCommand.Options)
+		roleID := data.Snowflake("role")
+		err := sys.SetGuildRandomColorRole(context.Background(), *guildID, roleID)
+		if err != nil {
+			sys.LogDebug(sys.MsgDebugRoleColorUpdateFail, err)
+			event.CreateMessage(discord.NewMessageCreateBuilder().
+				SetIsComponentsV2(true).
+				AddComponents(
+					discord.NewContainer(
+						discord.NewTextDisplay("❌ Failed to set role color configuration."),
+					),
+				).
+				SetEphemeral(true).
+				Build())
+			return
+		}
+
+		// Start rotation daemon for this guild
+		proc.StartRotationForGuild(event.Client(), *guildID, roleID)
+
+		// Trigger immediate color update
+		proc.UpdateRoleColor(event.Client(), *guildID, roleID)
+
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay(fmt.Sprintf("✅ Role <@&%s> will now have random colors!", roleID)),
+				),
+			).
+			SetEphemeral(true).
+			Build())
+
 	case "reset":
-		handleRoleColorReset(s, i)
+		err := sys.SetGuildRandomColorRole(context.Background(), *guildID, 0)
+		if err != nil {
+			sys.LogDebug(sys.MsgDebugRoleColorResetFail, err)
+			event.CreateMessage(discord.NewMessageCreateBuilder().
+				SetIsComponentsV2(true).
+				AddComponents(
+					discord.NewContainer(
+						discord.NewTextDisplay("❌ Failed to reset role color configuration."),
+					),
+				).
+				SetEphemeral(true).
+				Build())
+			return
+		}
+
+		// Stop rotation daemon
+		proc.StopRotationForGuild(*guildID)
+
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("✅ Role color rotation has been disabled."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
+
 	case "refresh":
-		handleRoleColorRefresh(s, i)
-	default:
-		roleColorRespond(s, i, "Unknown subcommand")
+		// Get the configured role
+		roleID, err := sys.GetGuildRandomColorRole(context.Background(), *guildID)
+		if err != nil || roleID == 0 {
+			event.CreateMessage(discord.NewMessageCreateBuilder().
+				SetIsComponentsV2(true).
+				AddComponents(
+					discord.NewContainer(
+						discord.NewTextDisplay("❌ No role is configured for color rotation."),
+					),
+				).
+				SetEphemeral(true).
+				Build())
+			return
+		}
+
+		// Actually update the role color
+		err = proc.UpdateRoleColor(event.Client(), *guildID, roleID)
+		if err != nil {
+			sys.LogDebug("Failed to refresh role color: %v", err)
+			event.CreateMessage(discord.NewMessageCreateBuilder().
+				SetIsComponentsV2(true).
+				AddComponents(
+					discord.NewContainer(
+						discord.NewTextDisplay("❌ Failed to refresh role color."),
+					),
+				).
+				SetEphemeral(true).
+				Build())
+			return
+		}
+
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("🎨 Role color has been refreshed!"),
+				),
+			).
+			SetEphemeral(true).
+			Build())
 	}
-}
-
-func roleColorRespond(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: content},
-					},
-				},
-			},
-			Flags: discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsEphemeral,
-		},
-	})
-}
-
-func handleRoleColorSet(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	role := options[0].RoleValue(s, i.GuildID)
-	if role == nil {
-		roleColorRespond(s, i, "Invalid role provided.")
-		return
-	}
-
-	// Update DB
-	err := sys.SetGuildRandomColorRole(i.GuildID, role.ID)
-
-	if err != nil {
-		sys.LogError(sys.MsgDebugRoleColorUpdateFail, err)
-		roleColorRespond(s, i, "❌ Failed to save configuration.")
-		return
-	}
-
-	// Start Rotator
-	proc.StartRotationForGuild(s, i.GuildID, role.ID)
-
-	// Trigger immediate update
-	proc.UpdateRoleColor(s, i.GuildID, role.ID)
-
-	roleColorRespond(s, i, fmt.Sprintf("✅ **Random Color Role Set**\nTarget Role: <@&%s>\n\nThe color will now update periodically.", role.ID))
-}
-
-func handleRoleColorReset(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	err := sys.SetGuildRandomColorRole(i.GuildID, "")
-	if err != nil {
-		sys.LogError(sys.MsgDebugRoleColorResetFail, err)
-		roleColorRespond(s, i, "❌ Failed to reset configuration.")
-		return
-	}
-
-	proc.StopRotationForGuild(i.GuildID)
-
-	roleColorRespond(s, i, "✅ **Configuration Reset**\nRandom role color disabled.")
-}
-
-func handleRoleColorRefresh(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Fetch role ID from DB
-	roleID, err := sys.GetGuildRandomColorRole(i.GuildID)
-	if err != nil || roleID == "" {
-		roleColorRespond(s, i, "❌ No role configured. Use `/debug rolecolor set` first.")
-		return
-	}
-
-	err = proc.UpdateRoleColor(s, i.GuildID, roleID)
-	if err != nil {
-		roleColorRespond(s, i, "❌ Failed to refresh role color.")
-		return
-	}
-
-	roleColorRespond(s, i, "🎨 Role color has been refreshed!")
 }

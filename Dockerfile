@@ -1,5 +1,5 @@
 # Build Stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.5-alpine AS builder
 
 # Install build dependencies for CGO (required for SQLite)
 RUN apk add --no-cache build-base
@@ -15,7 +15,8 @@ COPY . .
 
 # Build the application
 # CGO_ENABLED=1 is required for github.com/mattn/go-sqlite3
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o minder main.go
+# Using -ldflags="-s -w" to reduce binary size
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -a -installsuffix cgo -o minder main.go
 
 # Run Stage
 FROM alpine:latest
@@ -32,9 +33,6 @@ COPY --from=builder /app/minder .
 
 # Create directory for persistent data (SQLite)
 RUN mkdir -p /app/data
-
-# Default environment variables
-ENV DATABASE_PATH=/app/data/minder.db
 
 # Run the bot
 ENTRYPOINT ["./minder"]

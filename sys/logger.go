@@ -1,24 +1,28 @@
 package sys
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"log"
+	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fatih/color"
 )
 
 var (
+	// Style definitions
 	infoColor          = color.New(color.FgHiBlack)
 	warnColor          = color.New(color.FgHiYellow)
 	errorColor         = color.New(color.FgHiRed)
-	fatalColor         = color.New(color.FgHiRed)
+	fatalColor         = color.New(color.FgHiRed, color.Bold)
 	databaseColor      = color.New(color.FgHiBlack)
 	reminderColor      = color.New(color.FgMagenta)
 	statusRotatorColor = color.New(color.FgGreen)
@@ -28,138 +32,215 @@ var (
 	undertextColor     = color.New(color.FgRed)
 	eightballColor     = color.New(color.FgHiBlue)
 	debugColor         = color.New(color.FgHiGreen)
-	IsSilent           = false
+
+	IsSilent = false
 
 	errorMapCache map[string]string
 	errorMapOnce  sync.Once
+
+	// Global default logger
+	Logger *slog.Logger
 )
+
+func init() {
+	// Initialize with a default handler immediately
+	InitLogger(false)
+}
+
+// InitLogger initializes the global structured logger
+func InitLogger(silent bool) {
+	IsSilent = silent
+	level := slog.LevelInfo
+	if strings.ToLower(os.Getenv("DEBUG")) == "true" {
+		level = slog.LevelDebug
+	}
+
+	handler := NewBotLogHandler(os.Stdout, &BotLogHandlerOptions{
+		Silent: IsSilent,
+		Level:  level,
+	})
+	Logger = slog.New(handler)
+	slog.SetDefault(Logger)
+}
 
 func SetSilentMode(silent bool) {
 	IsSilent = silent
+	InitLogger(silent)
 }
 
-// LogInfo logs an informational message in green
+// --- Log Functions (Signatures preserved for compatibility) ---
+
 func LogInfo(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(infoColor.Sprintf("[INFO] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...))
 }
 
-// LogWarn logs a warning message in yellow
 func LogWarn(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(warnColor.Sprintf("[WARN] %s", msg))
+	slog.Warn(fmt.Sprintf(format, v...))
 }
 
-// LogError logs an error message in red
 func LogError(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(errorColor.Sprintf("[ERROR] %s", msg))
+	slog.Error(fmt.Sprintf(format, v...))
 }
 
-// LogFatal logs a fatal error message in bold red and exits
 func LogFatal(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
-	log.Println(fatalColor.Sprintf("[FATAL] %s", msg))
+	slog.Log(context.Background(), slog.LevelError+4, msg) // Custom Fatal level
 	os.Exit(1)
 }
 
-// LogDatabase logs a database-related message in cyan
 func LogDatabase(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(databaseColor.Sprintf("[DATABASE] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "database"))
 }
 
-// LogReminder logs a reminder scheduler message in magenta
 func LogReminder(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(reminderColor.Sprintf("[REMINDER SCHEDULER] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "reminder"))
 }
 
-// LogStatusRotator logs a status rotator message in hi-green
 func LogStatusRotator(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(statusRotatorColor.Sprintf("[STATUS ROTATOR] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "status_rotator"))
 }
 
-// LogRoleColorRotator logs a role color rotator message in hi-yellow
 func LogRoleColorRotator(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(roleRotatorColor.Sprintf("[ROLE COLOR ROTATOR] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role_color"))
 }
 
-// LogLoopRotator logs a loop rotator message in hi-magenta
 func LogLoopRotator(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(loopRotatorColor.Sprintf("[LOOP ROTATOR] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop_rotator"))
 }
 
-// LogCustom logs a message with a custom tag and color
 func LogCustom(tag string, tagColor *color.Color, format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(tagColor.Sprintf("[%s] %s", tag, msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", tag))
 }
 
-// LogCat logs a cat command message in hi-cyan
 func LogCat(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(catColor.Sprintf("[CAT] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "cat"))
 }
 
-// LogUndertext logs an undertext command message in red
 func LogUndertext(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(undertextColor.Sprintf("[UNDERTEXT] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "undertext"))
 }
 
-// LogEightball logs an eightball command message in hi-blue
 func LogEightball(format string, v ...interface{}) {
-	if IsSilent {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(eightballColor.Sprintf("[8BALL] %s", msg))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "8ball"))
 }
 
-// LogDebug logs a debug message in hi-green
 func LogDebug(format string, v ...interface{}) {
-	if IsSilent {
-		return
+	slog.Debug(fmt.Sprintf(format, v...))
+}
+
+// --- Custom Slog Handler ---
+
+type BotLogHandlerOptions struct {
+	Silent bool
+	Level  slog.Leveler
+}
+
+type BotLogHandler struct {
+	w    io.Writer
+	opts *BotLogHandlerOptions
+	mu   *sync.Mutex
+}
+
+func NewBotLogHandler(w io.Writer, opts *BotLogHandlerOptions) *BotLogHandler {
+	if opts == nil {
+		opts = &BotLogHandlerOptions{Level: slog.LevelInfo}
 	}
-	msg := fmt.Sprintf(format, v...)
-	log.Println(debugColor.Sprintf("[DEBUG] %s", msg))
+	return &BotLogHandler{
+		w:    w,
+		opts: opts,
+		mu:   &sync.Mutex{},
+	}
+}
+
+func (h *BotLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	if h.opts.Silent {
+		return false
+	}
+	return level >= h.opts.Level.Level()
+}
+
+func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.opts.Silent {
+		return nil
+	}
+
+	timeStr := time.Now().Format("15:04:05")
+	var levelStr string
+	var levelColor *color.Color
+
+	switch {
+	case r.Level >= slog.LevelError+4: // Fatal
+		levelStr = "FATAL"
+		levelColor = fatalColor
+	case r.Level >= slog.LevelError:
+		levelStr = "ERROR"
+		levelColor = errorColor
+	case r.Level >= slog.LevelWarn:
+		levelStr = "WARN"
+		levelColor = warnColor
+	case r.Level >= slog.LevelInfo:
+		levelStr = "INFO"
+		levelColor = infoColor
+	default:
+		levelStr = "DEBUG"
+		levelColor = debugColor
+	}
+
+	// Extract component if present
+	component := ""
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "component" {
+			component = strings.ToUpper(a.Value.String())
+			return false
+		}
+		return true
+	})
+
+	// Format Component Tag
+	formattedComponent := ""
+	if component != "" {
+		compColor := getComponentColor(component)
+		formattedComponent = compColor.Sprintf("[%s] ", component)
+	}
+
+	// Output: 15:04:05 [INFO] [COMPONENT] Message
+	fmt.Fprintf(h.w, "%s %s %s%s\n",
+		color.New(color.FgHiBlack).Sprint(timeStr),
+		levelColor.Sprintf("[%s]", levelStr),
+		formattedComponent,
+		r.Message,
+	)
+
+	return nil
+}
+
+func (h *BotLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *BotLogHandler) WithGroup(name string) slog.Handler       { return h }
+
+func getComponentColor(name string) *color.Color {
+	switch name {
+	case "DATABASE":
+		return databaseColor
+	case "REMINDER":
+		return reminderColor
+	case "STATUS_ROTATOR":
+		return statusRotatorColor
+	case "ROLE_COLOR":
+		return roleRotatorColor
+	case "LOOP_ROTATOR":
+		return loopRotatorColor
+	case "CAT":
+		return catColor
+	case "UNDERTEXT":
+		return undertextColor
+	case "8BALL":
+		return eightballColor
+	default:
+		return color.New(color.FgCyan)
+	}
 }
 
 // @src

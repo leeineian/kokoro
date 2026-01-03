@@ -3,10 +3,14 @@ package home
 import (
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/omit"
 	"github.com/leeineian/minder/sys"
 )
 
@@ -67,25 +71,80 @@ func debugTruncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
+func handleDebugAutocomplete(event *events.AutocompleteInteractionCreate) {
+	data := event.Data
+
+	var choices []discord.AutocompleteChoice
+
+	// Find focused option and detect subcommand context
+	focusedName := ""
+	focusedValue := ""
+	subCommand := ""
+
+	// Check for subcommand in options
+	for _, opt := range data.Options {
+		if opt.Type == discord.ApplicationCommandOptionTypeSubCommand {
+			subCommand = opt.Name
+		}
+		if opt.Focused {
+			focusedName = opt.Name
+			if opt.Value != nil {
+				focusedValue = strings.Trim(string(opt.Value), `"`)
+			}
+		}
+	}
+
+	switch focusedName {
+	case "key":
+		// Autocomplete for error constants
+		errors := sys.GetUserErrors()
+		keys := make([]string, 0, len(errors))
+		for k := range errors {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			if focusedValue == "" || strings.Contains(strings.ToLower(k), strings.ToLower(focusedValue)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  debugTruncate(k+": "+errors[k], 100),
+					Value: k,
+				})
+				if len(choices) >= 25 {
+					break
+				}
+			}
+		}
+
+	case "target":
+		// Use the advanced loop autocomplete with status indicators
+		debugWebhookLooperAutocomplete(event, subCommand, focusedValue)
+		return
+	}
+
+	event.AutocompleteResult(choices)
+}
+
 func init() {
-	sys.RegisterCommand(&discordgo.ApplicationCommand{
+	adminPerm := discord.PermissionAdministrator
+
+	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:                     "debug",
 		Description:              "Debug and Stress Testing Utilities (Admin Only)",
-		DMPermission:             new(bool), // false
-		DefaultMemberPermissions: func() *int64 { i := int64(discordgo.PermissionAdministrator); return &i }(),
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
+		DefaultMemberPermissions: omit.New(&adminPerm),
+		Contexts: []discord.InteractionContextType{
+			discord.InteractionContextTypeGuild,
+		},
+		Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "stats",
 				Description: "Debug statistics",
-				Options: []*discordgo.ApplicationCommandOption{
+				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "summary",
 						Description: "Display detailed system and application statistics",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:        discordgo.ApplicationCommandOptionBoolean,
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionBool{
 								Name:        "ephemeral",
 								Description: "Whether the message should be ephemeral (default: true)",
 								Required:    false,
@@ -93,12 +152,10 @@ func init() {
 						},
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "ping",
 						Description: "Check bot latency",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:        discordgo.ApplicationCommandOptionBoolean,
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionBool{
 								Name:        "ephemeral",
 								Description: "Whether the message should be ephemeral (default: true)",
 								Required:    false,
@@ -107,37 +164,31 @@ func init() {
 					},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "echo",
 				Description: "Echo a message back to you",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
 						Name:        "message",
 						Description: "Message to echo",
 						Required:    true,
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionBoolean,
+					discord.ApplicationCommandOptionBool{
 						Name:        "ephemeral",
 						Description: "Whether the message should be ephemeral (default: true)",
 						Required:    false,
 					},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "rolecolor",
 				Description: "Random Role Color Utilities",
-				Options: []*discordgo.ApplicationCommandOption{
+				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "set",
 						Description: "Set the role to randomly color",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:        discordgo.ApplicationCommandOptionRole,
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionRole{
 								Name:        "role",
 								Description: "The role to color",
 								Required:    true,
@@ -145,77 +196,64 @@ func init() {
 						},
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "reset",
 						Description: "Reset configuration",
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "refresh",
 						Description: "Force an immediate color change",
 					},
 				},
 			},
-			{
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "status",
 				Description: "Configure bot status visibility",
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
-				Options: []*discordgo.ApplicationCommandOption{
-					{
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionBool{
 						Name:        "visible",
 						Description: "Enable or disable status rotation",
-						Type:        discordgo.ApplicationCommandOptionBoolean,
 						Required:    true,
 					},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "loop",
 				Description: "Webhook stress testing and looping utilities",
-				Options: []*discordgo.ApplicationCommandOption{
+				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "list",
 						Description: "List configured loop channels",
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "set",
 						Description: "Configure a channel or category for looping",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:        discordgo.ApplicationCommandOptionChannel,
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
 								Description: "Text channel or category to configure",
 								Required:    true,
 							},
-							{
-								Type:        discordgo.ApplicationCommandOptionString,
+							discord.ApplicationCommandOptionString{
 								Name:        "active_name",
 								Description: "Name when loop is active",
 								Required:    false,
 							},
-							{
-								Type:        discordgo.ApplicationCommandOptionString,
+							discord.ApplicationCommandOptionString{
 								Name:        "inactive_name",
 								Description: "Name when loop is inactive",
 								Required:    false,
 							},
-							{
-								Type:        discordgo.ApplicationCommandOptionString,
+							discord.ApplicationCommandOptionString{
 								Name:        "message",
 								Description: "Message to send (default: @everyone)",
 								Required:    false,
 							},
-							{
-								Type:        discordgo.ApplicationCommandOptionString,
+							discord.ApplicationCommandOptionString{
 								Name:        "webhook_author",
 								Description: "Webhook display name (default: LoopHook)",
 								Required:    false,
 							},
-							{
-								Type:        discordgo.ApplicationCommandOptionString,
+							discord.ApplicationCommandOptionString{
 								Name:        "webhook_avatar",
 								Description: "Webhook avatar URL",
 								Required:    false,
@@ -223,19 +261,16 @@ func init() {
 						},
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "start",
 						Description: "Start webhook loop(s)",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:         discordgo.ApplicationCommandOptionString,
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionString{
 								Name:         "target",
 								Description:  "Target to start (all or specific channel)",
 								Required:     false,
 								Autocomplete: true,
 							},
-							{
-								Type:        discordgo.ApplicationCommandOptionString,
+							discord.ApplicationCommandOptionString{
 								Name:        "interval",
 								Description: "Duration to run (e.g., 30s, 5m, 1h). Leave empty for random mode.",
 								Required:    false,
@@ -243,12 +278,10 @@ func init() {
 						},
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "stop",
 						Description: "Stop webhook loop(s)",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:         discordgo.ApplicationCommandOptionString,
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionString{
 								Name:         "target",
 								Description:  "Target to stop (all or specific channel)",
 								Required:     false,
@@ -257,30 +290,24 @@ func init() {
 						},
 					},
 					{
-						Type:        discordgo.ApplicationCommandOptionSubCommand,
 						Name:        "purge",
 						Description: "Purge all webhooks from a category",
-						Options: []*discordgo.ApplicationCommandOption{
-							{
-								Type:        discordgo.ApplicationCommandOptionChannel,
-								Name:        "category",
-								Description: "Category to purge webhooks from",
-								Required:    true,
-								ChannelTypes: []discordgo.ChannelType{
-									discordgo.ChannelTypeGuildCategory,
-								},
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:         "category",
+								Description:  "Category to purge webhooks from",
+								Required:     true,
+								ChannelTypes: []discord.ChannelType{discord.ChannelTypeGuildCategory},
 							},
 						},
 					},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "test-error",
 				Description: "Preview user-facing error constants",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:         discordgo.ApplicationCommandOptionString,
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
 						Name:         "key",
 						Description:  "The error constant to preview",
 						Required:     true,
@@ -297,34 +324,48 @@ func init() {
 	sys.RegisterAutocompleteHandler("debug", handleDebugAutocomplete)
 }
 
-func handleDebugCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	options := i.ApplicationCommandData().Options
-	if len(options) == 0 {
+func handleDebugCommand(event *events.ApplicationCommandInteractionCreate) {
+	data := event.SlashCommandInteractionData()
+
+	// Check for subcommand group first
+	if data.SubCommandGroupName != nil {
+		group := *data.SubCommandGroupName
+		switch group {
+		case "stats":
+			if data.SubCommandName != nil {
+				switch *data.SubCommandName {
+				case "summary":
+					handleDebugStats(event, data)
+				case "ping":
+					handleDebugPing(event, data)
+				}
+			}
+		case "rolecolor":
+			if data.SubCommandName != nil {
+				handleDebugRoleColor(event, data, *data.SubCommandName)
+			}
+		case "loop":
+			if data.SubCommandName != nil {
+				handleDebugWebhookLooper(event, data, *data.SubCommandName)
+			}
+		}
 		return
 	}
 
-	switch options[0].Name {
-	case "stats":
-		subCommandGroup := options[0]
-		if len(subCommandGroup.Options) > 0 {
-			switch subCommandGroup.Options[0].Name {
-			case "summary":
-				handleDebugStats(s, i, subCommandGroup.Options[0].Options)
-			case "ping":
-				handleDebugPing(s, i, subCommandGroup.Options[0].Options)
-			}
-		}
+	// Handle regular subcommands
+	if data.SubCommandName == nil {
+		return
+	}
+	subCmd := *data.SubCommandName
+
+	switch subCmd {
 	case "echo":
-		handleDebugEcho(s, i, options[0].Options)
-	case "rolecolor":
-		handleDebugRoleColor(s, i, options[0].Options)
+		handleDebugEcho(event, data)
 	case "status":
-		handleDebugStatus(s, i, options[0].Options)
-	case "loop":
-		handleDebugWebhookLooper(s, i, options[0].Options)
+		handleDebugStatus(event, data)
 	case "test-error":
-		handleTestError(s, i, options[0].Options)
+		handleTestError(event, data)
 	default:
-		log.Printf("Unknown debug subcommand: %s", options[0].Name)
+		log.Printf("Unknown debug subcommand: %s", subCmd)
 	}
 }

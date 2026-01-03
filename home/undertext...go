@@ -3,37 +3,34 @@ package home
 import (
 	"strings"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 )
 
 func init() {
-	sys.RegisterCommand(&discordgo.ApplicationCommand{
+	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:        "undertext",
 		Description: "Generate an Undertale/Deltarune style text box image",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+		Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionString{
 				Name:        "message",
 				Description: "The text to display in the box",
 				Required:    true,
 			},
-			{
-				Type:         discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:         "character",
 				Description:  "Character to display (e.g. sans, toriel, papyrus)",
 				Autocomplete: true,
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "expression",
 				Description: "Character expression (e.g. wink, blush)",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "box",
 				Description: "Box style",
-				Choices: []*discordgo.ApplicationCommandOptionChoice{
+				Choices: []discord.ApplicationCommandOptionChoiceString{
 					{Name: "Undertale", Value: "undertale"},
 					{Name: "Underswap", Value: "underswap"},
 					{Name: "Underfell", Value: "underfell"},
@@ -41,67 +38,56 @@ func init() {
 					{Name: "Derp", Value: "derp"},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "mode",
 				Description: "Text mode",
-				Choices: []*discordgo.ApplicationCommandOptionChoice{
+				Choices: []discord.ApplicationCommandOptionChoiceString{
 					{Name: "Normal", Value: "normal"},
 					{Name: "Dark World (Deltarune)", Value: "darkworld"},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
+			discord.ApplicationCommandOptionInt{
 				Name:        "size",
 				Description: "Box size (1-3)",
-				Choices: []*discordgo.ApplicationCommandOptionChoice{
+				Choices: []discord.ApplicationCommandOptionChoiceInt{
 					{Name: "Small", Value: 1},
 					{Name: "Medium", Value: 2},
 					{Name: "Large", Value: 3},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "custom_url",
 				Description: "URL for custom character sprite (set character to 'Custom URL')",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "boxcolor",
 				Description: "Color of the box outline (HEX or name)",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "charcolor",
 				Description: "Color of the character sprite (HEX)",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "font",
 				Description: "Font name",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionBoolean,
+			discord.ApplicationCommandOptionBool{
 				Name:        "margin",
 				Description: "Whether to have a black margin around the box",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
+			discord.ApplicationCommandOptionString{
 				Name:        "asterisk",
 				Description: "Asterisk setting (true/false/color)",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionBoolean,
+			discord.ApplicationCommandOptionBool{
 				Name:        "animated",
 				Description: "Generate animated GIF instead of static image",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionAttachment,
+			discord.ApplicationCommandOptionAttachment{
 				Name:        "image",
 				Description: "Custom character image (overrides character selection)",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionUser,
+			discord.ApplicationCommandOptionUser{
 				Name:        "user",
 				Description: "Use a user's avatar as the character",
 			},
@@ -137,29 +123,32 @@ var undertextCharacters = []struct {
 	{"Spamton (Deltarune)", "spamton"},
 }
 
-func undertextAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	data := i.ApplicationCommandData()
+func undertextAutocomplete(event *events.AutocompleteInteractionCreate) {
+	data := event.Data
 
 	// Find the focused option
-	var focusedOption *discordgo.ApplicationCommandInteractionDataOption
+	var focusedValue string
+	var focusedName string
 	for _, opt := range data.Options {
 		if opt.Focused {
-			focusedOption = opt
+			focusedName = opt.Name
+			if opt.Value != nil {
+				focusedValue = strings.Trim(string(opt.Value), `"`)
+			}
 			break
 		}
 	}
 
-	if focusedOption == nil || focusedOption.Name != "character" {
+	if focusedName != "character" {
 		return
 	}
 
-	input := focusedOption.StringValue()
-	var choices []*discordgo.ApplicationCommandOptionChoice
+	var choices []discord.AutocompleteChoice
 
 	// Filter characters based on input
 	for _, char := range undertextCharacters {
-		if input == "" || containsIgnoreCase(char.Name, input) || containsIgnoreCase(char.Value, input) {
-			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+		if focusedValue == "" || containsIgnoreCase(char.Name, focusedValue) || containsIgnoreCase(char.Value, focusedValue) {
+			choices = append(choices, discord.AutocompleteChoiceString{
 				Name:  char.Name,
 				Value: char.Value,
 			})
@@ -169,12 +158,7 @@ func undertextAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate)
 		}
 	}
 
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
-		Data: &discordgo.InteractionResponseData{
-			Choices: choices,
-		},
-	})
+	event.AutocompleteResult(choices)
 }
 
 func containsIgnoreCase(s, substr string) bool {

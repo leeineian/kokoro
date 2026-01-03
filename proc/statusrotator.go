@@ -1,17 +1,20 @@
 package proc
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/leeineian/minder/sys"
 )
 
 func init() {
-	sys.OnSessionReady(func(s *discordgo.Session) {
-		sys.RegisterDaemon(sys.LogStatusRotator, func() { StartStatusRotator(s) })
+	sys.OnClientReady(func(client *bot.Client) {
+		sys.RegisterDaemon(sys.LogStatusRotator, func() { StartStatusRotator(client) })
 	})
 }
 
@@ -21,14 +24,14 @@ func GetRotationInterval() time.Duration {
 
 var (
 	StartTime       = time.Now()
-	statusList      []func(*discordgo.Session) string
+	statusList      []func(*bot.Client) string
 	statusStopChan  chan struct{}
 	lastStatusIdx   int = -1
 	configKeyStatus     = "status_visible"
 )
 
-func StartStatusRotator(s *discordgo.Session) {
-	statusList = []func(*discordgo.Session) string{
+func StartStatusRotator(client *bot.Client) {
+	statusList = []func(*bot.Client) string{
 		GetRemindersStatus,
 		GetColorStatus,
 		GetUptimeStatus,
@@ -44,7 +47,7 @@ func StartStatusRotator(s *discordgo.Session) {
 	go func() {
 		for {
 			next := GetRotationInterval()
-			updateStatus(s, next)
+			updateStatus(client, next)
 			select {
 			case <-time.After(next):
 			case <-statusStopChan:
@@ -54,20 +57,18 @@ func StartStatusRotator(s *discordgo.Session) {
 	}()
 }
 
-func TriggerStatusUpdate(s *discordgo.Session) {
-	updateStatus(s, 0)
+func TriggerStatusUpdate(client *bot.Client) {
+	updateStatus(client, 0)
 }
 
-func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
-	if s == nil || s.State == nil || s.State.User == nil {
+func updateStatus(client *bot.Client, nextInterval time.Duration) {
+	if client == nil {
 		return
 	}
 
-	visibleStr, err := sys.GetBotConfig(configKeyStatus)
+	visibleStr, err := sys.GetBotConfig(context.Background(), configKeyStatus)
 	if err != nil || visibleStr == "false" {
-		s.UpdateStatusComplex(discordgo.UpdateStatusData{
-			Status: "online",
-		})
+		client.SetPresence(context.Background(), gateway.WithOnlineStatus(discord.OnlineStatusOnline))
 		return
 	}
 
@@ -78,21 +79,15 @@ func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
 	lastStatusIdx = idx
 
 	gen := statusList[idx]
-	text := gen(s)
+	text := gen(client)
 	if text == "" {
-		text = GetUptimeStatus(s)
+		text = GetUptimeStatus(client)
 	}
 
-	activity := &discordgo.Activity{
-		Name: text,
-		Type: discordgo.ActivityTypeStreaming,
-		URL:  sys.GlobalConfig.StreamingURL,
-	}
-
-	err = s.UpdateStatusComplex(discordgo.UpdateStatusData{
-		Status:     "online",
-		Activities: []*discordgo.Activity{activity},
-	})
+	err = client.SetPresence(context.Background(),
+		gateway.WithOnlineStatus(discord.OnlineStatusOnline),
+		gateway.WithStreamingActivity(text, sys.GlobalConfig.StreamingURL),
+	)
 
 	if err != nil {
 		sys.LogStatusRotator(sys.MsgStatusUpdateFail, err)
@@ -103,42 +98,44 @@ func updateStatus(s *discordgo.Session, nextInterval time.Duration) {
 			sys.LogStatusRotator(sys.MsgStatusRotatedNoInterval, text)
 		}
 	}
-
 }
 
 // Generators
 
-func GetRemindersStatus(s *discordgo.Session) string {
-	count, _ := sys.GetRemindersCount()
+func GetRemindersStatus(client *bot.Client) string {
+	count, _ := sys.GetRemindersCount(context.Background())
 	if count == 0 {
 		return ""
 	}
 	return fmt.Sprintf("Reminder: %d", count)
 }
 
-func GetColorStatus(s *discordgo.Session) string {
+func GetColorStatus(client *bot.Client) string {
 	nextUpdate, guildID, found := GetNextUpdate()
 	if !found {
 		return ""
 	}
-	currentColor := GetCurrentColor(guildID)
+	currentColor := GetCurrentColor(client, guildID)
+	if currentColor == "" {
+		return ""
+	}
 	diff := time.Until(nextUpdate)
 	return fmt.Sprintf("Color: %s in %dm", currentColor, int(diff.Minutes()))
 }
 
-func GetUptimeStatus(s *discordgo.Session) string {
+func GetUptimeStatus(client *bot.Client) string {
 	uptime := time.Since(StartTime)
 	return fmt.Sprintf("Uptime: %dh %dm", int(uptime.Hours()), int(uptime.Minutes())%60)
 }
 
-func GetLatencyStatus(s *discordgo.Session) string {
-	ping := s.HeartbeatLatency()
+func GetLatencyStatus(client *bot.Client) string {
+	ping := client.Gateway.Latency()
 	if ping == 0 {
 		return ""
 	}
 	return fmt.Sprintf("Ping: %dms", ping.Milliseconds())
 }
 
-func GetTimeStatus(s *discordgo.Session) string {
+func GetTimeStatus(client *bot.Client) string {
 	return "Time: " + time.Now().UTC().Format("15:04") + " UTC"
 }

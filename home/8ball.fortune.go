@@ -2,63 +2,72 @@ package home
 
 import (
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/http"
+	"time"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/leeineian/minder/sys"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 )
 
-func handleEightballFortune(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	question := ""
-	for _, opt := range options {
-		if opt.Name == "question" {
-			question = opt.StringValue()
-		}
-	}
+const eightBallApiURL = "https://www.eightballapi.com/api"
 
-	resp, err := eightballHttpClient.Get("https://eightballapi.com/api")
+type EightBallResponse struct {
+	Reading string `json:"reading"`
+	Locale  string `json:"locale"`
+}
+
+func handle8BallFortune(event *events.ApplicationCommandInteractionCreate) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(eightBallApiURL)
 	if err != nil {
-		sys.LogEightball(sys.MsgEightballFailedToFetchFortune, err)
-		eightballRespondErrorSync(s, i, sys.ErrEightballFailedToFetchFortune)
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ Failed to fetch fortune."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		sys.LogEightball(sys.MsgEightballFortuneAPIStatusError, resp.StatusCode)
-		eightballRespondErrorSync(s, i, sys.ErrEightballServiceUnavailable)
-		return
-	}
-
-	var data struct {
-		Reading string `json:"reading"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		sys.LogEightball(sys.MsgEightballFailedToDecodeFortune, err)
-		eightballRespondErrorSync(s, i, sys.ErrEightballFailedToDecode)
-		return
-	}
-
-	content := data.Reading
-	if question != "" {
-		content = fmt.Sprintf("**Question:** %s\n**Fortune:** %s", question, data.Reading)
-	}
-
-	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: content},
-					},
-				},
-			},
-		},
-	})
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		sys.LogEightball(sys.MsgEightballFailedToSendError, err)
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ Failed to read response."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
+		return
 	}
+
+	var data EightBallResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("❌ Failed to parse fortune."),
+				),
+			).
+			SetEphemeral(true).
+			Build())
+		return
+	}
+
+	event.CreateMessage(discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay("🎱 " + data.Reading),
+			),
+		).
+		Build())
 }

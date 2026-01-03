@@ -5,7 +5,5 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      - DATABASE_PATH=/app/data/minder.db
     volumes:
       - ./data:/app/data

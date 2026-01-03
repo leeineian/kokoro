@@ -1,95 +1,81 @@
 package home
 
 import (
-	"net/http"
-	"time"
-
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 )
 
 // Cat command shared utilities
-const catHttpClientTimeout = 10 * time.Second
-
-var catHttpClient = &http.Client{
-	Timeout: catHttpClientTimeout,
+func getCatColorChoices() []discord.ApplicationCommandOptionChoiceString {
+	return []discord.ApplicationCommandOptionChoiceString{
+		{Name: "White", Value: "ffffff"},
+		{Name: "Black", Value: "000000"},
+		{Name: "Red", Value: "ff0000"},
+		{Name: "Orange", Value: "ff8000"},
+		{Name: "Yellow", Value: "ffff00"},
+		{Name: "Green", Value: "00ff00"},
+		{Name: "Cyan", Value: "00ffff"},
+		{Name: "Blue", Value: "0000ff"},
+		{Name: "Purple", Value: "8000ff"},
+		{Name: "Pink", Value: "ff00ff"},
+	}
 }
 
-func catRespondErrorSync(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
-	if s == nil || i == nil || i.Interaction == nil {
-		sys.LogCat(sys.MsgCatCannotSendErrorResponse)
-		return
-	}
-
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: msg},
-					},
-				},
-			},
-		},
-	})
-	if err != nil {
-		sys.LogCat(sys.MsgCatFailedToSendErrorResponse, err)
+func getCatExpressionChoices() []discord.ApplicationCommandOptionChoiceString {
+	return []discord.ApplicationCommandOptionChoiceString{
+		{Name: "Happy", Value: "happy"},
+		{Name: "Sad", Value: "sad"},
+		{Name: "Angry", Value: "angry"},
+		{Name: "Surprised", Value: "surprised"},
+		{Name: "Dead", Value: "dead"},
+		{Name: "Winking", Value: "winking"},
 	}
 }
 
 func init() {
-	sys.RegisterCommand(&discordgo.ApplicationCommand{
+	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:        "cat",
 		Description: "Cat related commands",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+		Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "fact",
 				Description: "Get a random cat fact",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "image",
 				Description: "Get a random cat image",
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "say",
 				Description: "Cowsay but cat",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
 						Name:        "message",
 						Description: "The message for the cat to say",
 						Required:    true,
-						MaxLength:   2000,
-						MinLength:   func() *int { i := 1; return &i }(),
+						MaxLength:   intPtr(2000),
+						MinLength:   intPtr(1),
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+					discord.ApplicationCommandOptionString{
 						Name:        "msgcolor",
 						Description: "Color of the message text",
 						Required:    false,
 						Choices:     getCatColorChoices(),
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+					discord.ApplicationCommandOptionString{
 						Name:        "bubcolor",
 						Description: "Color of the speech bubble",
 						Required:    false,
 						Choices:     getCatColorChoices(),
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+					discord.ApplicationCommandOptionString{
 						Name:        "catcolor",
 						Description: "Color of the cat",
 						Required:    false,
 						Choices:     getCatColorChoices(),
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+					discord.ApplicationCommandOptionString{
 						Name:        "expression",
 						Description: "The cat's facial expression",
 						Required:    false,
@@ -98,21 +84,24 @@ func init() {
 				},
 			},
 		},
-	}, func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		options := i.ApplicationCommandData().Options
-		if len(options) == 0 {
+	}, func(event *events.ApplicationCommandInteractionCreate) {
+		data := event.SlashCommandInteractionData()
+		subCmd := data.SubCommandName
+		if subCmd == nil {
 			return
 		}
 
-		subCommand := options[0].Name
-
-		switch subCommand {
+		switch *subCmd {
 		case "fact":
-			handleCatFact(s, i)
+			handleCatFact(event)
 		case "image":
-			handleCatImage(s, i)
+			handleCatImage(event)
 		case "say":
-			handleCatSay(s, i, options[0].Options)
+			handleCatSay(event, data)
 		}
 	})
+}
+
+func intPtr(i int) *int {
+	return &i
 }

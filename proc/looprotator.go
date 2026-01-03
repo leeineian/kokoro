@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"regexp"
@@ -9,7 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/leeineian/minder/sys"
 )
 
@@ -20,21 +24,23 @@ const (
 )
 
 func init() {
-	sys.OnSessionReady(func(s *discordgo.Session) {
-		sys.RegisterDaemon(sys.LogLoopRotator, func() { InitLoopRotator(s) })
+	sys.OnClientReady(func(client *bot.Client) {
+		sys.RegisterDaemon(sys.LogLoopRotator, func() { InitLoopRotator(client) })
 	})
 }
 
 // WebhookData holds a webhook and its channel info
 type WebhookData struct {
-	Webhook     *discordgo.Webhook
-	ChannelName string
+	WebhookID    snowflake.ID
+	WebhookToken string
+	ChannelName  string
 }
 
 // ChannelData holds the configuration and webhooks for a loop
 type ChannelData struct {
-	Config *sys.LoopConfig
-	Hooks  []WebhookData
+	Config    *sys.LoopConfig
+	ChannelID snowflake.ID // Pre-parsed for performance
+	Hooks     []WebhookData
 }
 
 // LoopState tracks the running state of a loop
@@ -47,26 +53,25 @@ type LoopState struct {
 
 // State maps
 var (
-	configuredChannels sync.Map // map[channelID]*ChannelData
-	activeLoops        sync.Map // map[channelID]*LoopState
+	configuredChannels sync.Map // map[snowflake.ID]*ChannelData
+	activeLoops        sync.Map // map[snowflake.ID]*LoopState
 )
 
 // InitLoopRotator initializes the loop rotator daemon
-func InitLoopRotator(s *discordgo.Session) {
-	configs, err := sys.GetAllLoopConfigs()
+func InitLoopRotator(client *bot.Client) {
+	configs, err := sys.GetAllLoopConfigs(context.Background())
 	if err != nil {
 		sys.LogLoopRotator(sys.MsgLoopFailedToLoadConfigs, err)
 		return
 	}
 
 	sys.LogLoopRotator(sys.MsgLoopLoadingChannels, len(configs))
-	// Internal looper storage
-	// looperData := make(map[string]*LooperData) // This line was in the diff but not used in the final code, removing.
 
 	for _, config := range configs {
 		configuredChannels.Store(config.ChannelID, &ChannelData{
-			Config: config,
-			Hooks:  nil, // Lazy load
+			Config:    config,
+			ChannelID: config.ChannelID,
+			Hooks:     nil, // Lazy load
 		})
 	}
 
@@ -76,7 +81,6 @@ func InitLoopRotator(s *discordgo.Session) {
 	resumeCount := 0
 	for _, config := range configs {
 		if config.IsRunning {
-			// resumeCount++ // This increment was moved inside the successful resume block
 			go func(cfg *sys.LoopConfig) {
 				dataVal, ok := configuredChannels.Load(cfg.ChannelID)
 				if !ok {
@@ -85,14 +89,14 @@ func InitLoopRotator(s *discordgo.Session) {
 				channelData := dataVal.(*ChannelData)
 
 				// Load webhooks
-				if err := loadWebhooksForChannel(s, channelData); err != nil {
+				if err := loadWebhooksForChannel(client, channelData); err != nil {
 					sys.LogLoopRotator(sys.MsgLoopFailedToResume, cfg.ChannelName, err)
 					return
 				}
 
-				startLoopInternal(cfg.ChannelID, channelData, s)
-				resumeCount++ // Increment only if successfully started
+				startLoopInternal(cfg.ChannelID, channelData, client)
 			}(config)
+			resumeCount++
 		}
 	}
 
@@ -102,7 +106,6 @@ func InitLoopRotator(s *discordgo.Session) {
 }
 
 // parseInterval parses an interval string to duration
-// Supports: "30s", "5m", "1min", "2h", "1hr", or just numbers as seconds
 func parseInterval(interval string) (time.Duration, error) {
 	if interval == "0" || interval == "" {
 		return 0, nil
@@ -161,109 +164,150 @@ func ParseIntervalString(interval string) (time.Duration, error) {
 	return parseInterval(interval)
 }
 
-// loadWebhooksForChannel loads webhooks for a channel or category
-func loadWebhooksForChannel(s *discordgo.Session, data *ChannelData) error {
+// loadWebhooksForChannel loads webhooks for a channel or category with retry logic for cache readiness
+func loadWebhooksForChannel(client *bot.Client, data *ChannelData) error {
 	if data.Hooks != nil {
 		return nil // Already loaded
 	}
 
-	channel, err := s.Channel(data.Config.ChannelID)
-	if err != nil {
-		return fmt.Errorf("failed to fetch channel: %w", err)
+	// Retry logic: Bot might have just started and cache might not be ready
+	var channel discord.GuildChannel
+	var ok bool
+	for i := 0; i < 5; i++ {
+		channel, ok = client.Caches.Channel(data.ChannelID)
+		if ok {
+			break
+		}
+		if i < 4 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	if !ok {
+		return fmt.Errorf("failed to fetch channel %s from cache after retries", data.ChannelID)
 	}
 
 	if data.Config.ChannelType == "category" {
-		return prepareWebhooksForCategory(s, channel, data)
+		return prepareWebhooksForCategory(client, channel, data)
 	}
-	return prepareWebhooksForSingleChannel(s, channel, data)
+	return prepareWebhooksForSingleChannel(client, channel, data)
 }
 
 // prepareWebhooksForSingleChannel prepares webhooks for a single channel
-func prepareWebhooksForSingleChannel(s *discordgo.Session, channel *discordgo.Channel, data *ChannelData) error {
-	webhooks, err := s.ChannelWebhooks(channel.ID)
+func prepareWebhooksForSingleChannel(client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
+	channelID := channel.ID()
+
+	webhooks, err := client.Rest.GetWebhooks(channelID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch webhooks: %w", err)
 	}
 
+	self, _ := client.Caches.SelfUser()
+
 	// Find existing webhook owned by bot
-	var hook *discordgo.Webhook
+	var hook *discord.IncomingWebhook
 	for _, wh := range webhooks {
-		if wh.User != nil && wh.User.ID == s.State.User.ID && wh.Name == LoopWebhookName {
-			hook = wh
-			break
+		if incomingHook, ok := wh.(discord.IncomingWebhook); ok {
+			if incomingHook.User.ID == self.ID && incomingHook.Name() == LoopWebhookName {
+				hook = &incomingHook
+				break
+			}
 		}
 	}
 
 	// Create if not exists
 	if hook == nil {
 		if len(webhooks) >= 10 {
-			sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, channel.Name)
+			sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, channel.Name())
 			return nil
 		}
-		hook, err = s.WebhookCreate(channel.ID, LoopWebhookName, s.State.User.AvatarURL("128"))
+		newHook, err := client.Rest.CreateWebhook(channelID, discord.WebhookCreate{
+			Name: LoopWebhookName,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to create webhook: %w", err)
 		}
+		hook = newHook
 	}
 
-	data.Hooks = []WebhookData{{Webhook: hook, ChannelName: channel.Name}}
-	sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, channel.Name)
+	if hook != nil {
+		data.Hooks = []WebhookData{{
+			WebhookID:    hook.ID(),
+			WebhookToken: hook.Token,
+			ChannelName:  channel.Name(),
+		}}
+		sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, channel.Name())
+	}
 	return nil
 }
 
 // prepareWebhooksForCategory prepares webhooks for all text channels in a category
-func prepareWebhooksForCategory(s *discordgo.Session, category *discordgo.Channel, data *ChannelData) error {
-	guild, err := s.State.Guild(category.GuildID)
-	if err != nil {
-		guild, err = s.Guild(category.GuildID)
-		if err != nil {
-			return fmt.Errorf("failed to fetch guild: %w", err)
-		}
-	}
+func prepareWebhooksForCategory(client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
+	categoryID := channel.ID()
+	guildID := channel.GuildID()
 
+	// Get all channels in this guild from cache
 	var hooks []WebhookData
-	for _, ch := range guild.Channels {
-		if ch.ParentID != category.ID || ch.Type != discordgo.ChannelTypeGuildText {
+
+	// Iterate through cached channels using iter.Seq
+	for ch := range client.Caches.Channels() {
+		if ch.GuildID() != guildID {
 			continue
 		}
+		if textCh, ok := ch.(discord.GuildTextChannel); ok {
+			if textCh.ParentID() != nil && *textCh.ParentID() == categoryID {
+				// This channel is in our category
+				webhooks, err := client.Rest.GetWebhooks(textCh.ID())
+				if err != nil {
+					sys.LogLoopRotator(sys.MsgLoopFailedToFetchWebhooks, textCh.Name(), err)
+					continue
+				}
 
-		webhooks, err := s.ChannelWebhooks(ch.ID)
-		if err != nil {
-			sys.LogLoopRotator(sys.MsgLoopFailedToFetchWebhooks, ch.Name, err)
-			continue
-		}
+				self, _ := client.Caches.SelfUser()
+				var hook *discord.IncomingWebhook
+				for _, wh := range webhooks {
+					if incomingHook, ok := wh.(discord.IncomingWebhook); ok {
+						if incomingHook.User.ID == self.ID && incomingHook.Name() == LoopWebhookName {
+							hook = &incomingHook
+							break
+						}
+					}
+				}
 
-		var hook *discordgo.Webhook
-		for _, wh := range webhooks {
-			if wh.User != nil && wh.User.ID == s.State.User.ID && wh.Name == LoopWebhookName {
-				hook = wh
-				break
+				if hook == nil {
+					if len(webhooks) >= 10 {
+						sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, textCh.Name())
+						continue
+					}
+					newHook, err := client.Rest.CreateWebhook(textCh.ID(), discord.WebhookCreate{
+						Name: LoopWebhookName,
+					})
+					if err != nil {
+						sys.LogLoopRotator(sys.MsgLoopFailedToCreateWebhook, textCh.Name(), err)
+						continue
+					}
+					hook = newHook
+				}
+
+				if hook != nil {
+					hooks = append(hooks, WebhookData{
+						WebhookID:    hook.ID(),
+						WebhookToken: hook.Token,
+						ChannelName:  textCh.Name(),
+					})
+					sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, textCh.Name())
+				}
 			}
 		}
-
-		if hook == nil {
-			if len(webhooks) >= 10 {
-				sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, ch.Name)
-				continue
-			}
-			hook, err = s.WebhookCreate(ch.ID, LoopWebhookName, s.State.User.AvatarURL("128"))
-			if err != nil {
-				sys.LogLoopRotator(sys.MsgLoopFailedToCreateWebhook, ch.Name, err)
-				continue
-			}
-		}
-
-		hooks = append(hooks, WebhookData{Webhook: hook, ChannelName: ch.Name})
-		sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, ch.Name)
 	}
 
 	data.Hooks = hooks
-	sys.LogLoopRotator(sys.MsgLoopPreparedCategoryHooks, len(hooks), category.Name)
+	sys.LogLoopRotator(sys.MsgLoopPreparedCategoryHooks, len(hooks), channel.Name())
 	return nil
 }
 
 // startLoopInternal starts a loop for a channel
-func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session) {
+func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Client) {
 	stopChan := make(chan struct{})
 	state := &LoopState{
 		StopChan:     stopChan,
@@ -271,7 +315,7 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 		CurrentRound: 0,
 	}
 	activeLoops.Store(channelID, state)
-	sys.SetLoopState(channelID, true)
+	sys.SetLoopState(context.Background(), channelID, true)
 
 	isAlive := func() bool {
 		_, ok := activeLoops.Load(channelID)
@@ -281,17 +325,17 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 	go func() {
 		defer func() {
 			activeLoops.Delete(channelID)
-			sys.SetLoopState(channelID, false)
+			sys.SetLoopState(context.Background(), channelID, false)
 
 			// Rename to inactive
 			if data.Config.InactiveChannelName != "" {
-				renameChannel(s, channelID, data.Config.InactiveChannelName)
+				renameChannel(client, data.ChannelID, data.Config.InactiveChannelName)
 			}
 		}()
 
 		// Rename to active
 		if data.Config.ActiveChannelName != "" {
-			renameChannel(s, channelID, data.Config.ActiveChannelName)
+			renameChannel(client, data.ChannelID, data.Config.ActiveChannelName)
 		}
 
 		interval := time.Duration(data.Config.Interval) * time.Millisecond
@@ -302,7 +346,7 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 			sys.LogLoopRotator(sys.MsgLoopStartingTimed, FormatInterval(interval))
 			state.IntervalTimeout = time.AfterFunc(interval, func() {
 				sys.LogLoopRotator(sys.MsgLoopTimeLimitReached, data.Config.ChannelName)
-				StopLoopInternal(channelID, s)
+				StopLoopInternal(channelID, client)
 			})
 		} else if isRandomMode {
 			sys.LogLoopRotator(sys.MsgLoopStartingRandom, data.Config.ChannelName)
@@ -322,7 +366,7 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 
 				for i := 0; i < randomRounds && isAlive(); i++ {
 					state.CurrentRound = i + 1
-					executeRound(data, isAlive, s)
+					executeRound(data, isAlive, client)
 				}
 
 				if !isAlive() {
@@ -337,7 +381,7 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 				}
 			} else if isTimedMode {
 				state.CurrentRound++
-				executeRound(data, isAlive, s)
+				executeRound(data, isAlive, client)
 			}
 		}
 
@@ -348,18 +392,10 @@ func startLoopInternal(channelID string, data *ChannelData, s *discordgo.Session
 }
 
 // executeRound sends messages to all webhooks
-func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) {
+func executeRound(data *ChannelData, isAlive func() bool, client *bot.Client) {
 	content := data.Config.Message
 	if content == "" {
 		content = "@everyone"
-	}
-
-	// Parse mentions for allowed_mentions
-	var allowedMentions *discordgo.MessageAllowedMentions
-	if strings.Contains(content, "@everyone") || strings.Contains(content, "@here") {
-		allowedMentions = &discordgo.MessageAllowedMentions{
-			Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeEveryone},
-		}
 	}
 
 	webhookAuthor := data.Config.WebhookAuthor
@@ -368,8 +404,10 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 	}
 
 	webhookAvatar := data.Config.WebhookAvatar
-	if webhookAvatar == "" && s.State.User != nil {
-		webhookAvatar = s.State.User.AvatarURL("128")
+	if webhookAvatar == "" {
+		if self, ok := client.Caches.SelfUser(); ok {
+			webhookAvatar = self.EffectiveAvatarURL()
+		}
 	}
 
 	for i := 0; i < len(data.Hooks); i += LoopBatchSize {
@@ -393,7 +431,7 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 			go func(hd WebhookData) {
 				defer wg.Done()
 
-				// Add jitter to prevent simultaneous bursts across multiple channels
+				// Add jitter
 				time.Sleep(time.Duration(rand.Intn(250)) * time.Millisecond)
 
 				for attempt := 0; attempt < 3; attempt++ {
@@ -401,35 +439,19 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 						return
 					}
 
-					_, err := s.WebhookExecute(hd.Webhook.ID, hd.Webhook.Token, false, &discordgo.WebhookParams{
-						Content:         content,
-						Username:        webhookAuthor,
-						AvatarURL:       webhookAvatar,
-						AllowedMentions: allowedMentions,
-					})
+					_, err := client.Rest.CreateWebhookMessage(hd.WebhookID, hd.WebhookToken, discord.WebhookMessageCreate{
+						Content:   content,
+						Username:  webhookAuthor,
+						AvatarURL: webhookAvatar,
+					}, rest.CreateWebhookMessageParams{Wait: false})
 
 					if err == nil {
 						return // Success
 					}
 
-					// Handle Rate Limits (HTTP 429)
-					if rerr, ok := err.(*discordgo.RESTError); ok && rerr.Response != nil && rerr.Response.StatusCode == 429 {
-						retryAfter := time.Duration(attempt+1) * time.Second
-						if ra := rerr.Response.Header.Get("Retry-After"); ra != "" {
-							if s, err := strconv.ParseFloat(ra, 64); err == nil {
-								retryAfter = time.Duration(s * float64(time.Second))
-							}
-						}
-						if retryAfter > 0 {
-							sys.LogLoopRotator(sys.MsgLoopRateLimited, hd.ChannelName, retryAfter, attempt+1)
-							time.Sleep(retryAfter)
-							continue
-						}
-					}
-
-					// Non-rate-limit error, log and give up
+					// Handle Rate Limits
+					time.Sleep(time.Duration(attempt+1) * time.Second)
 					sys.LogLoopRotator(sys.MsgLoopSendFail, hd.ChannelName, err)
-					break
 				}
 			}(hookData)
 		}
@@ -438,15 +460,17 @@ func executeRound(data *ChannelData, isAlive func() bool, s *discordgo.Session) 
 }
 
 // renameChannel renames a channel
-func renameChannel(s *discordgo.Session, channelID, newName string) {
-	_, err := s.ChannelEdit(channelID, &discordgo.ChannelEdit{Name: newName})
+func renameChannel(client *bot.Client, channelID snowflake.ID, newName string) {
+	_, err := client.Rest.UpdateChannel(channelID, discord.GuildTextChannelUpdate{
+		Name: &newName,
+	})
 	if err != nil {
 		sys.LogLoopRotator(sys.MsgLoopRenameFail, err)
 	}
 }
 
 // StopLoopInternal stops a loop and performs cleanup
-func StopLoopInternal(channelID string, s *discordgo.Session) bool {
+func StopLoopInternal(channelID snowflake.ID, client *bot.Client) bool {
 	stateVal, ok := activeLoops.Load(channelID)
 	if !ok {
 		return false
@@ -459,13 +483,13 @@ func StopLoopInternal(channelID string, s *discordgo.Session) bool {
 	}
 
 	activeLoops.Delete(channelID)
-	sys.SetLoopState(channelID, false)
+	sys.SetLoopState(context.Background(), channelID, false)
 
 	dataVal, ok := configuredChannels.Load(channelID)
 	if ok {
 		data := dataVal.(*ChannelData)
 		if data.Config.InactiveChannelName != "" {
-			renameChannel(s, channelID, data.Config.InactiveChannelName)
+			renameChannel(client, data.ChannelID, data.Config.InactiveChannelName)
 		}
 		sys.LogLoopRotator(sys.MsgLoopStopped, data.Config.ChannelName)
 	}
@@ -473,40 +497,44 @@ func StopLoopInternal(channelID string, s *discordgo.Session) bool {
 	return true
 }
 
-// GetActiveLoops returns a copy of active loop states for autocomplete
-func GetActiveLoops() map[string]*LoopState {
-	result := make(map[string]*LoopState)
+// GetActiveLoops returns a copy of active loop states
+func GetActiveLoops() map[snowflake.ID]*LoopState {
+	result := make(map[snowflake.ID]*LoopState)
 	activeLoops.Range(func(key, value interface{}) bool {
-		result[key.(string)] = value.(*LoopState)
+		result[key.(snowflake.ID)] = value.(*LoopState)
 		return true
 	})
 	return result
 }
 
-// GetConfiguredChannels returns a copy of configured channels for autocomplete
-func GetConfiguredChannels() map[string]*ChannelData {
-	result := make(map[string]*ChannelData)
+// GetConfiguredChannels returns a copy of configured channels
+func GetConfiguredChannels() map[snowflake.ID]*ChannelData {
+	result := make(map[snowflake.ID]*ChannelData)
 	configuredChannels.Range(func(key, value interface{}) bool {
-		result[key.(string)] = value.(*ChannelData)
+		result[key.(snowflake.ID)] = value.(*ChannelData)
 		return true
 	})
 	return result
 }
 
-// SetLoopConfig configures a channel for looping (called from command handler)
-func SetLoopConfig(s *discordgo.Session, channelID string, config *sys.LoopConfig) error {
+// SetLoopConfig configures a channel for looping
+func SetLoopConfig(client *bot.Client, channelID snowflake.ID, config *sys.LoopConfig) error {
 	sys.LogLoopRotator(sys.MsgLoopConfigured, config.ChannelName)
-	if err := sys.AddLoopConfig(channelID, config); err != nil {
+	if err := sys.AddLoopConfig(context.Background(), channelID, config); err != nil {
 		return err
 	}
 
-	data := &ChannelData{Config: config, Hooks: nil}
+	data := &ChannelData{
+		Config:    config,
+		ChannelID: channelID,
+		Hooks:     nil,
+	}
 	configuredChannels.Store(channelID, data)
 	return nil
 }
 
 // StartLoop starts a loop for a channel ID
-func StartLoop(s *discordgo.Session, channelID string, interval time.Duration) error {
+func StartLoop(client *bot.Client, channelID snowflake.ID, interval time.Duration) error {
 	dataVal, ok := configuredChannels.Load(channelID)
 	if !ok {
 		return fmt.Errorf("channel not configured")
@@ -519,20 +547,20 @@ func StartLoop(s *discordgo.Session, channelID string, interval time.Duration) e
 	}
 
 	// Load webhooks if needed
-	if err := loadWebhooksForChannel(s, data); err != nil {
+	if err := loadWebhooksForChannel(client, data); err != nil {
 		return err
 	}
 
 	// Apply runtime interval
 	data.Config.Interval = int(interval.Milliseconds())
 
-	startLoopInternal(channelID, data, s)
+	startLoopInternal(channelID, data, client)
 	return nil
 }
 
 // DeleteLoopConfig removes a loop configuration
-func DeleteLoopConfig(channelID string) error {
-	StopLoopInternal(channelID, nil)
+func DeleteLoopConfig(channelID snowflake.ID, client *bot.Client) error {
+	StopLoopInternal(channelID, client)
 	configuredChannels.Delete(channelID)
-	return sys.DeleteLoopConfig(channelID)
+	return sys.DeleteLoopConfig(context.Background(), channelID)
 }

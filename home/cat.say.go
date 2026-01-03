@@ -5,7 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 )
 
@@ -33,21 +34,27 @@ func getCatAnsiCode(color string) string {
 	return ""
 }
 
-func handleCatSay(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	var message, msgColor, bubColor, catColor, expression string
-	for _, opt := range options {
-		switch opt.Name {
-		case "message":
-			message = opt.StringValue()
-		case "msgcolor":
-			msgColor = opt.StringValue()
-		case "bubcolor":
-			bubColor = opt.StringValue()
-		case "catcolor":
-			catColor = opt.StringValue()
-		case "expression":
-			expression = opt.StringValue()
-		}
+func handleCatSay(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+	message := data.String("message")
+
+	msgColor := ""
+	if c, ok := data.OptString("msgcolor"); ok {
+		msgColor = c
+	}
+
+	bubColor := ""
+	if c, ok := data.OptString("bubcolor"); ok {
+		bubColor = c
+	}
+
+	catColor := ""
+	if c, ok := data.OptString("catcolor"); ok {
+		catColor = c
+	}
+
+	expression := "o.o"
+	if e, ok := data.OptString("expression"); ok {
+		expression = e
 	}
 
 	// Generate ASCII
@@ -56,52 +63,18 @@ func handleCatSay(s *discordgo.Session, i *discordgo.InteractionCreate, options 
 	// Wrap in ansi block
 	content := fmt.Sprintf("```ansi\n%s\n```", output)
 
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: content},
-					},
-				},
-			},
-		},
-	})
+	// Build with V2 components
+	builder := discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay(content),
+			),
+		)
+
+	err := event.CreateMessage(builder.Build())
 	if err != nil {
 		sys.LogCat(sys.MsgCatFailedToSendErrorResponse, err)
-	}
-}
-
-func getCatExpressionChoices() []*discordgo.ApplicationCommandOptionChoice {
-	return []*discordgo.ApplicationCommandOptionChoice{
-		{Name: "Neutral", Value: "o.o"},
-		{Name: "Shocked", Value: "O.O"},
-		{Name: "Happy", Value: "^.^"},
-		{Name: "Sleeping", Value: "-.-"},
-		{Name: "Confused", Value: "o.O"},
-		{Name: "Silly", Value: ">.<"},
-		{Name: "Wink", Value: "o.~"},
-		{Name: "Dizzy", Value: "@.@"},
-		{Name: "Crying", Value: "T.T"},
-		{Name: "Angry", Value: "ò.ó"},
-		{Name: "Star Eyes", Value: "*.*"},
-		{Name: "Money", Value: "$.$"},
-		{Name: "None", Value: "   "},
-	}
-}
-
-func getCatColorChoices() []*discordgo.ApplicationCommandOptionChoice {
-	return []*discordgo.ApplicationCommandOptionChoice{
-		{Name: "Gray", Value: "gray"},
-		{Name: "Red", Value: "red"},
-		{Name: "Green", Value: "green"},
-		{Name: "Yellow", Value: "yellow"},
-		{Name: "Blue", Value: "blue"},
-		{Name: "Pink", Value: "pink"},
-		{Name: "Cyan", Value: "cyan"},
-		{Name: "White", Value: "white"},
 	}
 }
 

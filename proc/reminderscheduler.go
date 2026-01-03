@@ -1,23 +1,25 @@
 package proc
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
 	"github.com/leeineian/minder/sys"
 )
 
 var reminderSchedulerRunning = false
 
 func init() {
-	sys.OnSessionReady(func(s *discordgo.Session) {
-		sys.RegisterDaemon(sys.LogReminder, func() { StartReminderScheduler(s) })
+	sys.OnClientReady(func(client *bot.Client) {
+		sys.RegisterDaemon(sys.LogReminder, func() { StartReminderScheduler(client) })
 	})
 }
 
 // StartReminderScheduler starts the reminder scheduler daemon
-func StartReminderScheduler(s *discordgo.Session) {
+func StartReminderScheduler(client *bot.Client) {
 	if reminderSchedulerRunning {
 		return
 	}
@@ -28,13 +30,16 @@ func StartReminderScheduler(s *discordgo.Session) {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			checkAndSendReminders(s)
+			checkAndSendReminders(client)
 		}
 	}()
 }
 
-func checkAndSendReminders(s *discordgo.Session) {
-	reminders, err := sys.GetDueReminders()
+func checkAndSendReminders(client *bot.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	reminders, err := sys.GetDueReminders(ctx)
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToQueryDue, err)
 		return
@@ -42,39 +47,55 @@ func checkAndSendReminders(s *discordgo.Session) {
 
 	for _, r := range reminders {
 		// Send reminder
-		go sendReminder(s, r)
+		go sendReminder(client, r)
 	}
 }
 
-func sendReminder(s *discordgo.Session, r *sys.Reminder) {
-	// Build the reminder message
-	reminderText := fmt.Sprintf("🔔 **Reminder for <@%s>**\n\n%s", r.UserID, r.Message)
+func sendReminder(client *bot.Client, r *sys.Reminder) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	var err error
-	var targetChannelID = r.ChannelID
+	// 1. IDs are already snowflake.ID types
+	channelID := r.ChannelID
+	userID := r.UserID
+
+	if channelID == 0 {
+		sys.LogReminder("Invalid channel ID for reminder %d. Deleting.", r.ID)
+		_ = sys.DeleteReminderByID(ctx, r.ID)
+		return
+	}
+
+	if userID == 0 {
+		sys.LogReminder("Invalid user ID for reminder %d. Deleting.", r.ID)
+		_ = sys.DeleteReminderByID(ctx, r.ID)
+		return
+	}
+
+	// 2. Build the reminder message with V2 components
+	reminderText := fmt.Sprintf("🔔 **Reminder for <@%s>**\n\n%s", userID, r.Message)
+	targetChannelID := channelID
 
 	if r.SendTo == "dm" {
 		// Create DM channel
-		dmChannel, dmErr := s.UserChannelCreate(r.UserID)
+		dmChannel, dmErr := client.Rest.CreateDMChannel(userID)
 		if dmErr != nil {
-			sys.LogReminder(sys.MsgReminderFailedToCreateDM, r.UserID, dmErr)
-			// Try to send in original channel as fallback
+			sys.LogReminder(sys.MsgReminderFailedToCreateDM, userID, dmErr)
+			// Fallback: targetChannelID stays as the original channel
 		} else {
-			targetChannelID = dmChannel.ID
+			targetChannelID = dmChannel.ID()
 		}
 	}
 
-	// Send to channel or DM with native container
-	_, err = s.ChannelMessageSendComplex(targetChannelID, &discordgo.MessageSend{
-		Components: []discordgo.MessageComponent{
-			&discordgo.Container{
-				Components: []discordgo.MessageComponent{
-					&discordgo.TextDisplay{Content: reminderText},
-				},
-			},
-		},
-		Flags: discordgo.MessageFlagsIsComponentsV2,
-	})
+	// Build message with V2 components (Container + TextDisplay)
+	builder := discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay(reminderText),
+			),
+		)
+
+	_, err := client.Rest.CreateMessage(targetChannelID, builder.Build())
 
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToSend, r.ID, err)
@@ -82,11 +103,11 @@ func sendReminder(s *discordgo.Session, r *sys.Reminder) {
 		return
 	}
 
-	// Delete the reminder from database
-	err = sys.DeleteReminderByID(r.ID)
+	// 3. Delete the reminder from database on success
+	err = sys.DeleteReminderByID(ctx, r.ID)
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToDelete, r.ID, err)
 	} else {
-		sys.LogReminder(sys.MsgReminderSentAndDeleted, r.ID, r.UserID)
+		sys.LogReminder(sys.MsgReminderSentAndDeleted, r.ID, userID)
 	}
 }

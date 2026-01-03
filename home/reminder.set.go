@@ -1,72 +1,82 @@
 package home
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/leeineian/minder/sys"
 )
 
-func handleReminderSet(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
-	var message, whenStr, sendTo string
-	sendTo = "channel" // default
-
-	for _, opt := range options {
-		switch opt.Name {
-		case "message":
-			message = opt.StringValue()
-		case "when":
-			whenStr = opt.StringValue()
-		case "sendto":
-			sendTo = opt.StringValue()
-		}
+func handleReminderSet(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+	message := data.String("message")
+	whenStr := data.String("when")
+	sendTo := "channel"
+	if st, ok := data.OptString("sendto"); ok {
+		sendTo = st
 	}
 
-	// Parse the natural language date
-	now := time.Now()
-	result, err := reminderParser.ParseDate(whenStr, now)
-	if err != nil || result == nil {
-		reminderRespondImmediate(s, i, sys.ErrReminderParseFailed)
-		return
-	}
-
-	remindAt := *result
-	if remindAt.Before(now) {
-		reminderRespondImmediate(s, i, sys.ErrReminderPastTime)
-		return
-	}
-
-	// Save to database
-	err = sys.AddReminder(&sys.Reminder{
-		UserID:    i.Member.User.ID,
-		ChannelID: i.ChannelID,
-		GuildID:   i.GuildID,
-		Message:   message,
-		RemindAt:  remindAt,
-		SendTo:    sendTo,
-	})
-
+	// Parse the time using naturaltime ParseDate
+	parsedTime, err := parseNaturalTime(whenStr)
 	if err != nil {
-		sys.LogReminder(sys.MsgReminderFailedToSave, err)
-		reminderRespondImmediate(s, i, sys.ErrReminderSaveFailed)
+		reminderRespondImmediate(event, sys.ErrReminderParseFailed)
 		return
 	}
 
-	// Format response
-	location := "this channel"
-	if sendTo == "dm" {
-		location = "your DMs"
+	// Ensure the time is in the future
+	if parsedTime.Before(time.Now()) {
+		reminderRespondImmediate(event, sys.ErrReminderPastTime)
+		return
 	}
 
-	// Use Discord timestamp formatting: <t:UNIX:F> for full date/time, <t:UNIX:R> for relative
-	unixTime := remindAt.Unix()
-	responseText := fmt.Sprintf("✅ **Reminder set!**\n\n**Message:** %s\n**When:** <t:%d:F> (<t:%d:R>)\n**Where:** %s",
-		message,
-		unixTime,
-		unixTime,
-		location,
-	)
+	// Get user and channel info
+	userID := event.User().ID
+	channelID := event.Channel().ID()
+	var guildID snowflake.ID
+	if event.GuildID() != nil {
+		guildID = *event.GuildID()
+	}
 
-	reminderRespondImmediate(s, i, responseText)
+	// Save the reminder
+	reminder := &sys.Reminder{
+		UserID:    userID,
+		ChannelID: channelID,
+		GuildID:   guildID,
+		Message:   message,
+		RemindAt:  parsedTime,
+		SendTo:    sendTo,
+	}
+
+	if err := sys.AddReminder(context.Background(), reminder); err != nil {
+		sys.LogReminder(sys.MsgReminderFailedToSave, err)
+		reminderRespondImmediate(event, sys.ErrReminderSaveFailed)
+		return
+	}
+
+	// Create response
+	relativeTime := formatReminderRelativeTime(time.Now(), parsedTime)
+	response := fmt.Sprintf("✅ Reminder set for %s\n\n📝 %s", relativeTime, message)
+
+	reminderRespondImmediate(event, response)
+}
+
+// parseNaturalTime parses natural language time expressions
+func parseNaturalTime(input string) (time.Time, error) {
+	now := time.Now()
+
+	// Try using naturaltime parser with ParseDate method
+	result, err := reminderParser.ParseDate(input, now)
+	if err == nil && result != nil {
+		return *result, nil
+	}
+
+	// Fallback: try to parse duration-like inputs
+	if d, err := time.ParseDuration(input); err == nil {
+		return now.Add(d), nil
+	}
+
+	return time.Time{}, fmt.Errorf("could not parse time: %s", input)
 }

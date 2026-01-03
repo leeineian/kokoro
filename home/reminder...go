@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
 	"github.com/sho0pi/naturaltime"
 )
@@ -20,20 +21,16 @@ func initReminderParser() {
 	}
 }
 
-func reminderRespondImmediate(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsIsComponentsV2,
-			Components: []discordgo.MessageComponent{
-				&discordgo.Container{
-					Components: []discordgo.MessageComponent{
-						&discordgo.TextDisplay{Content: content},
-					},
-				},
-			},
-		},
-	})
+func reminderRespondImmediate(event *events.ApplicationCommandInteractionCreate, content string) {
+	err := event.CreateMessage(discord.NewMessageCreateBuilder().
+		SetIsComponentsV2(true).
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay(content),
+			),
+		).
+		SetEphemeral(true).
+		Build())
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderRespondError, err)
 	}
@@ -104,46 +101,40 @@ func init() {
 	initReminderParser()
 
 	// Register reminder command
-	sys.RegisterCommand(&discordgo.ApplicationCommand{
+	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:        "reminder",
 		Description: "Manage reminders",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+		Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "set",
 				Description: "Set a new reminder",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
 						Name:        "message",
 						Description: "The reminder message",
 						Required:    true,
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+					discord.ApplicationCommandOptionString{
 						Name:        "when",
 						Description: "When to remind (e.g., 'tomorrow', 'in 1 week', 'next friday at 3pm')",
 						Required:    true,
 					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
+					discord.ApplicationCommandOptionString{
 						Name:        "sendto",
 						Description: "Where to send the reminder",
 						Required:    false,
-						Choices: []*discordgo.ApplicationCommandOptionChoice{
+						Choices: []discord.ApplicationCommandOptionChoiceString{
 							{Name: "This Channel (Default)", Value: "channel"},
 							{Name: "Direct Message", Value: "dm"},
 						},
 					},
 				},
 			},
-			{
-				Type:        discordgo.ApplicationCommandOptionSubCommand,
+			discord.ApplicationCommandOptionSubCommand{
 				Name:        "list",
 				Description: "List and dismiss reminders",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:         discordgo.ApplicationCommandOptionString,
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
 						Name:         "dismiss",
 						Description:  "Select a reminder to dismiss",
 						Required:     false,
@@ -152,17 +143,18 @@ func init() {
 				},
 			},
 		},
-	}, func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		options := i.ApplicationCommandData().Options
-		if len(options) == 0 {
+	}, func(event *events.ApplicationCommandInteractionCreate) {
+		data := event.SlashCommandInteractionData()
+		subCmd := data.SubCommandName
+		if subCmd == nil {
 			return
 		}
 
-		switch options[0].Name {
+		switch *subCmd {
 		case "set":
-			handleReminderSet(s, i, options[0].Options)
+			handleReminderSet(event, data)
 		case "list":
-			handleReminderList(s, i, options[0].Options)
+			handleReminderList(event, data)
 		}
 	})
 
