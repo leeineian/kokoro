@@ -2,7 +2,9 @@ package proc
 
 import (
 	"context"
+	crand "crypto/rand"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"regexp"
 	"strconv"
@@ -359,9 +361,9 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 
 		for isAlive() {
 			if isRandomMode {
-				// Random mode: 1-100 rounds, 1-10 min delays
-				randomRounds := rand.Intn(100) + 1
-				randomDelay := time.Duration(rand.Intn(10)+1) * time.Minute
+				// Random mode: 1-1000 rounds, 1-1000 second delays
+				randomRounds := secureIntn(1000) + 1
+				randomDelay := time.Duration(secureIntn(1000)+1) * time.Second
 
 				state.RoundsTotal = randomRounds
 				state.CurrentRound = 0
@@ -456,7 +458,7 @@ func executeRound(data *ChannelData, isAlive func() bool, client *bot.Client) {
 				defer wg.Done()
 
 				// Add jitter
-				time.Sleep(time.Duration(rand.Intn(250)) * time.Millisecond)
+				time.Sleep(time.Duration(secureIntn(250)) * time.Millisecond)
 
 				for attempt := 0; attempt < 3; attempt++ {
 					if !isAlive() {
@@ -589,7 +591,7 @@ func getWebhooksWithRetry(client *bot.Client, channelID snowflake.ID) ([]discord
 
 		// Calculate wait time with exponential backoff and jitter
 		// Wait: 2s, 4s, 8s, 16s... + random jitter
-		jitter := time.Duration(rand.Intn(1000)) * time.Millisecond
+		jitter := time.Duration(secureIntn(1000)) * time.Millisecond
 		wait := (time.Duration(1<<uint(i+1)) * time.Second) + jitter
 
 		sys.LogLoopRotator("⚠️ Retrying webhook fetch for %s in %v (Attempt %d/5): %v",
@@ -599,4 +601,17 @@ func getWebhooksWithRetry(client *bot.Client, channelID snowflake.ID) ([]discord
 	}
 
 	return nil, err
+}
+
+// secureIntn returns a cryptographically secure random number in [0, max)
+func secureIntn(max int) int {
+	if max <= 0 {
+		return 0
+	}
+	nBig, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		// Fallback to pseudo-random if crypto fails (virtually impossible)
+		return rand.Intn(max)
+	}
+	return int(nBig.Int64())
 }
