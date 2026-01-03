@@ -48,6 +48,7 @@ type LoopState struct {
 	StopChan        chan struct{}
 	RoundsTotal     int
 	CurrentRound    int
+	NextRun         time.Time
 	DurationTimeout *time.Timer
 }
 
@@ -378,8 +379,10 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 				}
 
 				// Wait before next iteration
+				state.NextRun = time.Now().Add(randomDelay)
 				select {
 				case <-time.After(randomDelay):
+					state.NextRun = time.Time{} // Clear after delay
 				case <-stopChan:
 					return
 				}

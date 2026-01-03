@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -80,6 +81,13 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 				status = fmt.Sprintf("🟢 Running (Burst Mode • Round %d)", state.CurrentRound)
 			} else {
 				status = fmt.Sprintf("🟢 Running (Round %d/%d)", state.CurrentRound, state.RoundsTotal)
+			}
+
+			if !state.NextRun.IsZero() {
+				remaining := time.Until(state.NextRun)
+				if remaining > 0 {
+					status += fmt.Sprintf(" (Next in %s)", proc.FormatDuration(remaining))
+				}
 			}
 		} else {
 			status = "🟠 Configured (Ready)"
