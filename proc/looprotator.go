@@ -48,7 +48,7 @@ type LoopState struct {
 	StopChan        chan struct{}
 	RoundsTotal     int
 	CurrentRound    int
-	IntervalTimeout *time.Timer
+	DurationTimeout *time.Timer
 }
 
 // State maps
@@ -107,16 +107,16 @@ func InitLoopRotator(client *bot.Client) {
 	}()
 }
 
-// parseInterval parses an interval string to duration
-func parseInterval(interval string) (time.Duration, error) {
-	if interval == "0" || interval == "" {
+// parseDuration parses a duration string to time.Duration
+func parseDuration(duration string) (time.Duration, error) {
+	if duration == "0" || duration == "" {
 		return 0, nil
 	}
 
 	re := regexp.MustCompile(`^(\d+)(s|m|min|h|hr)?$`)
-	match := re.FindStringSubmatch(strings.ToLower(interval))
+	match := re.FindStringSubmatch(strings.ToLower(duration))
 	if match == nil {
-		return 0, fmt.Errorf("invalid interval format: %s", interval)
+		return 0, fmt.Errorf("invalid duration format: %s", duration)
 	}
 
 	value, _ := strconv.Atoi(match[1])
@@ -137,8 +137,8 @@ func parseInterval(interval string) (time.Duration, error) {
 	}
 }
 
-// FormatInterval formats a duration for display
-func FormatInterval(d time.Duration) string {
+// FormatDuration formats a duration for display
+func FormatDuration(d time.Duration) string {
 	if d == 0 {
 		return "∞ (Random)"
 	}
@@ -161,9 +161,9 @@ func IntervalMsToDuration(ms int) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// ParseIntervalString parses an interval string and returns a duration
-func ParseIntervalString(interval string) (time.Duration, error) {
-	return parseInterval(interval)
+// ParseDurationString parses a duration string and returns a duration
+func ParseDurationString(duration string) (time.Duration, error) {
+	return parseDuration(duration)
 }
 
 // loadWebhooksForChannel loads webhooks for a channel or category with retry logic for cache readiness
@@ -347,8 +347,8 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 		isRandomMode := interval == 0
 
 		if isTimedMode {
-			sys.LogLoopRotator(sys.MsgLoopStartingTimed, FormatInterval(interval))
-			state.IntervalTimeout = time.AfterFunc(interval, func() {
+			sys.LogLoopRotator(sys.MsgLoopStartingTimed, FormatDuration(interval))
+			state.DurationTimeout = time.AfterFunc(interval, func() {
 				sys.LogLoopRotator(sys.MsgLoopTimeLimitReached, data.Config.ChannelName)
 				StopLoopInternal(channelID, client)
 			})
@@ -366,7 +366,7 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 				state.CurrentRound = 0
 
 				sys.LogLoopRotator(sys.MsgLoopRandomStatus,
-					data.Config.ChannelName, randomRounds, FormatInterval(randomDelay))
+					data.Config.ChannelName, randomRounds, FormatDuration(randomDelay))
 
 				for i := 0; i < randomRounds && isAlive(); i++ {
 					state.CurrentRound = i + 1
@@ -389,8 +389,8 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 			}
 		}
 
-		if state.IntervalTimeout != nil {
-			state.IntervalTimeout.Stop()
+		if state.DurationTimeout != nil {
+			state.DurationTimeout.Stop()
 		}
 	}()
 }
@@ -482,15 +482,15 @@ func executeRound(data *ChannelData, isAlive func() bool, client *bot.Client) {
 
 // StopLoopInternal stops a loop and performs cleanup
 func StopLoopInternal(channelID snowflake.ID, client *bot.Client) bool {
-	stateVal, ok := activeLoops.Load(channelID)
-	if !ok {
+	stateVal, loaded := activeLoops.LoadAndDelete(channelID)
+	if !loaded {
 		return false
 	}
 	state := stateVal.(*LoopState)
 
 	close(state.StopChan)
-	if state.IntervalTimeout != nil {
-		state.IntervalTimeout.Stop()
+	if state.DurationTimeout != nil {
+		state.DurationTimeout.Stop()
 	}
 
 	activeLoops.Delete(channelID)

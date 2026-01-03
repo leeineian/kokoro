@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
@@ -73,7 +72,7 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 			typeIcon = "📁"
 		}
 
-		intervalStr := proc.FormatInterval(proc.IntervalMsToDuration(cfg.Interval))
+		intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
 
 		var status string
 		if state, running := activeLoops[cfg.ChannelID]; running {
@@ -86,7 +85,7 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 			status = "🟠 Configured (Ready)"
 		}
 
-		description += fmt.Sprintf("%s **%s** - Interval: %s\n└ %s\n\n", typeIcon, cfg.ChannelName, intervalStr, status)
+		description += fmt.Sprintf("%s **%s** - Duration: %s\n└ %s\n\n", typeIcon, cfg.ChannelName, intervalStr, status)
 	}
 
 	// Build the content for the V2 component
@@ -99,11 +98,11 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 		if cfg.ChannelType == "category" {
 			emoji = "📁"
 		}
-		intervalStr := proc.FormatInterval(proc.IntervalMsToDuration(cfg.Interval))
+		intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
 		selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
 			debugTruncate(cfg.ChannelName, 100),
 			cfg.ChannelID.String(),
-		).WithDescription(fmt.Sprintf("%s • Interval: %s", cfg.ChannelType, intervalStr)).
+		).WithDescription(fmt.Sprintf("%s • Duration: %s", cfg.ChannelType, intervalStr)).
 			WithEmoji(discord.ComponentEmoji{Name: emoji}))
 	}
 
@@ -175,30 +174,30 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 	}
 
 	loopRespond(event, fmt.Sprintf(
-		"✅ **%s Configured**\n> **%s**\n> Interval: ∞ (Random)\n> Run `/debug loop start` to begin.",
+		"✅ **%s Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/debug loop start` to begin.",
 		typeStr, channel.Name(),
 	), true)
 }
 
 // handleLoopStart starts loop(s)
 func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
-	var targetID, intervalStr string
+	var targetID, durationStr string
 
 	if t, ok := data.OptString("target"); ok {
 		targetID = t
 	}
-	if i, ok := data.OptString("interval"); ok {
-		intervalStr = i
+	if d, ok := data.OptString("duration"); ok {
+		durationStr = d
 	}
 
-	interval := proc.IntervalMsToDuration(0)
-	if intervalStr != "" {
-		parsed, err := proc.ParseIntervalString(intervalStr)
+	duration := proc.IntervalMsToDuration(0)
+	if durationStr != "" {
+		parsed, err := proc.ParseDurationString(durationStr)
 		if err != nil {
-			loopRespond(event, fmt.Sprintf("❌ Invalid interval: %v", err), true)
+			loopRespond(event, fmt.Sprintf("❌ Invalid duration: %v", err), true)
 			return
 		}
-		interval = parsed
+		duration = parsed
 	}
 
 	if targetID == "all" {
@@ -217,7 +216,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 
 			started := 0
 			for _, cfg := range configs {
-				if err := proc.StartLoop(event.Client(), cfg.ChannelID, interval); err == nil {
+				if err := proc.StartLoop(event.Client(), cfg.ChannelID, duration); err == nil {
 					started++
 				}
 			}
@@ -236,7 +235,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 
 		_ = event.DeferCreateMessage(true)
 		go func() {
-			err = proc.StartLoop(event.Client(), tID, interval)
+			err = proc.StartLoop(event.Client(), tID, duration)
 			msg := "🚀 Loop started!"
 			if err != nil {
 				msg = fmt.Sprintf("❌ Failed to start: %v", err)
@@ -307,7 +306,7 @@ func handleDebugStartLoopSelect(event *events.ComponentInteractionCreate) {
 	}
 
 	selection := data.Values[0]
-	interval := proc.IntervalMsToDuration(0) // Default to random for select menu
+	duration := proc.IntervalMsToDuration(0) // Default to random for select menu
 
 	// Defer immediately because StartLoop/Webhook prep can be slow
 	_ = event.DeferUpdateMessage()
@@ -317,7 +316,7 @@ func handleDebugStartLoopSelect(event *events.ComponentInteractionCreate) {
 			configs, _ := sys.GetAllLoopConfigs(context.Background())
 			started := 0
 			for _, cfg := range configs {
-				if err := proc.StartLoop(event.Client(), cfg.ChannelID, interval); err == nil {
+				if err := proc.StartLoop(event.Client(), cfg.ChannelID, duration); err == nil {
 					started++
 				}
 			}
@@ -338,7 +337,7 @@ func handleDebugStartLoopSelect(event *events.ComponentInteractionCreate) {
 				return
 			}
 
-			err = proc.StartLoop(event.Client(), cID, interval)
+			err = proc.StartLoop(event.Client(), cID, duration)
 			msg := "🚀 Loop started!"
 			if err != nil {
 				msg = fmt.Sprintf("❌ Failed to start: %v", err)
@@ -562,6 +561,7 @@ func handleDebugLoopConfigDelete(event *events.ComponentInteractionCreate) {
 		return
 	}
 
+	_ = proc.DeleteLoopConfig(cID, event.Client())
 	config, _ := sys.GetLoopConfig(context.Background(), cID)
 	configName := "Unknown"
 	if config != nil {
@@ -626,7 +626,3 @@ func handleDebugStopLoopSelect(event *events.ComponentInteractionCreate) {
 			Build())
 	}
 }
-
-// Unused imports removed - these helpers are exported from proc package
-var _ bot.Client
-var _ snowflake.ID
