@@ -1,0 +1,48 @@
+name: Date-Based Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write # Required to push tags
+
+jobs:
+  date-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.5'
+
+      # 1. Run Tests
+      - name: Run Tests
+        run: go test -v ./...
+
+      # 2. Generate Tag and Push
+      - name: Create Date Tag
+        id: tag
+        run: |
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          VERSION="v1.0.0-$TIMESTAMP"
+          
+          echo "Creating tag: $VERSION"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git tag $VERSION
+          git push origin $VERSION
+          
+          echo "tag_name=$VERSION" >> $GITHUB_OUTPUT
+
+      # 3. Refresh Proxy
+      - name: Refresh pkg.go.dev
+        continue-on-error: true
+        env:
+          GOPROXY: https://proxy.golang.org
+        run: |
+          go list -m github.com/leeineian/minder@${{ steps.tag.outputs.tag_name }}
