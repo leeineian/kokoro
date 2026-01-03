@@ -75,8 +75,6 @@ func InitDatabase(dataSourceName string) error {
 			channel_type TEXT NOT NULL,
 			rounds INTEGER DEFAULT 0,
 			interval INTEGER DEFAULT 0,
-			active_channel_name TEXT,
-			inactive_channel_name TEXT,
 			message TEXT DEFAULT '@everyone',
 			webhook_author TEXT,
 			webhook_avatar TEXT,
@@ -251,20 +249,18 @@ func GetAllGuildRandomColorConfigs(ctx context.Context) (map[snowflake.ID]snowfl
 // --- Loop Logic ---
 
 type LoopConfig struct {
-	ChannelID           snowflake.ID
-	ChannelName         string
-	ChannelType         string // "category" or "channel"
-	Rounds              int
-	Interval            int // milliseconds
-	ActiveChannelName   string
-	InactiveChannelName string
-	Message             string
-	WebhookAuthor       string
-	WebhookAvatar       string
-	UseThread           bool
-	ThreadMessage       string
-	Threads             string // JSON
-	IsRunning           bool
+	ChannelID     snowflake.ID
+	ChannelName   string
+	ChannelType   string // "category" or "channel"
+	Rounds        int
+	Interval      int // milliseconds
+	Message       string
+	WebhookAuthor string
+	WebhookAvatar string
+	UseThread     bool
+	ThreadMessage string
+	Threads       string // JSON
+	IsRunning     bool
 }
 
 func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConfig) error {
@@ -276,16 +272,14 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 	_, err := DB.ExecContext(ctx, `
 		INSERT INTO loop_channels (
 			channel_id, channel_name, channel_type, rounds, interval,
-			active_channel_name, inactive_channel_name, message, webhook_author, webhook_avatar,
+			message, webhook_author, webhook_avatar,
 			use_thread, thread_message, threads, is_running
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT is_running FROM loop_channels WHERE channel_id = ?), 0))
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT is_running FROM loop_channels WHERE channel_id = ?), 0))
 		ON CONFLICT(channel_id) DO UPDATE SET
 			channel_name = excluded.channel_name,
 			channel_type = excluded.channel_type,
 			rounds = excluded.rounds,
 			interval = excluded.interval,
-			active_channel_name = excluded.active_channel_name,
-			inactive_channel_name = excluded.inactive_channel_name,
 			message = excluded.message,
 			webhook_author = excluded.webhook_author,
 			webhook_avatar = excluded.webhook_avatar,
@@ -293,7 +287,7 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 			thread_message = excluded.thread_message,
 			threads = excluded.threads
 	`, channelID.String(), config.ChannelName, config.ChannelType, config.Rounds, config.Interval,
-		config.ActiveChannelName, config.InactiveChannelName, config.Message, config.WebhookAuthor, config.WebhookAvatar,
+		config.Message, config.WebhookAuthor, config.WebhookAvatar,
 		useThread, config.ThreadMessage, config.Threads, channelID.String())
 	return err
 }
@@ -301,19 +295,19 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, error) {
 	row := DB.QueryRowContext(ctx, `
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
-			active_channel_name, inactive_channel_name, message, webhook_author, webhook_avatar,
+			message, webhook_author, webhook_avatar,
 			use_thread, thread_message, threads, is_running
 		FROM loop_channels WHERE channel_id = ?
 	`, channelID.String())
 
 	config := &LoopConfig{}
 	var idStr string
-	var activeName, inactiveName, message, author, avatar, threadMsg, threads sql.NullString
+	var message, author, avatar, threadMsg, threads sql.NullString
 	var useThread, isRunning int
 
 	err := row.Scan(
 		&idStr, &config.ChannelName, &config.ChannelType, &config.Rounds, &config.Interval,
-		&activeName, &inactiveName, &message, &author, &avatar,
+		&message, &author, &avatar,
 		&useThread, &threadMsg, &threads, &isRunning,
 	)
 	if err == sql.ErrNoRows {
@@ -324,8 +318,6 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 	}
 
 	config.ChannelID, _ = snowflake.Parse(idStr)
-	config.ActiveChannelName = activeName.String
-	config.InactiveChannelName = inactiveName.String
 	config.Message = message.String
 	if config.Message == "" {
 		config.Message = "@everyone"
@@ -343,7 +335,7 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 	rows, err := DB.QueryContext(ctx, `
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
-			active_channel_name, inactive_channel_name, message, webhook_author, webhook_avatar,
+			message, webhook_author, webhook_avatar,
 			use_thread, thread_message, threads, is_running
 		FROM loop_channels
 	`)
@@ -356,12 +348,12 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 	for rows.Next() {
 		config := &LoopConfig{}
 		var idStr string
-		var activeName, inactiveName, message, author, avatar, threadMsg, threads sql.NullString
+		var message, author, avatar, threadMsg, threads sql.NullString
 		var useThread, isRunning int
 
 		err := rows.Scan(
 			&idStr, &config.ChannelName, &config.ChannelType, &config.Rounds, &config.Interval,
-			&activeName, &inactiveName, &message, &author, &avatar,
+			&message, &author, &avatar,
 			&useThread, &threadMsg, &threads, &isRunning,
 		)
 		if err != nil {
@@ -369,8 +361,6 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 		}
 
 		config.ChannelID, _ = snowflake.Parse(idStr)
-		config.ActiveChannelName = activeName.String
-		config.InactiveChannelName = inactiveName.String
 		config.Message = message.String
 		if config.Message == "" {
 			config.Message = "@everyone"

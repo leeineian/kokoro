@@ -77,20 +77,21 @@ func handleDebugAutocomplete(event *events.AutocompleteInteractionCreate) {
 	var choices []discord.AutocompleteChoice
 
 	// Find focused option and detect subcommand context
-	focusedName := ""
-	focusedValue := ""
-	subCommand := ""
+	var focusedName string
+	var focusedValue string
+	var subCommand string
 
-	// Check for subcommand in options
+	if data.SubCommandName != nil {
+		subCommand = *data.SubCommandName
+	}
+
 	for _, opt := range data.Options {
-		if opt.Type == discord.ApplicationCommandOptionTypeSubCommand {
-			subCommand = opt.Name
-		}
 		if opt.Focused {
 			focusedName = opt.Name
 			if opt.Value != nil {
 				focusedValue = strings.Trim(string(opt.Value), `"`)
 			}
+			break
 		}
 	}
 
@@ -234,16 +235,6 @@ func init() {
 								Required:    true,
 							},
 							discord.ApplicationCommandOptionString{
-								Name:        "active_name",
-								Description: "Name when loop is active",
-								Required:    false,
-							},
-							discord.ApplicationCommandOptionString{
-								Name:        "inactive_name",
-								Description: "Name when loop is inactive",
-								Required:    false,
-							},
-							discord.ApplicationCommandOptionString{
 								Name:        "message",
 								Description: "Message to send (default: @everyone)",
 								Required:    false,
@@ -320,6 +311,7 @@ func init() {
 
 	sys.RegisterComponentHandler("ping_refresh", handleDebugPingRefresh)
 	sys.RegisterComponentHandler("delete_loop_config", handleDebugLoopConfigDelete)
+	sys.RegisterComponentHandler("start_loop_select", handleDebugStartLoopSelect)
 	sys.RegisterComponentHandler("stop_loop_select", handleDebugStopLoopSelect)
 	sys.RegisterAutocompleteHandler("debug", handleDebugAutocomplete)
 }

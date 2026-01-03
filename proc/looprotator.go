@@ -199,9 +199,9 @@ func loadWebhooksForChannel(client *bot.Client, data *ChannelData) error {
 func prepareWebhooksForSingleChannel(client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
 	channelID := channel.ID()
 
-	webhooks, err := client.Rest.GetWebhooks(channelID)
+	webhooks, err := getWebhooksWithRetry(client, channelID)
 	if err != nil {
-		return fmt.Errorf("failed to fetch webhooks: %w", err)
+		return fmt.Errorf("failed to fetch webhooks after retries: %w", err)
 	}
 
 	self, _ := client.Caches.SelfUser()
@@ -248,61 +248,73 @@ func prepareWebhooksForCategory(client *bot.Client, channel discord.GuildChannel
 	categoryID := channel.ID()
 	guildID := channel.GuildID()
 
-	// Get all channels in this guild from cache
 	var hooks []WebhookData
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10) // Limit to 10 concurrent API requests
 
-	// Iterate through cached channels using iter.Seq
+	// Iterate through cached channels
 	for ch := range client.Caches.Channels() {
 		if ch.GuildID() != guildID {
 			continue
 		}
-		if textCh, ok := ch.(discord.GuildTextChannel); ok {
-			if textCh.ParentID() != nil && *textCh.ParentID() == categoryID {
-				// This channel is in our category
-				webhooks, err := client.Rest.GetWebhooks(textCh.ID())
-				if err != nil {
-					sys.LogLoopRotator(sys.MsgLoopFailedToFetchWebhooks, textCh.Name(), err)
-					continue
-				}
 
-				self, _ := client.Caches.SelfUser()
-				var hook *discord.IncomingWebhook
-				for _, wh := range webhooks {
-					if incomingHook, ok := wh.(discord.IncomingWebhook); ok {
-						if incomingHook.User.ID == self.ID && incomingHook.Name() == LoopWebhookName {
-							hook = &incomingHook
-							break
+		if textCh, ok := ch.(discord.GuildMessageChannel); ok {
+			if textCh.ParentID() != nil && *textCh.ParentID() == categoryID {
+				wg.Add(1)
+				go func(tc discord.GuildMessageChannel) {
+					defer wg.Done()
+					sem <- struct{}{}        // Acquire
+					defer func() { <-sem }() // Release
+
+					webhooks, err := getWebhooksWithRetry(client, tc.ID())
+					if err != nil {
+						sys.LogLoopRotator(sys.MsgLoopFailedToFetchWebhooks, tc.Name(), err)
+						return
+					}
+
+					self, _ := client.Caches.SelfUser()
+					var hook *discord.IncomingWebhook
+					for _, wh := range webhooks {
+						if incomingHook, ok := wh.(discord.IncomingWebhook); ok {
+							if incomingHook.User.ID == self.ID && incomingHook.Name() == LoopWebhookName {
+								hook = &incomingHook
+								break
+							}
 						}
 					}
-				}
 
-				if hook == nil {
-					if len(webhooks) >= 10 {
-						sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, textCh.Name())
-						continue
+					if hook == nil {
+						if len(webhooks) >= 10 {
+							sys.LogLoopRotator(sys.MsgLoopWebhookLimitReached, tc.Name())
+							return
+						}
+						newHook, err := client.Rest.CreateWebhook(tc.ID(), discord.WebhookCreate{
+							Name: LoopWebhookName,
+						})
+						if err != nil {
+							sys.LogLoopRotator(sys.MsgLoopFailedToCreateWebhook, tc.Name(), err)
+							return
+						}
+						hook = newHook
 					}
-					newHook, err := client.Rest.CreateWebhook(textCh.ID(), discord.WebhookCreate{
-						Name: LoopWebhookName,
-					})
-					if err != nil {
-						sys.LogLoopRotator(sys.MsgLoopFailedToCreateWebhook, textCh.Name(), err)
-						continue
-					}
-					hook = newHook
-				}
 
-				if hook != nil {
-					hooks = append(hooks, WebhookData{
-						WebhookID:    hook.ID(),
-						WebhookToken: hook.Token,
-						ChannelName:  textCh.Name(),
-					})
-					sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, textCh.Name())
-				}
+					if hook != nil {
+						mu.Lock()
+						hooks = append(hooks, WebhookData{
+							WebhookID:    hook.ID(),
+							WebhookToken: hook.Token,
+							ChannelName:  tc.Name(),
+						})
+						mu.Unlock()
+						sys.LogLoopRotator(sys.MsgLoopPreparedWebhook, tc.Name())
+					}
+				}(textCh)
 			}
 		}
 	}
 
+	wg.Wait()
 	data.Hooks = hooks
 	sys.LogLoopRotator(sys.MsgLoopPreparedCategoryHooks, len(hooks), channel.Name())
 	return nil
@@ -328,17 +340,7 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 		defer func() {
 			activeLoops.Delete(channelID)
 			sys.SetLoopState(context.Background(), channelID, false)
-
-			// Rename to inactive
-			if data.Config.InactiveChannelName != "" {
-				renameChannel(client, data.ChannelID, data.Config.InactiveChannelName)
-			}
 		}()
-
-		// Rename to active
-		if data.Config.ActiveChannelName != "" {
-			renameChannel(client, data.ChannelID, data.Config.ActiveChannelName)
-		}
 
 		interval := time.Duration(data.Config.Interval) * time.Millisecond
 		isTimedMode := interval > 0
@@ -401,11 +403,28 @@ func executeRound(data *ChannelData, isAlive func() bool, client *bot.Client) {
 	}
 
 	webhookAuthor := data.Config.WebhookAuthor
+	webhookAvatar := data.Config.WebhookAvatar
+
+	// If author or avatar is missing, try to use server (guild) details
+	if webhookAuthor == "" || webhookAvatar == "" {
+		if channel, ok := client.Caches.Channel(data.ChannelID); ok {
+			if guild, ok := client.Caches.Guild(channel.GuildID()); ok {
+				if webhookAuthor == "" {
+					webhookAuthor = guild.Name
+				}
+				if webhookAvatar == "" && guild.Icon != nil {
+					if url := guild.IconURL(); url != nil {
+						webhookAvatar = *url
+					}
+				}
+			}
+		}
+	}
+
+	// Final fallbacks
 	if webhookAuthor == "" {
 		webhookAuthor = LoopWebhookName
 	}
-
-	webhookAvatar := data.Config.WebhookAvatar
 	if webhookAvatar == "" {
 		if self, ok := client.Caches.SelfUser(); ok {
 			webhookAvatar = self.EffectiveAvatarURL()
@@ -461,16 +480,6 @@ func executeRound(data *ChannelData, isAlive func() bool, client *bot.Client) {
 	}
 }
 
-// renameChannel renames a channel
-func renameChannel(client *bot.Client, channelID snowflake.ID, newName string) {
-	_, err := client.Rest.UpdateChannel(channelID, discord.GuildTextChannelUpdate{
-		Name: &newName,
-	})
-	if err != nil {
-		sys.LogLoopRotator(sys.MsgLoopRenameFail, err)
-	}
-}
-
 // StopLoopInternal stops a loop and performs cleanup
 func StopLoopInternal(channelID snowflake.ID, client *bot.Client) bool {
 	stateVal, ok := activeLoops.Load(channelID)
@@ -490,9 +499,6 @@ func StopLoopInternal(channelID snowflake.ID, client *bot.Client) bool {
 	dataVal, ok := configuredChannels.Load(channelID)
 	if ok {
 		data := dataVal.(*ChannelData)
-		if data.Config.InactiveChannelName != "" {
-			renameChannel(client, data.ChannelID, data.Config.InactiveChannelName)
-		}
 		sys.LogLoopRotator(sys.MsgLoopStopped, data.Config.ChannelName)
 	}
 
@@ -565,4 +571,29 @@ func DeleteLoopConfig(channelID snowflake.ID, client *bot.Client) error {
 	StopLoopInternal(channelID, client)
 	configuredChannels.Delete(channelID)
 	return sys.DeleteLoopConfig(context.Background(), channelID)
+}
+
+// getWebhooksWithRetry fetches webhooks with exponential backoff and jitter
+func getWebhooksWithRetry(client *bot.Client, channelID snowflake.ID) ([]discord.Webhook, error) {
+	var webhooks []discord.Webhook
+	var err error
+
+	for i := 0; i < 5; i++ {
+		webhooks, err = client.Rest.GetWebhooks(channelID)
+		if err == nil {
+			return webhooks, nil
+		}
+
+		// Calculate wait time with exponential backoff and jitter
+		// Wait: 2s, 4s, 8s, 16s... + random jitter
+		jitter := time.Duration(rand.Intn(1000)) * time.Millisecond
+		wait := (time.Duration(1<<uint(i+1)) * time.Second) + jitter
+
+		sys.LogLoopRotator("⚠️ Retrying webhook fetch for %s in %v (Attempt %d/5): %v",
+			channelID, wait.Truncate(100*time.Millisecond), i+1, err)
+
+		time.Sleep(wait)
+	}
+
+	return nil, err
 }

@@ -32,11 +32,19 @@ func handleDebugWebhookLooper(event *events.ApplicationCommandInteractionCreate,
 }
 
 func loopRespond(event *events.ApplicationCommandInteractionCreate, content string, ephemeral bool) {
+	// Add some spacing/formatting to make it look cleaner
+	var displayContent string
+	if !strings.HasPrefix(content, "#") && !strings.HasPrefix(content, ">") {
+		displayContent = "> " + content
+	} else {
+		displayContent = content
+	}
+
 	event.CreateMessage(discord.NewMessageCreateBuilder().
 		SetIsComponentsV2(true).
 		AddComponents(
 			discord.NewContainer(
-				discord.NewTextDisplay(content),
+				discord.NewTextDisplay(displayContent),
 			),
 		).
 		SetEphemeral(ephemeral).
@@ -69,7 +77,11 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 
 		var status string
 		if state, running := activeLoops[cfg.ChannelID]; running {
-			status = fmt.Sprintf("🟢 Running (Round %d/%d)", state.CurrentRound, state.RoundsTotal)
+			if cfg.Interval > 0 {
+				status = fmt.Sprintf("🟢 Running (Burst Mode • Round %d)", state.CurrentRound)
+			} else {
+				status = fmt.Sprintf("🟢 Running (Round %d/%d)", state.CurrentRound, state.RoundsTotal)
+			}
 		} else {
 			status = "🟠 Configured (Ready)"
 		}
@@ -140,31 +152,19 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		webhookAvatar = avatar
 	}
 
-	activeChannelName := ""
-	if name, ok := data.OptString("active_name"); ok {
-		activeChannelName = name
-	}
-
-	inactiveChannelName := ""
-	if name, ok := data.OptString("inactive_name"); ok {
-		inactiveChannelName = name
-	}
-
 	config := &sys.LoopConfig{
-		ChannelID:           channelID,
-		ChannelName:         channel.Name(),
-		ChannelType:         channelType,
-		Rounds:              0,
-		Interval:            0, // Default to infinite random mode
-		ActiveChannelName:   activeChannelName,
-		InactiveChannelName: inactiveChannelName,
-		Message:             message,
-		WebhookAuthor:       webhookAuthor,
-		WebhookAvatar:       webhookAvatar,
-		UseThread:           false,
+		ChannelID:     channelID,
+		ChannelName:   channel.Name(),
+		ChannelType:   channelType,
+		Rounds:        0,
+		Interval:      0, // Default to infinite random mode
+		Message:       message,
+		WebhookAuthor: webhookAuthor,
+		WebhookAvatar: webhookAvatar,
+		UseThread:     false,
 	}
 
-	if err := sys.AddLoopConfig(context.Background(), channelID, config); err != nil {
+	if err := proc.SetLoopConfig(event.Client(), channelID, config); err != nil {
 		loopRespond(event, fmt.Sprintf("❌ Failed to save configuration: %v", err), true)
 		return
 	}
@@ -201,38 +201,160 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 		interval = parsed
 	}
 
-	if targetID == "all" || targetID == "" {
-		// Start all configured loops
-		configs, _ := sys.GetAllLoopConfigs(context.Background())
-		if len(configs) == 0 {
-			loopRespond(event, "❌ No channels configured! Use `/debug loop set` first.", true)
-			return
-		}
+	if targetID == "all" {
+		// Acknowledge immediately
+		_ = event.DeferCreateMessage(true)
 
-		started := 0
-		for _, cfg := range configs {
-			err := proc.StartLoop(event.Client(), cfg.ChannelID, interval)
-			if err == nil {
-				started++
+		go func() {
+			configs, _ := sys.GetAllLoopConfigs(context.Background())
+			if len(configs) == 0 {
+				_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
+					SetIsComponentsV2(true).
+					AddComponents(discord.NewContainer(discord.NewTextDisplay("❌ No channels configured!"))).
+					Build())
+				return
 			}
-		}
 
-		loopRespond(event, fmt.Sprintf("🚀 Started **%d** loop(s).", started), true)
-	} else {
+			started := 0
+			for _, cfg := range configs {
+				if err := proc.StartLoop(event.Client(), cfg.ChannelID, interval); err == nil {
+					started++
+				}
+			}
+
+			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
+				SetIsComponentsV2(true).
+				AddComponents(discord.NewContainer(discord.NewTextDisplay(fmt.Sprintf("🚀 Started **%d** loop(s).", started)))).
+				Build())
+		}()
+	} else if targetID != "" {
 		tID, err := snowflake.Parse(targetID)
 		if err != nil {
 			loopRespond(event, "❌ Invalid selection.", true)
 			return
 		}
 
-		err = proc.StartLoop(event.Client(), tID, interval)
-		if err != nil {
-			loopRespond(event, fmt.Sprintf("❌ Failed to start: %v", err), true)
+		_ = event.DeferCreateMessage(true)
+		go func() {
+			err = proc.StartLoop(event.Client(), tID, interval)
+			msg := "🚀 Loop started!"
+			if err != nil {
+				msg = fmt.Sprintf("❌ Failed to start: %v", err)
+			}
+
+			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
+				SetIsComponentsV2(true).
+				AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
+				Build())
+		}()
+	} else {
+		// Show selection UI
+		configs, _ := sys.GetAllLoopConfigs(context.Background())
+		if len(configs) == 0 {
+			loopRespond(event, "❌ No channels configured! Use `/debug loop set` first.", true)
 			return
 		}
 
-		loopRespond(event, "🚀 Loop started!", true)
+		var selectOptions []discord.StringSelectMenuOption
+		activeLoops := proc.GetActiveLoops()
+
+		if len(configs) > 1 {
+			selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
+				"🚀 Start All",
+				"all",
+			).WithDescription(fmt.Sprintf("Start all %d configured loops", len(configs))))
+		}
+
+		for _, cfg := range configs {
+			_, running := activeLoops[cfg.ChannelID]
+			status := "Idle"
+			emoji := "💬"
+			if running {
+				status = "Running"
+			}
+			if cfg.ChannelType == "category" {
+				emoji = "📁"
+			}
+
+			selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
+				cfg.ChannelName,
+				cfg.ChannelID.String(),
+			).WithDescription(status).
+				WithEmoji(discord.ComponentEmoji{Name: emoji}))
+		}
+
+		_ = event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			SetEphemeral(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("# 🚀 Start Loop\nSelect a configuration to start."),
+					discord.NewActionRow(
+						discord.NewStringSelectMenu("start_loop_select", "Select a loop to start", selectOptions...),
+					),
+				),
+			).
+			Build())
 	}
+}
+
+// handleDebugStartLoopSelect handles the start_loop_select select menu
+func handleDebugStartLoopSelect(event *events.ComponentInteractionCreate) {
+	data := event.StringSelectMenuInteractionData()
+	if len(data.Values) == 0 {
+		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().SetContent("❌ No selection made.").Build())
+		return
+	}
+
+	selection := data.Values[0]
+	interval := proc.IntervalMsToDuration(0) // Default to random for select menu
+
+	// Defer immediately because StartLoop/Webhook prep can be slow
+	_ = event.DeferUpdateMessage()
+
+	go func() {
+		if selection == "all" {
+			configs, _ := sys.GetAllLoopConfigs(context.Background())
+			started := 0
+			for _, cfg := range configs {
+				if err := proc.StartLoop(event.Client(), cfg.ChannelID, interval); err == nil {
+					started++
+				}
+			}
+
+			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
+				SetIsComponentsV2(true).
+				ClearComponents().
+				AddComponents(
+					discord.NewContainer(
+						discord.NewTextDisplay(fmt.Sprintf("🚀 Started **%d** loop(s).", started)),
+					),
+				).
+				Build())
+		} else {
+			cID, err := snowflake.Parse(selection)
+			if err != nil {
+				_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().SetContent("❌ Invalid selection.").Build())
+				return
+			}
+
+			err = proc.StartLoop(event.Client(), cID, interval)
+			msg := "🚀 Loop started!"
+			if err != nil {
+				msg = fmt.Sprintf("❌ Failed to start: %v", err)
+			}
+
+			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
+				SetIsComponentsV2(true).
+				ClearComponents().
+				AddComponents(
+					discord.NewContainer(
+						discord.NewTextDisplay(msg),
+					),
+				).
+				Build())
+		}
+	}()
 }
 
 // handleLoopStop stops loop(s)
@@ -296,10 +418,15 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 		}
 
 		_ = event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
 			SetEphemeral(true).
-			SetContent("**Active Loops:**\n\nSelect a loop to stop.").
-			AddActionRow(
-				discord.NewStringSelectMenu("stop_loop_select", "Select loop(s) to stop", selectOptions...),
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay("# 🛑 Active Loops\nSelect a loop to stop."),
+					discord.NewActionRow(
+						discord.NewStringSelectMenu("stop_loop_select", "Select loop(s) to stop", selectOptions...),
+					),
+				),
 			).
 			Build())
 	}
@@ -319,10 +446,13 @@ func handleLoopPurge(event *events.ApplicationCommandInteractionCreate, data dis
 
 	totalDeleted := 0
 	for ch := range event.Client().Caches.Channels() {
+		// Skip channels not in this guild
 		if ch.GuildID() != guildID {
 			continue
 		}
-		if textCh, ok := ch.(discord.GuildTextChannel); ok {
+
+		// Support both Text and News (Announcement) channels
+		if textCh, ok := ch.(discord.GuildMessageChannel); ok {
 			if textCh.ParentID() != nil && *textCh.ParentID() == categoryID {
 				webhooks, err := event.Client().Rest.GetWebhooks(textCh.ID())
 				if err != nil {
@@ -428,6 +558,7 @@ func handleDebugLoopConfigDelete(event *events.ComponentInteractionCreate) {
 	channelID := data.Values[0]
 	cID, err := snowflake.Parse(channelID)
 	if err != nil {
+		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().SetContent("❌ Invalid selection.").Build())
 		return
 	}
 
@@ -437,15 +568,14 @@ func handleDebugLoopConfigDelete(event *events.ComponentInteractionCreate) {
 		configName = config.ChannelName
 	}
 
-	if err := proc.DeleteLoopConfig(cID, event.Client()); err != nil {
-		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetContent("❌ Failed to delete configuration.").
-			Build())
-		return
-	}
-
 	_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-		SetContent(fmt.Sprintf("✅ Deleted configuration for **%s**.", configName)).
+		SetIsComponentsV2(true).
+		ClearComponents().
+		AddComponents(
+			discord.NewContainer(
+				discord.NewTextDisplay(fmt.Sprintf("✅ Deleted configuration for **%s**.", configName)),
+			),
+		).
 		Build())
 }
 
@@ -453,6 +583,7 @@ func handleDebugLoopConfigDelete(event *events.ComponentInteractionCreate) {
 func handleDebugStopLoopSelect(event *events.ComponentInteractionCreate) {
 	data := event.StringSelectMenuInteractionData()
 	if len(data.Values) == 0 {
+		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().SetContent("❌ No selection made.").Build())
 		return
 	}
 
@@ -468,7 +599,13 @@ func handleDebugStopLoopSelect(event *events.ComponentInteractionCreate) {
 		}
 
 		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetContent(fmt.Sprintf("🛑 Stopped all **%d** running loops.", stopped)).
+			SetIsComponentsV2(true).
+			ClearComponents().
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay(fmt.Sprintf("🛑 Stopped all **%d** running loops.", stopped)),
+				),
+			).
 			Build())
 	} else {
 		cID, err := snowflake.Parse(selection)
@@ -479,7 +616,13 @@ func handleDebugStopLoopSelect(event *events.ComponentInteractionCreate) {
 		}
 
 		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetContent(msg).
+			SetIsComponentsV2(true).
+			ClearComponents().
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay(msg),
+				),
+			).
 			Build())
 	}
 }
