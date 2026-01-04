@@ -152,7 +152,7 @@ func undertextAutocomplete(event *events.AutocompleteInteractionCreate) {
 				Name:  char.Name,
 				Value: char.Value,
 			})
-			if len(choices) >= 25 { // Discord limit
+			if len(choices) >= 25 {
 				break
 			}
 		}

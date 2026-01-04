@@ -12,7 +12,7 @@ import (
 
 var DB *sql.DB
 
-func InitDatabase(dataSourceName string) error {
+func InitDatabase(ctx context.Context, dataSourceName string) error {
 	var err error
 	DB, err = sql.Open("sqlite3", dataSourceName)
 	if err != nil {
@@ -30,17 +30,17 @@ func InitDatabase(dataSourceName string) error {
 		"PRAGMA busy_timeout=5000;",
 		"PRAGMA cache_size=-2000;", // ~2MB cache
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	for _, p := range pragmas {
-		if _, err := DB.ExecContext(ctx, p); err != nil {
+		if _, err := DB.ExecContext(initCtx, p); err != nil {
 			return fmt.Errorf(MsgDatabasePragmaError, p, err)
 		}
 	}
 
 	// Create tables in a single transaction for speed and atomicity
-	tx, err := DB.BeginTx(ctx, nil)
+	tx, err := DB.BeginTx(initCtx, nil)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func InitDatabase(dataSourceName string) error {
 	}
 
 	for _, q := range tableQueries {
-		if _, err := tx.ExecContext(ctx, q); err != nil {
+		if _, err := tx.ExecContext(initCtx, q); err != nil {
 			return fmt.Errorf(MsgDatabaseTableError, err)
 		}
 	}
@@ -146,11 +146,40 @@ func GetRemindersForUser(ctx context.Context, userID snowflake.ID) ([]*Reminder,
 	return reminders, nil
 }
 
+func ClaimDueReminders(ctx context.Context) ([]*Reminder, error) {
+	// Using DELETE ... RETURNING is atomic in SQLite 3.35.0+
+	// This ensures each reminder is "claimed" by exactly one caller.
+	rows, err := DB.QueryContext(ctx, `
+		DELETE FROM reminders 
+		WHERE remind_at <= ? 
+		RETURNING id, user_id, channel_id, guild_id, message, remind_at, send_to, created_at
+	`, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reminders []*Reminder
+	for rows.Next() {
+		r := &Reminder{}
+		var uid, cid, gid string
+		err := rows.Scan(&r.ID, &uid, &cid, &gid, &r.Message, &r.RemindAt, &r.SendTo, &r.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		r.UserID, _ = snowflake.Parse(uid)
+		r.ChannelID, _ = snowflake.Parse(cid)
+		r.GuildID, _ = snowflake.Parse(gid)
+		reminders = append(reminders, r)
+	}
+	return reminders, nil
+}
+
 func GetDueReminders(ctx context.Context) ([]*Reminder, error) {
 	rows, err := DB.QueryContext(ctx, `
 		SELECT id, user_id, channel_id, guild_id, message, remind_at, send_to, created_at
 		FROM reminders WHERE remind_at <= ? ORDER BY remind_at ASC
-	`, time.Now())
+	`, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

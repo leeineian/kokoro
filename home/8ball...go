@@ -6,7 +6,6 @@ import (
 	"github.com/leeineian/minder/sys"
 )
 
-// Eightball command shared utilities
 func init() {
 	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:        "8ball",

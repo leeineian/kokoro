@@ -2,12 +2,12 @@ package home
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
-	"net/http"
-	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/leeineian/minder/sys"
 )
 
 const apiURL = "https://catfact.ninja/fact"
@@ -18,14 +18,13 @@ type CatFact struct {
 }
 
 func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(apiURL)
+	resp, err := sys.HttpClient.Get(apiURL)
 	if err != nil {
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to fetch cat fact."),
+					discord.NewTextDisplay("❌ **API Unreachable**: The cat fact service is currently offline or timing out.\n> _" + err.Error() + "_"),
 				),
 			).
 			SetEphemeral(true).
@@ -34,13 +33,26 @@ func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay(fmt.Sprintf("❌ **Service Error**: The API returned an unexpected status code: **%d %s**", resp.StatusCode, resp.Status)),
+				),
+			).
+			SetEphemeral(true).
+			Build())
+		return
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to read response."),
+					discord.NewTextDisplay("❌ **Data Error**: Failed to read the response body from the API."),
 				),
 			).
 			SetEphemeral(true).
@@ -54,7 +66,7 @@ func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to parse cat fact."),
+					discord.NewTextDisplay("❌ **Format Error**: The API returned data in an invalid format.\n> _" + err.Error() + "_"),
 				),
 			).
 			SetEphemeral(true).

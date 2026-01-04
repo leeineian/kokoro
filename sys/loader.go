@@ -3,6 +3,7 @@ package sys
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"time"
 
@@ -15,11 +16,22 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+var AppContext context.Context
+
+func SetAppContext(ctx context.Context) {
+	AppContext = ctx
+}
+
 var commands = []discord.ApplicationCommandCreate{}
 var commandHandlers = map[string]func(event *events.ApplicationCommandInteractionCreate){}
 var autocompleteHandlers = map[string]func(event *events.AutocompleteInteractionCreate){}
 var componentHandlers = map[string]func(event *events.ComponentInteractionCreate){}
-var onClientReadyCallbacks []func(client *bot.Client)
+var onClientReadyCallbacks []func(ctx context.Context, client *bot.Client)
+
+// HttpClient is a shared thread-safe client for all external API calls.
+var HttpClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
 
 // CreateClient creates and configures a disgo client
 func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
@@ -76,13 +88,13 @@ func RegisterComponentHandler(customID string, handler func(event *events.Compon
 	componentHandlers[customID] = handler
 }
 
-func OnClientReady(cb func(client *bot.Client)) {
+func OnClientReady(cb func(ctx context.Context, client *bot.Client)) {
 	onClientReadyCallbacks = append(onClientReadyCallbacks, cb)
 }
 
-func TriggerClientReady(client *bot.Client) {
+func TriggerClientReady(ctx context.Context, client *bot.Client) {
 	for _, cb := range onClientReadyCallbacks {
-		cb(client)
+		cb(ctx, client)
 	}
 }
 
@@ -138,22 +150,34 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 func onApplicationCommandInteraction(event *events.ApplicationCommandInteractionCreate) {
 	data := event.Data
 	if h, ok := commandHandlers[data.CommandName()]; ok {
-		go h(event)
+		safeGo(func() { h(event) })
 	}
 }
 
 func onAutocompleteInteraction(event *events.AutocompleteInteractionCreate) {
 	data := event.Data
 	if h, ok := autocompleteHandlers[data.CommandName]; ok {
-		go h(event)
+		safeGo(func() { h(event) })
 	}
 }
 
 func onComponentInteraction(event *events.ComponentInteractionCreate) {
 	customID := event.Data.CustomID()
 	if h, ok := componentHandlers[customID]; ok {
-		go h(event)
+		safeGo(func() { h(event) })
 	}
+}
+
+// safeGo runs a function in a new goroutine with panic recovery
+func safeGo(f func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				LogError("Panic recovered in handler: %v", r)
+			}
+		}()
+		f()
+	}()
 }
 
 func onReady(event *events.Ready) {
@@ -161,8 +185,8 @@ func onReady(event *events.Ready) {
 	botUser := event.User
 
 	// 1. Background Daemons
-	TriggerClientReady(client)
-	StartDaemons()
+	TriggerClientReady(AppContext, client)
+	StartDaemons(AppContext)
 
 	// 2. Final Status
 	LogInfo(MsgBotOnline, botUser.Username, botUser.ID.String(), os.Getpid())
@@ -170,21 +194,21 @@ func onReady(event *events.Ready) {
 
 // Daemon registry
 type daemonEntry struct {
-	starter func()
+	starter func(ctx context.Context)
 	logger  func(format string, v ...interface{})
 }
 
 var registeredDaemons []daemonEntry
 
 // RegisterDaemon registers a background daemon with a logger and start function
-func RegisterDaemon(logger func(format string, v ...interface{}), starter func()) {
+func RegisterDaemon(logger func(format string, v ...interface{}), starter func(ctx context.Context)) {
 	registeredDaemons = append(registeredDaemons, daemonEntry{starter: starter, logger: logger})
 }
 
 // StartDaemons starts all registered daemons with their individual colored logging
-func StartDaemons() {
+func StartDaemons(ctx context.Context) {
 	for _, daemon := range registeredDaemons {
 		daemon.logger("Starting...")
-		daemon.starter()
+		daemon.starter(ctx)
 	}
 }

@@ -320,9 +320,6 @@ const (
 	MsgCatImageAPIStatusError       = "Cat image API returned status %d"
 	MsgCatFailedToDecodeImage       = "Failed to decode cat image response: %v"
 	MsgCatImageAPIEmptyArray        = "Cat image API returned empty array"
-	MsgCatErrorEditingResponse      = "Error editing interaction response: %v"
-	MsgCatCannotSendErrorFollowup   = "Cannot send error followup: nil session or interaction"
-	MsgCatFailedToSendErrorFollowup = "Failed to send error followup message: %v"
 	MsgCatCannotSendErrorResponse   = "Cannot send error response: nil session or interaction"
 	MsgCatFailedToSendErrorResponse = "Failed to send error response: %v"
 
@@ -340,7 +337,6 @@ const (
 const (
 	// System logs
 	MsgReminderFailedToQueryDue      = "Failed to query due reminders: %v"
-	MsgReminderFailedToScan          = "Failed to scan reminder: %v"
 	MsgReminderFailedToCreateDM      = "Failed to create DM channel for user %s: %v"
 	MsgReminderFailedToSend          = "Failed to send reminder %d: %v"
 	MsgReminderFailedToDelete        = "Failed to delete sent reminder %d: %v"
@@ -350,7 +346,6 @@ const (
 	MsgReminderFailedToDeleteAll     = "Failed to delete all reminders: %v"
 	MsgReminderFailedToQuery         = "Failed to query reminders: %v"
 	MsgReminderAutocompleteFailed    = "Failed to query reminders for autocomplete: %v"
-	MsgReminderEditResponseError     = "Error editing interaction response: %v"
 	MsgReminderRespondError          = "Failed to respond to interaction: %v"
 	MsgReminderNaturalTimeInitFail   = "Failed to initialize naturaltime parser: %v"
 
@@ -415,26 +410,9 @@ const (
 // @undertext
 const (
 	// System logs
-	MsgUndertextEditResponseError = "Error editing interaction response: %v"
-	MsgUndertextRespondError      = "Failed to respond to interaction: %v"
+	MsgUndertextRespondError = "Failed to respond to interaction: %v"
 
 	// User-facing messages
-	ErrUndertextGenerateFailed = "Failed to generate text box."
-)
-
-// @eightball
-const (
-	// System logs
-	MsgEightballFailedToFetchFortune  = "Failed to fetch fortune: %v"
-	MsgEightballFortuneAPIStatusError = "Eightball API returned status %d"
-	MsgEightballFailedToDecodeFortune = "Failed to decode fortune: %v"
-	MsgEightballCannotSendError       = "Cannot send error response: nil session or interaction"
-	MsgEightballFailedToSendError     = "Failed to send error response: %v"
-
-	// User-facing messages
-	ErrEightballFailedToFetchFortune = "Failed to fetch fortune"
-	ErrEightballServiceUnavailable   = "Eightball service is unavailable"
-	ErrEightballFailedToDecode       = "Failed to decode fortune"
 )
 
 // GetUserErrors dynamically parses the source file to discover all 'Err' and 'Msg' constants.

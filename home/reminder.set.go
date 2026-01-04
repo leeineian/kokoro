@@ -1,7 +1,6 @@
 package home
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -27,7 +26,7 @@ func handleReminderSet(event *events.ApplicationCommandInteractionCreate, data d
 	}
 
 	// Ensure the time is in the future
-	if parsedTime.Before(time.Now()) {
+	if parsedTime.Before(time.Now().UTC()) {
 		reminderRespondImmediate(event, sys.ErrReminderPastTime)
 		return
 	}
@@ -50,14 +49,14 @@ func handleReminderSet(event *events.ApplicationCommandInteractionCreate, data d
 		SendTo:    sendTo,
 	}
 
-	if err := sys.AddReminder(context.Background(), reminder); err != nil {
+	if err := sys.AddReminder(sys.AppContext, reminder); err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToSave, err)
 		reminderRespondImmediate(event, sys.ErrReminderSaveFailed)
 		return
 	}
 
 	// Create response
-	relativeTime := formatReminderRelativeTime(time.Now(), parsedTime)
+	relativeTime := formatReminderRelativeTime(time.Now().UTC(), parsedTime)
 	response := fmt.Sprintf("✅ Reminder set for %s\n\n📝 %s", relativeTime, message)
 
 	reminderRespondImmediate(event, response)
@@ -65,7 +64,7 @@ func handleReminderSet(event *events.ApplicationCommandInteractionCreate, data d
 
 // parseNaturalTime parses natural language time expressions
 func parseNaturalTime(input string) (time.Time, error) {
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// Try using naturaltime parser with ParseDate method
 	result, err := reminderParser.ParseDate(input, now)

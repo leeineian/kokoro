@@ -10,7 +10,6 @@ import (
 	"github.com/sho0pi/naturaltime"
 )
 
-// Reminder command shared utilities
 var reminderParser *naturaltime.Parser
 
 func initReminderParser() {

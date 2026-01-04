@@ -2,15 +2,16 @@ package home
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
-	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/leeineian/minder/sys"
 )
 
 const eightBallApiURL = "https://www.eightballapi.com/api"
@@ -21,14 +22,13 @@ type EightBallResponse struct {
 }
 
 func handle8BallFortune(event *events.ApplicationCommandInteractionCreate) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(eightBallApiURL)
+	resp, err := sys.HttpClient.Get(eightBallApiURL)
 	if err != nil {
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to fetch fortune."),
+					discord.NewTextDisplay("❌ **API Unreachable**: The 8-ball service is currently offline or timing out.\n> _" + err.Error() + "_"),
 				),
 			).
 			SetEphemeral(true).
@@ -37,13 +37,26 @@ func handle8BallFortune(event *events.ApplicationCommandInteractionCreate) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		event.CreateMessage(discord.NewMessageCreateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay(fmt.Sprintf("❌ **Service Error**: The API returned an unexpected status code: **%d %s**", resp.StatusCode, resp.Status)),
+				),
+			).
+			SetEphemeral(true).
+			Build())
+		return
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to read response."),
+					discord.NewTextDisplay("❌ **Data Error**: Failed to read the response body from the API."),
 				),
 			).
 			SetEphemeral(true).
@@ -57,7 +70,7 @@ func handle8BallFortune(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to parse fortune."),
+					discord.NewTextDisplay("❌ **Format Error**: The API returned data in an invalid format.\n> _" + err.Error() + "_"),
 				),
 			).
 			SetEphemeral(true).

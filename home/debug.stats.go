@@ -1,7 +1,6 @@
 package home
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -185,7 +184,7 @@ func getDebugSystemStats() string {
 	data := strings.Join(lines, "\n")
 
 	debugCacheMu.Lock()
-	debugStatsCache.System = DebugCachedData{Data: data, Timestamp: time.Now()}
+	debugStatsCache.System = DebugCachedData{Data: data, Timestamp: time.Now().UTC()}
 	debugCacheMu.Unlock()
 	return data
 }
@@ -230,14 +229,14 @@ func getDebugMetrics(interactionID string, gatewayLatency int64, includePing boo
 		metrics.GatewayPing = gatewayLatency
 	}
 
-	start := time.Now()
-	_, _ = sys.GetBotConfig(context.Background(), "ping_test")
+	start := time.Now().UTC()
+	_, _ = sys.GetBotConfig(sys.AppContext, "ping_test")
 	metrics.DBLatency = fmt.Sprintf("%.2f", float64(time.Since(start).Microseconds())/1000.0)
 
 	debugCacheMu.Lock()
 	debugStatsCache.Metrics = DebugCachedMetrics{
 		Data:          metrics,
-		Timestamp:     time.Now(),
+		Timestamp:     time.Now().UTC(),
 		InteractionID: interactionID,
 	}
 	debugCacheMu.Unlock()

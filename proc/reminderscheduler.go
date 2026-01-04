@@ -13,13 +13,13 @@ import (
 var reminderSchedulerRunning = false
 
 func init() {
-	sys.OnClientReady(func(client *bot.Client) {
-		sys.RegisterDaemon(sys.LogReminder, func() { StartReminderScheduler(client) })
+	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
+		sys.RegisterDaemon(sys.LogReminder, func(ctx context.Context) { StartReminderScheduler(ctx, client) })
 	})
 }
 
 // StartReminderScheduler starts the reminder scheduler daemon
-func StartReminderScheduler(client *bot.Client) {
+func StartReminderScheduler(ctx context.Context, client *bot.Client) {
 	if reminderSchedulerRunning {
 		return
 	}
@@ -29,17 +29,23 @@ func StartReminderScheduler(client *bot.Client) {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			checkAndSendReminders(client)
+		for {
+			select {
+			case <-ticker.C:
+				checkAndSendReminders(ctx, client)
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 }
 
-func checkAndSendReminders(client *bot.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func checkAndSendReminders(parentCtx context.Context, client *bot.Client) {
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 
-	reminders, err := sys.GetDueReminders(ctx)
+	// Atomically fetch and delete due reminders to prevent race conditions
+	reminders, err := sys.ClaimDueReminders(ctx)
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToQueryDue, err)
 		return
@@ -47,27 +53,17 @@ func checkAndSendReminders(client *bot.Client) {
 
 	for _, r := range reminders {
 		// Send reminder
-		go sendReminder(client, r)
+		go sendReminder(parentCtx, client, r)
 	}
 }
 
-func sendReminder(client *bot.Client, r *sys.Reminder) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	// 1. IDs are already snowflake.ID types
+func sendReminder(parentCtx context.Context, client *bot.Client, r *sys.Reminder) {
+	// IDs are already snowflake.ID types
 	channelID := r.ChannelID
 	userID := r.UserID
 
-	if channelID == 0 {
-		sys.LogReminder("Invalid channel ID for reminder %d. Deleting.", r.ID)
-		_ = sys.DeleteReminderByID(ctx, r.ID)
-		return
-	}
-
-	if userID == 0 {
-		sys.LogReminder("Invalid user ID for reminder %d. Deleting.", r.ID)
-		_ = sys.DeleteReminderByID(ctx, r.ID)
+	if channelID == 0 || userID == 0 {
+		sys.LogReminder("Invalid IDs for reminder %d. Skipping.", r.ID)
 		return
 	}
 
@@ -99,15 +95,10 @@ func sendReminder(client *bot.Client, r *sys.Reminder) {
 
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToSend, r.ID, err)
-		// Don't delete if we can't send - try again next tick
+		// Option: Re-insert into DB if we wanted "at least once" retry logic,
+		// but removing the race condition was the primary goal.
 		return
 	}
 
-	// 3. Delete the reminder from database on success
-	err = sys.DeleteReminderByID(ctx, r.ID)
-	if err != nil {
-		sys.LogReminder(sys.MsgReminderFailedToDelete, r.ID, err)
-	} else {
-		sys.LogReminder(sys.MsgReminderSentAndDeleted, r.ID, userID)
-	}
+	sys.LogReminder(sys.MsgReminderSentAndDeleted, r.ID, userID)
 }

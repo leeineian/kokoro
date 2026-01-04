@@ -26,8 +26,8 @@ const (
 )
 
 func init() {
-	sys.OnClientReady(func(client *bot.Client) {
-		sys.RegisterDaemon(sys.LogLoopRotator, func() { InitLoopRotator(client) })
+	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
+		sys.RegisterDaemon(sys.LogLoopRotator, func(ctx context.Context) { InitLoopRotator(ctx, client) })
 	})
 }
 
@@ -51,6 +51,7 @@ type LoopState struct {
 	RoundsTotal     int
 	CurrentRound    int
 	NextRun         time.Time
+	EndTime         time.Time // Estimated or fixed end time
 	DurationTimeout *time.Timer
 }
 
@@ -61,9 +62,11 @@ var (
 )
 
 // InitLoopRotator initializes the loop rotator daemon
-func InitLoopRotator(client *bot.Client) {
+func InitLoopRotator(ctx context.Context, client *bot.Client) {
 	go func() {
-		configs, err := sys.GetAllLoopConfigs(context.Background())
+		// Wait a bit for cache and stability
+		time.Sleep(5 * time.Second)
+		configs, err := sys.GetAllLoopConfigs(ctx)
 		if err != nil {
 			sys.LogLoopRotator(sys.MsgLoopFailedToLoadConfigs, err)
 			return
@@ -93,12 +96,12 @@ func InitLoopRotator(client *bot.Client) {
 					channelData := dataVal.(*ChannelData)
 
 					// Load webhooks
-					if err := loadWebhooksForChannel(client, channelData); err != nil {
+					if err := loadWebhooksForChannel(ctx, client, channelData); err != nil {
 						sys.LogLoopRotator(sys.MsgLoopFailedToResume, cfg.ChannelName, err)
 						return
 					}
 
-					startLoopInternal(cfg.ChannelID, channelData, client)
+					startLoopInternal(ctx, cfg.ChannelID, channelData, client)
 				}(config)
 				resumeCount++
 			}
@@ -107,7 +110,89 @@ func InitLoopRotator(client *bot.Client) {
 		if resumeCount > 0 {
 			sys.LogLoopRotator(sys.MsgLoopResuming, resumeCount)
 		}
+
+		// Background cleanup of stale webhooks
+		cleanupStaleWebhooks(ctx, client)
 	}()
+}
+
+func cleanupStaleWebhooks(ctx context.Context, client *bot.Client) {
+	configs, err := sys.GetAllLoopConfigs(ctx)
+	if err != nil {
+		return
+	}
+
+	validChannelIDs := make(map[snowflake.ID]bool)
+	validCategoryIDs := make(map[snowflake.ID]bool)
+
+	for _, cfg := range configs {
+		if cfg.ChannelType == "category" {
+			validCategoryIDs[cfg.ChannelID] = true
+		} else {
+			validChannelIDs[cfg.ChannelID] = true
+		}
+	}
+
+	self, _ := client.Caches.SelfUser()
+
+	// Iterate guilds
+	for guild := range client.Caches.Guilds() {
+		webhooks, err := client.Rest.GetAllWebhooks(guild.ID)
+		if err != nil {
+			continue
+		}
+
+		deletedCount := 0
+		for _, wh := range webhooks {
+			if wh.Name() != LoopWebhookName {
+				continue
+			}
+
+			var chID snowflake.ID
+			var creatorID snowflake.ID
+
+			switch w := wh.(type) {
+			case discord.IncomingWebhook:
+				chID = w.ChannelID
+				creatorID = w.User.ID
+			case discord.ChannelFollowerWebhook:
+				chID = w.ChannelID
+				creatorID = w.User.ID
+			default:
+				continue
+			}
+
+			// Check if owned by bot
+			if creatorID != self.ID {
+				continue
+			}
+
+			// If it's a LoopHook owned by us, check if it belongs to a configured channel or category
+			isStale := true
+			if validChannelIDs[chID] {
+				isStale = false
+			} else {
+				// Check if the channel's parent is a configured category
+				if ch, ok := client.Caches.Channel(chID); ok {
+					if textCh, ok := ch.(discord.GuildMessageChannel); ok && textCh.ParentID() != nil {
+						if validCategoryIDs[*textCh.ParentID()] {
+							isStale = false
+						}
+					}
+				}
+			}
+
+			if isStale {
+				if err := client.Rest.DeleteWebhook(wh.ID()); err == nil {
+					deletedCount++
+				}
+			}
+		}
+
+		if deletedCount > 0 {
+			sys.LogLoopRotator("🧹 [Automatic] Cleaned up %d stale LoopHook(s) in guild: %s", deletedCount, guild.Name)
+		}
+	}
 }
 
 // parseDuration parses a duration string to time.Duration
@@ -170,7 +255,7 @@ func ParseDurationString(duration string) (time.Duration, error) {
 }
 
 // loadWebhooksForChannel loads webhooks for a channel or category with retry logic for cache readiness
-func loadWebhooksForChannel(client *bot.Client, data *ChannelData) error {
+func loadWebhooksForChannel(ctx context.Context, client *bot.Client, data *ChannelData) error {
 	if data.Hooks != nil {
 		return nil // Already loaded
 	}
@@ -193,16 +278,16 @@ func loadWebhooksForChannel(client *bot.Client, data *ChannelData) error {
 	}
 
 	if data.Config.ChannelType == "category" {
-		return prepareWebhooksForCategory(client, channel, data)
+		return prepareWebhooksForCategory(ctx, client, channel, data)
 	}
-	return prepareWebhooksForSingleChannel(client, channel, data)
+	return prepareWebhooksForSingleChannel(ctx, client, channel, data)
 }
 
 // prepareWebhooksForSingleChannel prepares webhooks for a single channel
-func prepareWebhooksForSingleChannel(client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
+func prepareWebhooksForSingleChannel(ctx context.Context, client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
 	channelID := channel.ID()
 
-	webhooks, err := getWebhooksWithRetry(client, channelID)
+	webhooks, err := getWebhooksWithRetry(ctx, client, channelID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch webhooks after retries: %w", err)
 	}
@@ -228,7 +313,7 @@ func prepareWebhooksForSingleChannel(client *bot.Client, channel discord.GuildCh
 		}
 		newHook, err := client.Rest.CreateWebhook(channelID, discord.WebhookCreate{
 			Name: LoopWebhookName,
-		})
+		}, rest.WithCtx(ctx))
 		if err != nil {
 			return fmt.Errorf("failed to create webhook: %w", err)
 		}
@@ -247,7 +332,7 @@ func prepareWebhooksForSingleChannel(client *bot.Client, channel discord.GuildCh
 }
 
 // prepareWebhooksForCategory prepares webhooks for all text channels in a category
-func prepareWebhooksForCategory(client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
+func prepareWebhooksForCategory(ctx context.Context, client *bot.Client, channel discord.GuildChannel, data *ChannelData) error {
 	categoryID := channel.ID()
 	guildID := channel.GuildID()
 
@@ -270,7 +355,7 @@ func prepareWebhooksForCategory(client *bot.Client, channel discord.GuildChannel
 					sem <- struct{}{}        // Acquire
 					defer func() { <-sem }() // Release
 
-					webhooks, err := getWebhooksWithRetry(client, tc.ID())
+					webhooks, err := getWebhooksWithRetry(ctx, client, tc.ID())
 					if err != nil {
 						sys.LogLoopRotator(sys.MsgLoopFailedToFetchWebhooks, tc.Name(), err)
 						return
@@ -294,7 +379,7 @@ func prepareWebhooksForCategory(client *bot.Client, channel discord.GuildChannel
 						}
 						newHook, err := client.Rest.CreateWebhook(tc.ID(), discord.WebhookCreate{
 							Name: LoopWebhookName,
-						})
+						}, rest.WithCtx(ctx))
 						if err != nil {
 							sys.LogLoopRotator(sys.MsgLoopFailedToCreateWebhook, tc.Name(), err)
 							return
@@ -324,7 +409,7 @@ func prepareWebhooksForCategory(client *bot.Client, channel discord.GuildChannel
 }
 
 // startLoopInternal starts a loop for a channel
-func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Client) {
+func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *ChannelData, client *bot.Client) {
 	stopChan := make(chan struct{})
 	state := &LoopState{
 		StopChan:     stopChan,
@@ -332,7 +417,7 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 		CurrentRound: 0,
 	}
 	activeLoops.Store(channelID, state)
-	sys.SetLoopState(context.Background(), channelID, true)
+	sys.SetLoopState(ctx, channelID, true)
 
 	isAlive := func() bool {
 		_, ok := activeLoops.Load(channelID)
@@ -342,7 +427,7 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 	go func() {
 		defer func() {
 			activeLoops.Delete(channelID)
-			sys.SetLoopState(context.Background(), channelID, false)
+			sys.SetLoopState(ctx, channelID, false)
 		}()
 
 		interval := time.Duration(data.Config.Interval) * time.Millisecond
@@ -351,9 +436,10 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 
 		if isTimedMode {
 			sys.LogLoopRotator(sys.MsgLoopStartingTimed, FormatDuration(interval))
+			state.EndTime = time.Now().UTC().Add(interval)
 			state.DurationTimeout = time.AfterFunc(interval, func() {
 				sys.LogLoopRotator(sys.MsgLoopTimeLimitReached, data.Config.ChannelName)
-				StopLoopInternal(channelID, client)
+				StopLoopInternal(ctx, channelID, client)
 			})
 		} else if isRandomMode {
 			sys.LogLoopRotator(sys.MsgLoopStartingRandom, data.Config.ChannelName)
@@ -368,6 +454,14 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 				state.RoundsTotal = randomRounds
 				state.CurrentRound = 0
 
+				// Simple estimation: 200ms per batch per round
+				batches := (len(data.Hooks) + LoopBatchSize - 1) / LoopBatchSize
+				if batches == 0 {
+					batches = 1
+				}
+				estDuration := time.Duration(randomRounds) * time.Duration(batches) * 200 * time.Millisecond
+				state.EndTime = time.Now().UTC().Add(estDuration)
+
 				sys.LogLoopRotator(sys.MsgLoopRandomStatus,
 					data.Config.ChannelName, randomRounds, FormatDuration(randomDelay))
 
@@ -381,7 +475,8 @@ func startLoopInternal(channelID snowflake.ID, data *ChannelData, client *bot.Cl
 				}
 
 				// Wait before next iteration
-				state.NextRun = time.Now().Add(randomDelay)
+				state.EndTime = time.Time{} // Clear end time during wait
+				state.NextRun = time.Now().UTC().Add(randomDelay)
 				select {
 				case <-time.After(randomDelay):
 					state.NextRun = time.Time{} // Clear after delay
@@ -486,7 +581,7 @@ func executeRound(data *ChannelData, isAlive func() bool, client *bot.Client) {
 }
 
 // StopLoopInternal stops a loop and performs cleanup
-func StopLoopInternal(channelID snowflake.ID, client *bot.Client) bool {
+func StopLoopInternal(ctx context.Context, channelID snowflake.ID, client *bot.Client) bool {
 	stateVal, loaded := activeLoops.LoadAndDelete(channelID)
 	if !loaded {
 		return false
@@ -499,7 +594,7 @@ func StopLoopInternal(channelID snowflake.ID, client *bot.Client) bool {
 	}
 
 	activeLoops.Delete(channelID)
-	sys.SetLoopState(context.Background(), channelID, false)
+	sys.SetLoopState(ctx, channelID, false)
 
 	dataVal, ok := configuredChannels.Load(channelID)
 	if ok {
@@ -531,9 +626,9 @@ func GetConfiguredChannels() map[snowflake.ID]*ChannelData {
 }
 
 // SetLoopConfig configures a channel for looping
-func SetLoopConfig(client *bot.Client, channelID snowflake.ID, config *sys.LoopConfig) error {
+func SetLoopConfig(ctx context.Context, client *bot.Client, channelID snowflake.ID, config *sys.LoopConfig) error {
 	sys.LogLoopRotator(sys.MsgLoopConfigured, config.ChannelName)
-	if err := sys.AddLoopConfig(context.Background(), channelID, config); err != nil {
+	if err := sys.AddLoopConfig(ctx, channelID, config); err != nil {
 		return err
 	}
 
@@ -547,7 +642,7 @@ func SetLoopConfig(client *bot.Client, channelID snowflake.ID, config *sys.LoopC
 }
 
 // StartLoop starts a loop for a channel ID
-func StartLoop(client *bot.Client, channelID snowflake.ID, interval time.Duration) error {
+func StartLoop(ctx context.Context, client *bot.Client, channelID snowflake.ID, interval time.Duration) error {
 	dataVal, ok := configuredChannels.Load(channelID)
 	if !ok {
 		return fmt.Errorf("channel not configured")
@@ -560,31 +655,31 @@ func StartLoop(client *bot.Client, channelID snowflake.ID, interval time.Duratio
 	}
 
 	// Load webhooks if needed
-	if err := loadWebhooksForChannel(client, data); err != nil {
+	if err := loadWebhooksForChannel(ctx, client, data); err != nil {
 		return err
 	}
 
 	// Apply runtime interval
 	data.Config.Interval = int(interval.Milliseconds())
 
-	startLoopInternal(channelID, data, client)
+	startLoopInternal(ctx, channelID, data, client)
 	return nil
 }
 
 // DeleteLoopConfig removes a loop configuration
-func DeleteLoopConfig(channelID snowflake.ID, client *bot.Client) error {
-	StopLoopInternal(channelID, client)
+func DeleteLoopConfig(ctx context.Context, channelID snowflake.ID, client *bot.Client) error {
+	StopLoopInternal(ctx, channelID, client)
 	configuredChannels.Delete(channelID)
-	return sys.DeleteLoopConfig(context.Background(), channelID)
+	return sys.DeleteLoopConfig(ctx, channelID)
 }
 
 // getWebhooksWithRetry fetches webhooks with exponential backoff and jitter
-func getWebhooksWithRetry(client *bot.Client, channelID snowflake.ID) ([]discord.Webhook, error) {
+func getWebhooksWithRetry(ctx context.Context, client *bot.Client, channelID snowflake.ID) ([]discord.Webhook, error) {
 	var webhooks []discord.Webhook
 	var err error
 
 	for i := 0; i < 5; i++ {
-		webhooks, err = client.Rest.GetWebhooks(channelID)
+		webhooks, err = client.Rest.GetWebhooks(channelID, rest.WithCtx(ctx))
 		if err == nil {
 			return webhooks, nil
 		}
@@ -597,7 +692,11 @@ func getWebhooksWithRetry(client *bot.Client, channelID snowflake.ID) ([]discord
 		sys.LogLoopRotator("⚠️ Retrying webhook fetch for %s in %v (Attempt %d/5): %v",
 			channelID, wait.Truncate(100*time.Millisecond), i+1, err)
 
-		time.Sleep(wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	return nil, err

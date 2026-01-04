@@ -1,7 +1,6 @@
 package home
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -18,7 +17,7 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 	if dismissIDStr, ok := data.OptString("dismiss"); ok {
 		// Handle dismissal
 		if dismissIDStr == "all" {
-			count, err := sys.DeleteAllRemindersForUser(context.Background(), userID)
+			count, err := sys.DeleteAllRemindersForUser(sys.AppContext, userID)
 			if err != nil {
 				sys.LogReminder(sys.MsgReminderFailedToDeleteAll, err)
 				reminderRespondImmediate(event, sys.ErrReminderDismissAllFail)
@@ -30,7 +29,7 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 
 		dismissID, err := strconv.ParseInt(dismissIDStr, 10, 64)
 		if err == nil {
-			deleted, err := sys.DeleteReminder(context.Background(), dismissID, userID)
+			deleted, err := sys.DeleteReminder(sys.AppContext, dismissID, userID)
 			if err != nil || !deleted {
 				reminderRespondImmediate(event, sys.ErrReminderDismissFailed)
 				return
@@ -41,7 +40,7 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 	}
 
 	// List reminders
-	reminders, err := sys.GetRemindersForUser(context.Background(), userID)
+	reminders, err := sys.GetRemindersForUser(sys.AppContext, userID)
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToQuery, err)
 		reminderRespondImmediate(event, sys.ErrReminderFetchFailed)
@@ -57,7 +56,7 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 	var content string
 	content = fmt.Sprintf("📋 **Your Reminders** (%d active)\n\n", len(reminders))
 	for i, r := range reminders {
-		relTime := formatReminderRelativeTime(time.Now(), r.RemindAt)
+		relTime := formatReminderRelativeTime(time.Now().UTC(), r.RemindAt)
 		content += fmt.Sprintf("%d. **%s** - %s\n", i+1, reminderTruncate(r.Message, 50), relTime)
 	}
 
@@ -67,7 +66,7 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 func handleReminderAutocomplete(event *events.AutocompleteInteractionCreate) {
 	userID := event.User().ID
 
-	reminders, err := sys.GetRemindersForUser(context.Background(), userID)
+	reminders, err := sys.GetRemindersForUser(sys.AppContext, userID)
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderAutocompleteFailed, err)
 		return

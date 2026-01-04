@@ -23,7 +23,7 @@ const (
 )
 
 var (
-	debugStartTime = time.Now()
+	debugStartTime = time.Now().UTC()
 
 	// Cache
 	debugCacheMu    sync.RWMutex

@@ -1,10 +1,8 @@
 package home
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -53,7 +51,7 @@ func loopRespond(event *events.ApplicationCommandInteractionCreate, content stri
 
 // handleLoopList lists configured loop channels
 func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
-	configs, err := sys.GetAllLoopConfigs(context.Background())
+	configs, err := sys.GetAllLoopConfigs(sys.AppContext)
 	if err != nil {
 		loopRespond(event, fmt.Sprintf("❌ Error loading configs: %v", err), true)
 		return
@@ -84,10 +82,11 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 			}
 
 			if !state.NextRun.IsZero() {
-				remaining := time.Until(state.NextRun)
-				if remaining > 0 {
-					status += fmt.Sprintf(" (Next in %s)", proc.FormatDuration(remaining))
-				}
+				// We are waiting for the next random batch
+				status += fmt.Sprintf(" (<t:%d:R>)", state.NextRun.Unix())
+			} else if !state.EndTime.IsZero() {
+				// We are currently in a round or a timed session
+				status += fmt.Sprintf(" (<t:%d:R>)", state.EndTime.Unix())
 			}
 		} else {
 			status = "🟠 Configured (Ready)"
@@ -171,7 +170,7 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		UseThread:     false,
 	}
 
-	if err := proc.SetLoopConfig(event.Client(), channelID, config); err != nil {
+	if err := proc.SetLoopConfig(sys.AppContext, event.Client(), channelID, config); err != nil {
 		loopRespond(event, fmt.Sprintf("❌ Failed to save configuration: %v", err), true)
 		return
 	}
@@ -213,7 +212,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 		_ = event.DeferCreateMessage(true)
 
 		go func() {
-			configs, _ := sys.GetAllLoopConfigs(context.Background())
+			configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 			if len(configs) == 0 {
 				_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 					SetIsComponentsV2(true).
@@ -224,7 +223,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 
 			started := 0
 			for _, cfg := range configs {
-				if err := proc.StartLoop(event.Client(), cfg.ChannelID, duration); err == nil {
+				if err := proc.StartLoop(sys.AppContext, event.Client(), cfg.ChannelID, duration); err == nil {
 					started++
 				}
 			}
@@ -243,7 +242,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 
 		_ = event.DeferCreateMessage(true)
 		go func() {
-			err = proc.StartLoop(event.Client(), tID, duration)
+			err = proc.StartLoop(sys.AppContext, event.Client(), tID, duration)
 			msg := "🚀 Loop started!"
 			if err != nil {
 				msg = fmt.Sprintf("❌ Failed to start: %v", err)
@@ -256,7 +255,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 		}()
 	} else {
 		// Show selection UI
-		configs, _ := sys.GetAllLoopConfigs(context.Background())
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 		if len(configs) == 0 {
 			loopRespond(event, "❌ No channels configured! Use `/debug loop set` first.", true)
 			return
@@ -321,10 +320,10 @@ func handleDebugStartLoopSelect(event *events.ComponentInteractionCreate) {
 
 	go func() {
 		if selection == "all" {
-			configs, _ := sys.GetAllLoopConfigs(context.Background())
+			configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 			started := 0
 			for _, cfg := range configs {
-				if err := proc.StartLoop(event.Client(), cfg.ChannelID, duration); err == nil {
+				if err := proc.StartLoop(sys.AppContext, event.Client(), cfg.ChannelID, duration); err == nil {
 					started++
 				}
 			}
@@ -345,7 +344,7 @@ func handleDebugStartLoopSelect(event *events.ComponentInteractionCreate) {
 				return
 			}
 
-			err = proc.StartLoop(event.Client(), cID, duration)
+			err = proc.StartLoop(sys.AppContext, event.Client(), cID, duration)
 			msg := "🚀 Loop started!"
 			if err != nil {
 				msg = fmt.Sprintf("❌ Failed to start: %v", err)
@@ -381,7 +380,7 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 
 		stopped := 0
 		for channelID := range activeLoops {
-			if proc.StopLoopInternal(channelID, event.Client()) {
+			if proc.StopLoopInternal(sys.AppContext, channelID, event.Client()) {
 				stopped++
 			}
 		}
@@ -389,7 +388,7 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 		loopRespond(event, fmt.Sprintf("🛑 Stopped **%d** loop(s).", stopped), true)
 	} else if targetID != "" {
 		tID, err := snowflake.Parse(targetID)
-		if err == nil && proc.StopLoopInternal(tID, event.Client()) {
+		if err == nil && proc.StopLoopInternal(sys.AppContext, tID, event.Client()) {
 			loopRespond(event, "✅ Stopped the selected loop.", true)
 		} else {
 			loopRespond(event, "❌ Could not find or stop the loop.", true)
@@ -403,7 +402,7 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 		}
 
 		var selectOptions []discord.StringSelectMenuOption
-		configs, _ := sys.GetAllLoopConfigs(context.Background())
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 
 		selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
 			"🛑 Stop All",
@@ -485,7 +484,7 @@ func debugWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate,
 
 	switch subCmd {
 	case "start":
-		configs, _ := sys.GetAllLoopConfigs(context.Background())
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 		activeLoops := proc.GetActiveLoops()
 
 		// Add "all" option if there are multiple configs and it matches the filter
@@ -516,7 +515,7 @@ func debugWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate,
 
 	case "stop":
 		activeLoops := proc.GetActiveLoops()
-		configs, _ := sys.GetAllLoopConfigs(context.Background())
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 
 		// Add "all" option if there are multiple running loops and it matches the filter
 		if len(activeLoops) > 1 {
@@ -569,8 +568,8 @@ func handleDebugLoopConfigDelete(event *events.ComponentInteractionCreate) {
 		return
 	}
 
-	_ = proc.DeleteLoopConfig(cID, event.Client())
-	config, _ := sys.GetLoopConfig(context.Background(), cID)
+	_ = proc.DeleteLoopConfig(sys.AppContext, cID, event.Client())
+	config, _ := sys.GetLoopConfig(sys.AppContext, cID)
 	configName := "Unknown"
 	if config != nil {
 		configName = config.ChannelName
@@ -601,7 +600,7 @@ func handleDebugStopLoopSelect(event *events.ComponentInteractionCreate) {
 		activeLoops := proc.GetActiveLoops()
 		stopped := 0
 		for channelID := range activeLoops {
-			if proc.StopLoopInternal(channelID, event.Client()) {
+			if proc.StopLoopInternal(sys.AppContext, channelID, event.Client()) {
 				stopped++
 			}
 		}
@@ -617,7 +616,7 @@ func handleDebugStopLoopSelect(event *events.ComponentInteractionCreate) {
 			Build())
 	} else {
 		cID, err := snowflake.Parse(selection)
-		success := err == nil && proc.StopLoopInternal(cID, event.Client())
+		success := err == nil && proc.StopLoopInternal(sys.AppContext, cID, event.Client())
 		msg := "❌ Could not find or stop the selected loop."
 		if success {
 			msg = "✅ Stopped the selected loop."

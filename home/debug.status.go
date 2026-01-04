@@ -1,8 +1,6 @@
 package home
 
 import (
-	"context"
-
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/leeineian/minder/sys"
@@ -12,9 +10,9 @@ func handleDebugStatus(event *events.ApplicationCommandInteractionCreate, data d
 	visible := data.Bool("visible")
 
 	if visible {
-		sys.SetBotConfig(context.Background(), "status_visible", "true")
+		sys.SetBotConfig(sys.AppContext, "status_visible", "true")
 	} else {
-		sys.SetBotConfig(context.Background(), "status_visible", "false")
+		sys.SetBotConfig(sys.AppContext, "status_visible", "false")
 	}
 
 	content := "✅ Status visibility updated!"

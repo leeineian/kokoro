@@ -1,7 +1,6 @@
 package home
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/disgoorg/disgo/discord"
@@ -28,7 +27,7 @@ func handleDebugRoleColor(event *events.ApplicationCommandInteractionCreate, dat
 	switch subCmd {
 	case "set":
 		roleID := data.Snowflake("role")
-		err := sys.SetGuildRandomColorRole(context.Background(), *guildID, roleID)
+		err := sys.SetGuildRandomColorRole(sys.AppContext, *guildID, roleID)
 		if err != nil {
 			sys.LogDebug(sys.MsgDebugRoleColorUpdateFail, err)
 			event.CreateMessage(discord.NewMessageCreateBuilder().
@@ -44,10 +43,10 @@ func handleDebugRoleColor(event *events.ApplicationCommandInteractionCreate, dat
 		}
 
 		// Start rotation daemon for this guild
-		proc.StartRotationForGuild(event.Client(), *guildID, roleID)
+		proc.StartRotationForGuild(sys.AppContext, event.Client(), *guildID, roleID)
 
 		// Trigger immediate color update
-		proc.UpdateRoleColor(event.Client(), *guildID, roleID)
+		proc.UpdateRoleColor(sys.AppContext, event.Client(), *guildID, roleID)
 
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
@@ -60,7 +59,7 @@ func handleDebugRoleColor(event *events.ApplicationCommandInteractionCreate, dat
 			Build())
 
 	case "reset":
-		err := sys.SetGuildRandomColorRole(context.Background(), *guildID, 0)
+		err := sys.SetGuildRandomColorRole(sys.AppContext, *guildID, 0)
 		if err != nil {
 			sys.LogDebug(sys.MsgDebugRoleColorResetFail, err)
 			event.CreateMessage(discord.NewMessageCreateBuilder().
@@ -90,7 +89,7 @@ func handleDebugRoleColor(event *events.ApplicationCommandInteractionCreate, dat
 
 	case "refresh":
 		// Get the configured role
-		roleID, err := sys.GetGuildRandomColorRole(context.Background(), *guildID)
+		roleID, err := sys.GetGuildRandomColorRole(sys.AppContext, *guildID)
 		if err != nil || roleID == 0 {
 			event.CreateMessage(discord.NewMessageCreateBuilder().
 				SetIsComponentsV2(true).
@@ -105,7 +104,7 @@ func handleDebugRoleColor(event *events.ApplicationCommandInteractionCreate, dat
 		}
 
 		// Actually update the role color
-		err = proc.UpdateRoleColor(event.Client(), *guildID, roleID)
+		err = proc.UpdateRoleColor(sys.AppContext, event.Client(), *guildID, roleID)
 		if err != nil {
 			sys.LogDebug("Failed to refresh role color: %v", err)
 			event.CreateMessage(discord.NewMessageCreateBuilder().

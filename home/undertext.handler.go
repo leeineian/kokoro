@@ -11,11 +11,8 @@ import (
 	"github.com/leeineian/minder/sys"
 )
 
-// processUndertextColors converts user-friendly color syntax to API format
 // Syntax: [color]text[/] where color is hex (#ff0000) or name (red)
-// Example: "Hello [red]world[/]!" → "Hello color=red world text=join color=white !"
 func processUndertextColors(input string) string {
-	// Pattern: [color]text[/] or [#hex]text[/]
 	pattern := regexp.MustCompile(`\[([#]?[a-zA-Z0-9]+)\]([^\[]*)\[/\]`)
 
 	return pattern.ReplaceAllStringFunc(input, func(match string) string {

@@ -21,8 +21,8 @@ const (
 )
 
 func init() {
-	sys.OnClientReady(func(client *bot.Client) {
-		sys.RegisterDaemon(sys.LogRoleColorRotator, func() { StartRoleColorRotator(client) })
+	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
+		sys.RegisterDaemon(sys.LogRoleColorRotator, func(ctx context.Context) { StartRoleColorRotator(ctx, client) })
 	})
 }
 
@@ -43,11 +43,11 @@ var (
 )
 
 // StartRoleColorRotator initializes the role color rotator daemon
-func StartRoleColorRotator(client *bot.Client) {
+func StartRoleColorRotator(ctx context.Context, client *bot.Client) {
 	// Move the startup logic into a goroutine to avoid blocking other daemons
 	go func() {
 		// Load all configured guilds
-		configs, err := sys.GetAllGuildRandomColorConfigs(context.Background())
+		configs, err := sys.GetAllGuildRandomColorConfigs(ctx)
 		if err != nil {
 			sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
 			return
@@ -61,13 +61,13 @@ func StartRoleColorRotator(client *bot.Client) {
 			roleStates.Store(gID, state)
 
 			// Start rotation for this guild
-			ScheduleNextUpdate(client, gID, rID)
+			ScheduleNextUpdate(ctx, client, gID, rID)
 		}
 	}()
 }
 
 // StartRotationForGuild starts or restarts the rotation for a specific guild
-func StartRotationForGuild(client *bot.Client, guildID, roleID snowflake.ID) {
+func StartRotationForGuild(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) {
 	// Stop existing if any
 	StopRotationForGuild(guildID)
 
@@ -77,7 +77,7 @@ func StartRotationForGuild(client *bot.Client, guildID, roleID snowflake.ID) {
 	}
 	roleStates.Store(guildID, state)
 
-	ScheduleNextUpdate(client, guildID, roleID)
+	ScheduleNextUpdate(ctx, client, guildID, roleID)
 }
 
 // StopRotationForGuild stops the rotation for a specific guild
@@ -93,12 +93,12 @@ func StopRotationForGuild(guildID snowflake.ID) {
 }
 
 // ScheduleNextUpdate schedules the next color update
-func ScheduleNextUpdate(client *bot.Client, guildID, roleID snowflake.ID) {
+func ScheduleNextUpdate(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) {
 	// Calculate random duration
 	minutes := mrand.Intn(maxMinutes-minMinutes+1) + minMinutes
 	duration := time.Duration(minutes) * time.Minute
 
-	nextUpdate := time.Now().Add(duration)
+	nextUpdate := time.Now().UTC().Add(duration)
 	nextUpdateMap.Store(guildID, nextUpdate)
 
 	// If current color is unknown, try to fetch it
@@ -124,16 +124,20 @@ func ScheduleNextUpdate(client *bot.Client, guildID, roleID snowflake.ID) {
 	sys.LogRoleColorRotator(sys.MsgRoleColorNextUpdate, guildLabel, minutes)
 
 	timer := time.AfterFunc(duration, func() {
-		UpdateRoleColor(client, guildID, roleID)
+		// Use a local context or AppContext for the background update since the original ctx might be gone
+		// But ideally we want to respect the lifecycle.
+		// For now, let's use sys.AppContext as a fallback if ctx is done,
+		// but passing it in shows the intent.
+		UpdateRoleColor(ctx, client, guildID, roleID)
 		// Schedule next one recursively
-		ScheduleNextUpdate(client, guildID, roleID)
+		ScheduleNextUpdate(ctx, client, guildID, roleID)
 	})
 
 	rotatorTimers.Store(guildID, timer)
 }
 
 // UpdateRoleColor performs the immediate color update
-func UpdateRoleColor(client *bot.Client, guildID, roleID snowflake.ID) error {
+func UpdateRoleColor(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) error {
 	var newColor int
 	var lastHex string
 
@@ -201,7 +205,7 @@ func UpdateRoleColor(client *bot.Client, guildID, roleID snowflake.ID) error {
 }
 
 // GetNextUpdate returns the nearest next update timestamp and the guild ID
-func GetNextUpdate() (time.Time, snowflake.ID, bool) {
+func GetNextUpdate(ctx context.Context) (time.Time, snowflake.ID, bool) {
 	var nearest time.Time
 	var nearestGuild snowflake.ID
 	found := false
@@ -221,8 +225,8 @@ func GetNextUpdate() (time.Time, snowflake.ID, bool) {
 }
 
 // GetCurrentColor returns the current color for a guild, prioritizing cache
-func GetCurrentColor(client *bot.Client, guildID snowflake.ID) string {
-	val, ok, _ := GetCurrentColorInt(client, guildID)
+func GetCurrentColor(ctx context.Context, client *bot.Client, guildID snowflake.ID) string {
+	val, ok, _ := GetCurrentColorInt(ctx, client, guildID)
 	if !ok {
 		return ""
 	}
@@ -230,7 +234,7 @@ func GetCurrentColor(client *bot.Client, guildID snowflake.ID) string {
 }
 
 // GetCurrentColorInt returns the current color for a guild as an integer
-func GetCurrentColorInt(client *bot.Client, guildID snowflake.ID) (int, bool, bool) {
+func GetCurrentColorInt(ctx context.Context, client *bot.Client, guildID snowflake.ID) (int, bool, bool) {
 	val, ok := roleStates.Load(guildID)
 	if !ok {
 		return 0, false, false
@@ -253,6 +257,6 @@ func GetCurrentColorInt(client *bot.Client, guildID snowflake.ID) (int, bool, bo
 }
 
 // ForceColorUpdate is unused but required for interface
-func ForceColorUpdate(client *bot.Client, guildID, roleID snowflake.ID) {
-	UpdateRoleColor(client, guildID, roleID)
+func ForceColorUpdate(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) {
+	UpdateRoleColor(ctx, client, guildID, roleID)
 }

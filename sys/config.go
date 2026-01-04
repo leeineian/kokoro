@@ -41,8 +41,6 @@ func LoadConfig() (*Config, error) {
 	token := os.Getenv("DISCORD_TOKEN")
 	dbPath := os.Getenv("DATABASE_PATH")
 	if dbPath == "" {
-		// Smart directory: if a 'data' folder exists (like in Docker), use it.
-		// Otherwise, stay in the current directory.
 		folder := "."
 		if info, err := os.Stat("data"); err == nil && info.IsDir() {
 			folder = "./data"

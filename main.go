@@ -97,50 +97,50 @@ func main() {
 		_ = os.Remove(".bot.pid")
 	}()
 
-	// 3. Setup shutdown signal
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
-
 	// 4. Run bot (blocks until shutdown signal)
-	if err := run(sc, *silent); err != nil {
+	if err := run(*silent); err != nil {
 		sys.LogFatal(sys.MsgGenericError, err)
 	}
 }
 
-func run(shutdownChan <-chan os.Signal, silent bool) error {
-	ctx := context.Background()
+func run(silent bool) error {
+	// 1. Setup global context that responds to shutdown signals
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+	defer stop()
 
-	// 1. Load configuration
+	sys.SetAppContext(ctx)
+
+	// 2. Load configuration
 	cfg, err := sys.LoadConfig()
 	if err != nil {
 		return fmt.Errorf(sys.MsgConfigFailedToLoad, err)
 	}
 
-	// 2. Create disgo client
+	// 3. Create disgo client
 	client, err := sys.CreateClient(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create Discord client: %w", err)
 	}
 	defer client.Close(ctx)
 
-	// 3. Initialize database
-	if err := sys.InitDatabase(cfg.DatabasePath); err != nil {
+	// 4. Initialize database
+	if err := sys.InitDatabase(ctx, cfg.DatabasePath); err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 	defer sys.CloseDatabase()
 
-	// 4. Command Registration
+	// 5. Command Registration
 	if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
 		sys.LogError(sys.MsgBotRegisterFail, err)
 	}
 
-	// 5. Connect to Gateway
+	// 6. Connect to Gateway
 	sys.LogInfo(sys.MsgBotStarting, sys.GetProjectName())
 	if err := client.OpenGateway(ctx); err != nil {
 		return fmt.Errorf("failed to open gateway: %w", err)
 	}
 
-	<-shutdownChan
+	<-ctx.Done()
 	if !silent {
 		fmt.Println()
 	}
