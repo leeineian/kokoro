@@ -454,20 +454,28 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 				state.RoundsTotal = randomRounds
 				state.CurrentRound = 0
 
-				// Simple estimation: 200ms per batch per round
 				batches := (len(data.Hooks) + LoopBatchSize - 1) / LoopBatchSize
 				if batches == 0 {
 					batches = 1
 				}
-				estDuration := time.Duration(randomRounds) * time.Duration(batches) * 200 * time.Millisecond
+
+				// Initial generous estimation: 500ms per batch per round
+				estDuration := time.Duration(randomRounds) * time.Duration(batches) * 500 * time.Millisecond
 				state.EndTime = time.Now().UTC().Add(estDuration)
 
 				sys.LogLoopRotator(sys.MsgLoopRandomStatus,
 					data.Config.ChannelName, randomRounds, FormatDuration(randomDelay))
 
+				batchStart := time.Now()
 				for i := 0; i < randomRounds && isAlive(); i++ {
 					state.CurrentRound = i + 1
 					executeRound(data, isAlive, client)
+
+					// Dynamic EndTime update based on actual speed
+					elapsed := time.Since(batchStart)
+					avgPerRound := elapsed / time.Duration(i+1)
+					remainingRounds := time.Duration(randomRounds - (i + 1))
+					state.EndTime = time.Now().UTC().Add(avgPerRound * remainingRounds)
 				}
 
 				if !isAlive() {

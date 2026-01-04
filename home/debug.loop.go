@@ -3,6 +3,7 @@ package home
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -83,10 +84,14 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 
 			if !state.NextRun.IsZero() {
 				// We are waiting for the next random batch
-				status += fmt.Sprintf(" (<t:%d:R>)", state.NextRun.Unix())
+				status += fmt.Sprintf(" (Next: <t:%d:R>)", state.NextRun.Unix())
 			} else if !state.EndTime.IsZero() {
 				// We are currently in a round or a timed session
-				status += fmt.Sprintf(" (<t:%d:R>)", state.EndTime.Unix())
+				if state.EndTime.After(time.Now().UTC()) {
+					status += fmt.Sprintf(" (Ends: <t:%d:R>)", state.EndTime.Unix())
+				} else {
+					status += " (Finishing...)"
+				}
 			}
 		} else {
 			status = "🟠 Configured (Ready)"
