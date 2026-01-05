@@ -7,6 +7,7 @@ import (
 
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/leeineian/minder/sys"
 )
 
@@ -73,7 +74,7 @@ func sendReminder(parentCtx context.Context, client *bot.Client, r *sys.Reminder
 
 	if r.SendTo == "dm" {
 		// Create DM channel
-		dmChannel, dmErr := client.Rest.CreateDMChannel(userID)
+		dmChannel, dmErr := client.Rest.CreateDMChannel(userID, rest.WithCtx(parentCtx))
 		if dmErr != nil {
 			sys.LogReminder(sys.MsgReminderFailedToCreateDM, userID, dmErr)
 			// Fallback: targetChannelID stays as the original channel
@@ -91,7 +92,7 @@ func sendReminder(parentCtx context.Context, client *bot.Client, r *sys.Reminder
 			),
 		)
 
-	_, err := client.Rest.CreateMessage(targetChannelID, builder.Build())
+	_, err := client.Rest.CreateMessage(targetChannelID, builder.Build(), rest.WithCtx(parentCtx))
 
 	if err != nil {
 		sys.LogReminder(sys.MsgReminderFailedToSend, r.ID, err)

@@ -17,6 +17,7 @@ import (
 func main() {
 	// Parse flags
 	silent := flag.Bool("silent", false, "Disable all log output")
+	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
 	flag.Parse()
 
 	if *silent {
@@ -98,12 +99,40 @@ func main() {
 	}()
 
 	// 4. Run bot (blocks until shutdown signal)
-	if err := run(*silent); err != nil {
+	if err := run(*silent, *skipReg); err != nil {
 		sys.LogFatal(sys.MsgGenericError, err)
+	}
+
+	// 5. Handle Reboot
+	if sys.RestartRequested {
+		sys.LogInfo("Self-restarting process...")
+		// Manually trigger cleanup since syscall.Exec won't run defers
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+		_ = os.Remove(".bot.pid")
+
+		// Re-execute the binary with the same arguments and environment
+		// Add -skip-reg to avoid hitting rate limits on every reboot
+		args := os.Args
+		hasSkipReg := false
+		for _, arg := range args {
+			if arg == "-skip-reg" {
+				hasSkipReg = true
+				break
+			}
+		}
+		if !hasSkipReg {
+			args = append(args, "-skip-reg")
+		}
+
+		err := syscall.Exec(args[0], args, os.Environ())
+		if err != nil {
+			sys.LogFatal("Failed to re-execute: %v", err)
+		}
 	}
 }
 
-func run(silent bool) error {
+func run(silent bool, skipReg bool) error {
 	// 1. Setup global context that responds to shutdown signals
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -130,8 +159,12 @@ func run(silent bool) error {
 	defer sys.CloseDatabase()
 
 	// 5. Command Registration
-	if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
-		sys.LogError(sys.MsgBotRegisterFail, err)
+	if !skipReg {
+		if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
+			sys.LogError(sys.MsgBotRegisterFail, err)
+		}
+	} else {
+		sys.LogInfo("Skipping command registration as requested.")
 	}
 
 	// 6. Connect to Gateway

@@ -20,26 +20,39 @@ flowchart TB
             CatSay["say (ANSI ASCII)"]
         end
         
-        subgraph DebugCmd["/debug"]
-            DebugStats["stats / ping"]
-            DebugEcho["echo"]
-            DebugStatus["status config"]
-            DebugRoleColor["rolecolor cycle"]
-            DebugLoop["webhook stress"]
-            DebugTest["test-error preview"]
+        subgraph SessionCmd["/session"]
+            SessionReboot["reboot (Process)"]
+            SessionShutdown["shutdown (Graceful)"]
         end
-        
+
+        subgraph SystemCmd["/stats & /ping"]
+            SystemStats["stats (Metrics)"]
+            SystemPing["ping (Latency)"]
+            SystemStatus["status (Presence)"]
+        end
+
+        subgraph LoopCmd["/loop"]
+            LoopList["list (Configs)"]
+            LoopSet["set (Target)"]
+            LoopStart["start (Stress)"]
+            LoopStop["stop (Cleanup)"]
+        end
+
         subgraph ReminderCmd["/reminder"]
             ReminderSet["set (Natural Time)"]
             ReminderList["list (Interactive)"]
         end
-        
-        subgraph UndertextCmd["/undertext"]
-            UndertextGen["Generated Sprites<br/>Animated GIFs<br/>Autocompletion"]
-        end
 
-        subgraph EightballCmd["/8ball"]
-            EightballFortune["fortune (API)"]
+        subgraph RoleColorCmd["/rolecolor"]
+            RoleColorSet["set (RGB Cycle)"]
+            RoleColorRefresh["refresh (Immediate)"]
+        end
+        
+        subgraph UtilityCmd["Utilities"]
+            EchoCmd["/echo (ANSI)"]
+            EightballCmd["/8ball (Fortune)"]
+            UndertextCmd["/undertext (Sprites)"]
+            TestCmd["/test (Error Preview)"]
         end
     end
 
@@ -47,7 +60,7 @@ flowchart TB
         ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
         StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
         RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
-        LoopRotator["looprotator.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
+        LoopManager["loopmanager.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
     end
 
     subgraph External["External Services"]
@@ -68,26 +81,28 @@ flowchart TB
 
     %% Command registration
     Loader --> CatCmd
-    Loader --> DebugCmd
+    Loader --> SessionCmd
+    Loader --> SystemCmd
+    Loader --> LoopCmd
     Loader --> ReminderCmd
-    Loader --> UndertextCmd
-    Loader --> EightballCmd
+    Loader --> RoleColorCmd
+    Loader --> UtilityCmd
 
     %% Daemon startup
     Main --> ReminderScheduler
     Main --> StatusRotator
     Main --> RoleColorRotator
-    Main --> LoopRotator
+    Main --> LoopManager
 
     %% Daemon dependencies
     ReminderScheduler --> Database
     RoleColorRotator --> Database
-    LoopRotator --> Database
+    LoopManager --> Database
 
     %% External API connections
     CatCmd --> CatAPI
-    EightballCmd --> EightballAPI
-    UndertextCmd --> UndertaleAPI
+    UtilityCmd --> EightballAPI
+    UtilityCmd --> UndertaleAPI
     Loader --> Discord
     Daemons --> Discord
 
@@ -100,8 +115,8 @@ flowchart TB
 
     class Main entryStyle
     class Config,Database,Loader,Logger coreStyle
-    class CatFact,CatImage,CatSay,DebugStats,DebugEcho,DebugStatus,DebugRoleColor,DebugLoop,DebugTest,ReminderSet,ReminderList,UndertextGen,EightballFortune cmdStyle
-    class ReminderScheduler,StatusRotator,RoleColorRotator,LoopRotator daemonStyle
+    class CatFact,CatImage,CatSay,SessionReboot,SessionShutdown,SystemStats,SystemPing,SystemStatus,LoopList,LoopSet,LoopStart,LoopStop,ReminderSet,ReminderList,RoleColorSet,RoleColorRefresh,EchoCmd,EightballCmd,UndertextCmd,TestCmd cmdStyle
+    class ReminderScheduler,StatusRotator,RoleColorRotator,LoopManager daemonStyle
     class Discord,CatAPI,UndertaleAPI,EightballAPI externalStyle
 ```
 
@@ -116,27 +131,35 @@ minder/
 ├── docker-compose.yml            # Multi-service deployment
 |
 ├── home/                         # [Discord Commands]
-│   ├── cat...go                  # /cat command logic
-│   ├── cat.fact.go               # /cat fact (catfact.ninja) handler
-│   ├── cat.image.go              # /cat image (thecatapi.com) handler
-│   ├── cat.say.go                # /cat say (ANSI ASCII) handler
-│   ├── 8ball...go                # /8ball command logic
-│   ├── 8ball.fortune.go          # /8ball fortune (eightballapi.com) handler
-│   ├── debug...go                # /debug command logic
-│   ├── debug.echo.go             # /debug echo (ANSI ASCII) handler
-│   ├── debug.loop.go             # /debug loop (Webhook) handler
-│   ├── debug.rolecolor.go        # /debug rolecolor (RGB) handler
-│   ├── debug.stats.go            # /debug stats (Live System Metrics) handler
-│   ├── debug.status.go           # /debug status (Presence Visibility) handler
-│   ├── debug.test.go             # /debug test-error (AST Discovery) handler
-│   ├── reminder...go             # /reminder command logic
-│   ├── reminder.set.go           # /reminder set (Natural Language Time) handler
-│   ├── reminder.list.go          # /reminder list (Interactive View) handler
-│   ├── undertext...go            # /undertext command logic
-│   └── undertext.handler.go      # /undertext (Demirramon API bridge) handler
+│   ├── 8ball.go                  # /8ball fortune (API + ANSI)
+│   ├── cat...go                  # /cat command router
+│   ├── cat.fact.go               # /cat fact handler
+│   ├── cat.image.go              # /cat image handler
+│   ├── cat.say.go                # /cat say (ANSI) handler
+│   ├── echo...go                 # /echo command (Admin)
+│   ├── loop...go                 # /loop command router
+│   ├── loop.list.go              # /loop list handler
+│   ├── loop.set.go               # /loop set handler
+│   ├── loop.start.go             # /loop start (Stress) handler
+│   ├── loop.stop.go              # /loop stop (Cleanup) handler
+│   ├── ping.go                   # /ping command (Latency)
+│   ├── reminder...go             # /reminder command router
+│   ├── reminder.list.go          # /reminder list handler
+│   ├── reminder.set.go           # /reminder set handler
+│   ├── rolecolor...go            # /rolecolor command router
+│   ├── rolecolor.refresh.go      # /rolecolor refresh handler
+│   ├── rolecolor.reset.go        # /rolecolor reset handler
+│   ├── rolecolor.set.go          # /rolecolor set handler
+│   ├── session...go              # /session command router
+│   ├── session.reboot.go         # /session reboot handler
+│   ├── session.shutdown.go       # /session shutdown handler
+│   ├── stats.go                  # /stats command (Metrics)
+│   ├── status.go                 # /status command (Config)
+│   ├── test...go                 # /test command (Admin)
+│   └── undertext.go              # /undertext image generator
 │
 ├── proc/                         # [Background Daemons]
-│   ├── looprotator.go            # Webhook loop daemon
+│   ├── loopmanager.go            # Webhook loop manager
 │   ├── reminderscheduler.go      # Reminder notification daemon
 │   ├── rolecolorrotator.go       # Role color cycle daemon
 │   └── statusrotator.go          # Status cycle daemon
@@ -144,6 +167,6 @@ minder/
 └── sys/                          # [Core Systems]
     ├── config.go                 # Environment configuration
     ├── database.go               # SQLite database layer
-    ├── loader.go                 # Session creation & command registration
-    └── logger.go                 # Dynamic AST Parsing & Leveled Logging
+    ├── loader.go                 # Session creation & registration
+    └── logger.go                 # Leveled Logging & AST Discovery
 ```

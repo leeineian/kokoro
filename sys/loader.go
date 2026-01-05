@@ -17,6 +17,7 @@ import (
 )
 
 var AppContext context.Context
+var RestartRequested bool
 
 func SetAppContext(ctx context.Context) {
 	AppContext = ctx
@@ -123,11 +124,12 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 		// Brief pause to satisfy Discord rate limits during rapid restarts
 		time.Sleep(1 * time.Second)
 
-		// 2. Clear Global
+		// 2. Clear Global (Optional, only if needed or first time)
 		LogInfo(MsgLoaderGlobalClear)
 		_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
 		if err != nil {
-			LogWarn(MsgLoaderGlobalClearFail, err)
+			// Don't let global clear failure (often rate limits) stop the bot
+			LogWarn("Global command clear skipped or rate-limited: %v", err)
 		} else {
 			LogInfo(MsgLoaderGlobalCleared)
 		}

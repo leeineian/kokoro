@@ -27,7 +27,7 @@ var (
 	reminderColor      = color.New(color.FgMagenta)
 	statusRotatorColor = color.New(color.FgGreen)
 	roleRotatorColor   = color.New(color.FgYellow)
-	loopRotatorColor   = color.New(color.FgBlue)
+	loopManagerColor   = color.New(color.FgBlue)
 	catColor           = color.New(color.FgCyan)
 	undertextColor     = color.New(color.FgRed)
 	eightballColor     = color.New(color.FgHiBlue)
@@ -113,8 +113,8 @@ func LogRoleColorRotator(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role_color"))
 }
 
-func LogLoopRotator(format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop_rotator"))
+func LogLoopManager(format string, v ...interface{}) {
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop_manager"))
 }
 
 func LogCustom(tag string, tagColor *color.Color, format string, v ...interface{}) {
@@ -240,8 +240,8 @@ func getComponentColor(name string) *color.Color {
 		return statusRotatorColor
 	case "ROLE_COLOR":
 		return roleRotatorColor
-	case "LOOP_ROTATOR":
-		return loopRotatorColor
+	case "LOOP_MANAGER":
+		return loopManagerColor
 	case "CAT":
 		return catColor
 	case "UNDERTEXT":
@@ -378,7 +378,6 @@ const (
 // @loop
 const (
 	MsgLoopFailedToLoadConfigs   = "Failed to load configs: %v"
-	MsgLoopLoadingChannels       = "Loading %d configured channels from DB..."
 	MsgLoopLoadedChannels        = "Loaded configuration for %d channels (Lazy)."
 	MsgLoopFailedToResume        = "Failed to resume %s: %v"
 	MsgLoopResuming              = "Resuming %d active loops..."
