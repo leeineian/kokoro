@@ -65,6 +65,18 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 
 	var description string
 	for _, cfg := range configs {
+		// Try to get latest name from cache
+		currentName := cfg.ChannelName
+		if channel, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+			if channel.Name() != cfg.ChannelName {
+				currentName = channel.Name()
+				// Update DB asynchronously
+				go func(id snowflake.ID, name string) {
+					_ = sys.UpdateLoopChannelName(sys.AppContext, id, name)
+				}(cfg.ChannelID, currentName)
+			}
+		}
+
 		typeIcon := "💬"
 		if cfg.ChannelType == "category" {
 			typeIcon = "📁"
@@ -95,7 +107,7 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 			status = "🟠 Configured (Ready)"
 		}
 
-		description += fmt.Sprintf("%s **%s** - Duration: %s\n└ %s\n\n", typeIcon, cfg.ChannelName, intervalStr, status)
+		description += fmt.Sprintf("%s **%s** - Duration: %s\n└ %s\n\n", typeIcon, currentName, intervalStr, status)
 	}
 
 	// Build the content for the V2 component
@@ -108,9 +120,16 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 		if cfg.ChannelType == "category" {
 			emoji = "📁"
 		}
+
+		// Use cached name if available for the select menu too
+		displayName := cfg.ChannelName
+		if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+			displayName = ch.Name()
+		}
+
 		intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
 		selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
-			debugTruncate(cfg.ChannelName, 100),
+			debugTruncate(displayName, 100),
 			cfg.ChannelID.String(),
 		).WithDescription(fmt.Sprintf("%s • Duration: %s", cfg.ChannelType, intervalStr)).
 			WithEmoji(discord.ComponentEmoji{Name: emoji}))
@@ -285,8 +304,14 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 				emoji = "📁"
 			}
 
+			// Try to get latest name from cache
+			displayName := cfg.ChannelName
+			if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+				displayName = ch.Name()
+			}
+
 			selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
-				cfg.ChannelName,
+				displayName,
 				cfg.ChannelID.String(),
 			).WithDescription(status).
 				WithEmoji(discord.ComponentEmoji{Name: emoji}))
@@ -418,8 +443,15 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 				if cfg.ChannelType == "category" {
 					emoji = "📁"
 				}
+
+				// Try to get latest name from cache
+				displayName := cfg.ChannelName
+				if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+					displayName = ch.Name()
+				}
+
 				selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
-					cfg.ChannelName,
+					displayName,
 					cfg.ChannelID.String(),
 				).WithDescription(fmt.Sprintf("Round %d/%d", state.CurrentRound, state.RoundsTotal)).
 					WithEmoji(discord.ComponentEmoji{Name: emoji}))
@@ -467,10 +499,16 @@ func debugWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate,
 				status = "🟢 (Running)"
 			}
 
+			// Try to get latest name from cache
+			displayName := data.ChannelName
+			if ch, ok := event.Client().Caches.Channel(data.ChannelID); ok {
+				displayName = ch.Name()
+			}
+
 			// Filter by channel name
-			if focusedOpt == "" || strings.Contains(strings.ToLower(data.ChannelName), strings.ToLower(focusedOpt)) {
+			if focusedOpt == "" || strings.Contains(strings.ToLower(displayName), strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  fmt.Sprintf("🚀 Start Loop: %s %s", data.ChannelName, status),
+					Name:  fmt.Sprintf("🚀 Start Loop: %s %s", displayName, status),
 					Value: data.ChannelID.String(),
 				})
 			}
@@ -495,6 +533,10 @@ func debugWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate,
 			for _, cfg := range configs {
 				if cfg.ChannelID == channelID {
 					name = cfg.ChannelName
+					// Try to get latest name from cache
+					if ch, ok := event.Client().Caches.Channel(channelID); ok {
+						name = ch.Name()
+					}
 					break
 				}
 			}
