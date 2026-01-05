@@ -280,18 +280,6 @@ func init() {
 							},
 						},
 					},
-					{
-						Name:        "purge",
-						Description: "Purge all webhooks from a category",
-						Options: []discord.ApplicationCommandOption{
-							discord.ApplicationCommandOptionChannel{
-								Name:         "category",
-								Description:  "Category to purge webhooks from",
-								Required:     true,
-								ChannelTypes: []discord.ChannelType{discord.ChannelTypeGuildCategory},
-							},
-						},
-					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommand{

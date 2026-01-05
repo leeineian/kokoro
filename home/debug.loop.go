@@ -23,8 +23,6 @@ func handleDebugWebhookLooper(event *events.ApplicationCommandInteractionCreate,
 		handleLoopStart(event, data)
 	case "stop":
 		handleLoopStop(event, data)
-	case "purge":
-		handleLoopPurge(event, data)
 	default:
 		loopRespond(event, "Unknown subcommand", true)
 	}
@@ -441,46 +439,6 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 			).
 			Build())
 	}
-}
-
-// handleLoopPurge purges webhooks from a category
-func handleLoopPurge(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
-	categoryID := data.Snowflake("category")
-
-	category, ok := event.Client().Caches.Channel(categoryID)
-	if !ok || category.Type() != discord.ChannelTypeGuildCategory {
-		loopRespond(event, "❌ Invalid category.", true)
-		return
-	}
-
-	guildID := category.GuildID()
-
-	totalDeleted := 0
-	for ch := range event.Client().Caches.Channels() {
-		// Skip channels not in this guild
-		if ch.GuildID() != guildID {
-			continue
-		}
-
-		// Support both Text and News (Announcement) channels
-		if textCh, ok := ch.(discord.GuildMessageChannel); ok {
-			if textCh.ParentID() != nil && *textCh.ParentID() == categoryID {
-				webhooks, err := event.Client().Rest.GetWebhooks(textCh.ID())
-				if err != nil {
-					continue
-				}
-
-				for _, wh := range webhooks {
-					if wh.Name() == proc.LoopWebhookName {
-						_ = event.Client().Rest.DeleteWebhook(wh.ID())
-						totalDeleted++
-					}
-				}
-			}
-		}
-	}
-
-	loopRespond(event, fmt.Sprintf("✅ **Purge Complete**\n\nDeleted **%d** webhook(s) from **%s**.", totalDeleted, category.Name()), true)
 }
 
 // debugWebhookLooperAutocomplete provides autocomplete for webhook looper commands
