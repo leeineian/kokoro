@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -191,8 +192,18 @@ func onAutocompleteInteraction(event *events.AutocompleteInteractionCreate) {
 
 func onComponentInteraction(event *events.ComponentInteractionCreate) {
 	customID := event.Data.CustomID()
+	// 1. Try exact match
 	if h, ok := componentHandlers[customID]; ok {
 		safeGo(func() { h(event) })
+		return
+	}
+
+	// 2. Try prefix match
+	for prefix, h := range componentHandlers {
+		if strings.HasSuffix(prefix, ":") && strings.HasPrefix(customID, prefix) {
+			safeGo(func() { h(event) })
+			return
+		}
 	}
 }
 

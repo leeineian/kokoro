@@ -50,6 +50,10 @@ func init() {
 					},
 				},
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "console",
+				Description: "View recent bot logs",
+			},
 		},
 	}, handleSession)
 }
@@ -70,6 +74,8 @@ func handleSession(event *events.ApplicationCommandInteractionCreate) {
 		handleSessionStats(event)
 	case "status":
 		handleSessionStatus(event)
+	case "console":
+		handleSessionConsole(event)
 	default:
 		log.Printf("Unknown session subcommand: %s", subCmd)
 	}

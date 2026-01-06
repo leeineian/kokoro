@@ -20,17 +20,17 @@ import (
 
 var (
 	// Style definitions
-	infoColor          = color.New(color.FgHiBlack)
-	warnColor          = color.New(color.FgHiYellow)
-	errorColor         = color.New(color.FgHiRed)
-	fatalColor         = color.New(color.FgHiRed, color.Bold)
-	databaseColor      = color.New(color.FgHiBlack)
-	reminderColor      = color.New(color.FgHiMagenta)
-	statusRotatorColor = color.New(color.FgHiMagenta)
-	roleRotatorColor   = color.New(color.FgHiMagenta)
-	loopManagerColor   = color.New(color.FgHiMagenta)
-	catColor           = color.New(color.FgHiMagenta)
-	undertextColor     = color.New(color.FgHiMagenta)
+	infoColor          = color.New(color.FgBlack)
+	warnColor          = color.New(color.FgYellow)
+	errorColor         = color.New(color.FgRed)
+	fatalColor         = color.New(color.FgRed, color.Bold)
+	databaseColor      = color.New(color.FgBlack)
+	reminderColor      = color.New(color.FgMagenta)
+	statusRotatorColor = color.New(color.FgMagenta)
+	roleRotatorColor   = color.New(color.FgMagenta)
+	loopManagerColor   = color.New(color.FgMagenta)
+	catColor           = color.New(color.FgMagenta)
+	undertextColor     = color.New(color.FgMagenta)
 
 	IsSilent  = false
 	LogToFile = false
@@ -82,7 +82,7 @@ func InitLogger(silent bool, saveToFile bool) {
 		}
 
 		// Open log file
-		logFile, err = os.OpenFile(logName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		logFile, err = os.OpenFile(logName, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open %s: %v\n", logName, err)
 		} else {
@@ -103,6 +103,15 @@ func InitLogger(silent bool, saveToFile bool) {
 
 func SetSilentMode(silent bool) {
 	InitLogger(silent, LogToFile)
+}
+
+func GetLogPath() string {
+	logMu.Lock()
+	defer logMu.Unlock()
+	if logFile == nil {
+		return ""
+	}
+	return logFile.Name()
 }
 
 // --- Log Functions (Signatures preserved for compatibility) ---
@@ -139,11 +148,9 @@ func LogStatusRotator(format string, v ...interface{}) {
 
 func ColorizeHex(colorInt int) string {
 	hex := fmt.Sprintf("#%06X", colorInt)
-	r := (colorInt >> 16) & 0xFF
-	g := (colorInt >> 8) & 0xFF
-	b := colorInt & 0xFF
-	// 24-bit ANSI color: \x1b[38;2;R;G;Bm
-	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm⬤ %s\x1b[0m", r, g, b, hex)
+	// Discord only supports standard 16 colors in ANSI blocks.
+	// We'll use Magenta (35) as a representational color for hex indicators.
+	return fmt.Sprintf("\x1b[35m⬤ %s\x1b[0m", hex)
 }
 
 func LogRoleColorRotator(format string, v ...interface{}) {
