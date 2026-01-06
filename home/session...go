@@ -28,6 +28,28 @@ func init() {
 				Name:        "shutdown",
 				Description: "Shut down the bot process",
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "stats",
+				Description: "Display system and application statistics",
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionBool{
+						Name:        "ephemeral",
+						Description: "Whether the message should be ephemeral (default: true)",
+						Required:    false,
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "status",
+				Description: "Configure bot status visibility",
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionBool{
+						Name:        "visible",
+						Description: "Enable or disable status rotation",
+						Required:    true,
+					},
+				},
+			},
 		},
 	}, handleSession)
 }
@@ -44,6 +66,10 @@ func handleSession(event *events.ApplicationCommandInteractionCreate) {
 		handleSessionReboot(event)
 	case "shutdown":
 		handleSessionShutdown(event)
+	case "stats":
+		handleSessionStats(event)
+	case "status":
+		handleSessionStatus(event)
 	default:
 		log.Printf("Unknown session subcommand: %s", subCmd)
 	}

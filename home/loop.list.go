@@ -40,10 +40,8 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 			}
 		}
 
-		typeIcon := "💬"
-		if cfg.ChannelType == "category" {
-			typeIcon = "📁"
-		}
+		// Always category (loop system is category-only)
+		typeIcon := "📁"
 
 		intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
 
@@ -79,11 +77,6 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 	// Build select menu for deletion
 	var selectOptions []discord.StringSelectMenuOption
 	for _, cfg := range configs {
-		emoji := "💬"
-		if cfg.ChannelType == "category" {
-			emoji = "📁"
-		}
-
 		// Use cached name if available for the select menu too
 		displayName := cfg.ChannelName
 		if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
@@ -91,11 +84,13 @@ func handleLoopList(event *events.ApplicationCommandInteractionCreate) {
 		}
 
 		intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
+
+		// Always category emoji
 		selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
 			loopTruncate(displayName, 100),
 			cfg.ChannelID.String(),
-		).WithDescription(fmt.Sprintf("%s • Duration: %s", cfg.ChannelType, intervalStr)).
-			WithEmoji(discord.ComponentEmoji{Name: emoji}))
+		).WithDescription(fmt.Sprintf("Category • Duration: %s", intervalStr)).
+			WithEmoji(discord.ComponentEmoji{Name: "📁"}))
 	}
 
 	_ = event.CreateMessage(discord.NewMessageCreateBuilder().

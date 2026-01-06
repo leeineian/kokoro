@@ -9,7 +9,6 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
-	"github.com/disgoorg/omit"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/leeineian/minder/sys"
 )
@@ -63,27 +62,7 @@ func statsVal(text string) string {
 	return fmt.Sprintf("%s%s%s", StatsAnsiPinkBold, text, StatsAnsiReset)
 }
 
-func init() {
-	adminPerm := discord.PermissionAdministrator
-
-	sys.RegisterCommand(discord.SlashCommandCreate{
-		Name:                     "stats",
-		Description:              "Display system and application statistics (Admin Only)",
-		DefaultMemberPermissions: omit.New(&adminPerm),
-		Contexts: []discord.InteractionContextType{
-			discord.InteractionContextTypeGuild,
-		},
-		Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionBool{
-				Name:        "ephemeral",
-				Description: "Whether the message should be ephemeral (default: true)",
-				Required:    false,
-			},
-		},
-	}, handleStats)
-}
-
-func handleStats(event *events.ApplicationCommandInteractionCreate) {
+func handleSessionStats(event *events.ApplicationCommandInteractionCreate) {
 	data := event.SlashCommandInteractionData()
 	ephemeral := true
 	if eph, ok := data.OptBool("ephemeral"); ok {

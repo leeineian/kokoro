@@ -30,7 +30,6 @@ var (
 	loopManagerColor   = color.New(color.FgBlue)
 	catColor           = color.New(color.FgCyan)
 	undertextColor     = color.New(color.FgRed)
-	eightballColor     = color.New(color.FgHiBlue)
 	debugColor         = color.New(color.FgHiGreen)
 
 	IsSilent = false
@@ -127,10 +126,6 @@ func LogCat(format string, v ...interface{}) {
 
 func LogUndertext(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "undertext"))
-}
-
-func LogEightball(format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "8ball"))
 }
 
 func LogDebug(format string, v ...interface{}) {
@@ -246,8 +241,6 @@ func getComponentColor(name string) *color.Color {
 		return catColor
 	case "UNDERTEXT":
 		return undertextColor
-	case "8BALL":
-		return eightballColor
 	default:
 		return color.New(color.FgCyan)
 	}
@@ -301,7 +294,7 @@ const (
 
 	// Bot Lifecycle
 	MsgBotStarting      = "Starting %s..."
-	MsgBotOnline        = "%s is online! (ID: %s) (PID: %d)"
+	MsgBotReady         = "%s is ready! (ID: %s) (PID: %d)"
 	MsgBotShutdown      = "Shutting down %s..."
 	MsgBotKillingOld    = "Killing running instance... (PID: %d)"
 	MsgBotKillFail      = "Failed to kill old instance: %v"

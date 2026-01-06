@@ -23,12 +23,8 @@ flowchart TB
         subgraph SessionCmd["/session"]
             SessionReboot["reboot (Process)"]
             SessionShutdown["shutdown (Graceful)"]
-        end
-
-        subgraph SystemCmd["/stats & /ping"]
-            SystemStats["stats (Metrics)"]
-            SystemPing["ping (Latency)"]
-            SystemStatus["status (Presence)"]
+            SessionStats["stats (Metrics)"]
+            SessionStatus["status (Presence)"]
         end
 
         subgraph LoopCmd["/loop"]
@@ -50,9 +46,7 @@ flowchart TB
         
         subgraph UtilityCmd["Utilities"]
             EchoCmd["/echo (ANSI)"]
-            EightballCmd["/8ball (Fortune)"]
             UndertextCmd["/undertext (Sprites)"]
-            TestCmd["/test (Error Preview)"]
         end
     end
 
@@ -60,6 +54,7 @@ flowchart TB
         ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
         StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
         RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
+        LoopCycle["loopcycle.go<br/>━━━━━━━━━<br/>State-Aware Scheduling<br/>Websocket Health Hooks"]
         LoopManager["loopmanager.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
     end
 
@@ -67,7 +62,6 @@ flowchart TB
         Discord["Discord API v10"]
         CatAPI["Cat APIs<br/>• fact/image"]
         UndertaleAPI["Demirramon API<br/>• Box Generator"]
-        EightballAPI["Eightball API<br/>• Fortune Generator"]
     end
 
     %% Entry connections
@@ -82,7 +76,6 @@ flowchart TB
     %% Command registration
     Loader --> CatCmd
     Loader --> SessionCmd
-    Loader --> SystemCmd
     Loader --> LoopCmd
     Loader --> ReminderCmd
     Loader --> RoleColorCmd
@@ -92,16 +85,17 @@ flowchart TB
     Main --> ReminderScheduler
     Main --> StatusRotator
     Main --> RoleColorRotator
+    Main --> LoopCycle
     Main --> LoopManager
 
     %% Daemon dependencies
     ReminderScheduler --> Database
     RoleColorRotator --> Database
+    LoopCycle --> Database
     LoopManager --> Database
 
     %% External API connections
     CatCmd --> CatAPI
-    UtilityCmd --> EightballAPI
     UtilityCmd --> UndertaleAPI
     Loader --> Discord
     Daemons --> Discord
@@ -115,9 +109,9 @@ flowchart TB
 
     class Main entryStyle
     class Config,Database,Loader,Logger coreStyle
-    class CatFact,CatImage,CatSay,SessionReboot,SessionShutdown,SystemStats,SystemPing,SystemStatus,LoopList,LoopSet,LoopStart,LoopStop,ReminderSet,ReminderList,RoleColorSet,RoleColorRefresh,EchoCmd,EightballCmd,UndertextCmd,TestCmd cmdStyle
-    class ReminderScheduler,StatusRotator,RoleColorRotator,LoopManager daemonStyle
-    class Discord,CatAPI,UndertaleAPI,EightballAPI externalStyle
+    class CatFact,CatImage,CatSay,SessionReboot,SessionShutdown,SessionStats,SessionStatus,LoopList,LoopSet,LoopStart,LoopStop,ReminderSet,ReminderList,RoleColorSet,RoleColorRefresh,EchoCmd,UndertextCmd cmdStyle
+    class ReminderScheduler,StatusRotator,RoleColorRotator,LoopCycle,LoopManager daemonStyle
+    class Discord,CatAPI,UndertaleAPI externalStyle
 ```
 
 ```
@@ -131,7 +125,6 @@ minder/
 ├── docker-compose.yml            # Multi-service deployment
 |
 ├── home/                         # [Discord Commands]
-│   ├── 8ball.go                  # /8ball fortune (API + ANSI)
 │   ├── cat...go                  # /cat command router
 │   ├── cat.fact.go               # /cat fact handler
 │   ├── cat.image.go              # /cat image handler
@@ -142,7 +135,6 @@ minder/
 │   ├── loop.set.go               # /loop set handler
 │   ├── loop.start.go             # /loop start (Stress) handler
 │   ├── loop.stop.go              # /loop stop (Cleanup) handler
-│   ├── ping.go                   # /ping command (Latency)
 │   ├── reminder...go             # /reminder command router
 │   ├── reminder.list.go          # /reminder list handler
 │   ├── reminder.set.go           # /reminder set handler
@@ -153,12 +145,12 @@ minder/
 │   ├── session...go              # /session command router
 │   ├── session.reboot.go         # /session reboot handler
 │   ├── session.shutdown.go       # /session shutdown handler
-│   ├── stats.go                  # /stats command (Metrics)
-│   ├── status.go                 # /status command (Config)
-│   ├── test...go                 # /test command (Admin)
+│   ├── session.stats.go          # /session stats handler
+│   ├── session.status.go         # /session status handler
 │   └── undertext.go              # /undertext image generator
 │
 ├── proc/                         # [Background Daemons]
+│   ├── loopcycle.go              # State-aware scheduling
 │   ├── loopmanager.go            # Webhook loop manager
 │   ├── reminderscheduler.go      # Reminder notification daemon
 │   ├── rolecolorrotator.go       # Role color cycle daemon

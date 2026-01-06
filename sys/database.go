@@ -280,7 +280,7 @@ func GetAllGuildRandomColorConfigs(ctx context.Context) (map[snowflake.ID]snowfl
 type LoopConfig struct {
 	ChannelID     snowflake.ID
 	ChannelName   string
-	ChannelType   string // "category" or "channel"
+	ChannelType   string // "category" (loop system is category-only)
 	Rounds        int
 	Interval      int // milliseconds
 	Message       string

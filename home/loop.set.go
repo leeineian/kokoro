@@ -5,13 +5,19 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/leeineian/minder/proc"
 	"github.com/leeineian/minder/sys"
 )
 
 // handleLoopSet configures a channel for looping
 func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
-	channelID := data.Snowflake("channel")
+	channelIDStr, _ := data.OptString("category")
+	channelID, err := snowflake.Parse(channelIDStr)
+	if err != nil {
+		loopRespond(event, "❌ Invalid channel selection.", true)
+		return
+	}
 
 	channel, ok := event.Client().Caches.Channel(channelID)
 	if !ok {
@@ -19,10 +25,10 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		return
 	}
 
-	// Determine channel type
-	channelType := "channel"
-	if channel.Type() == discord.ChannelTypeGuildCategory {
-		channelType = "category"
+	// Validate that channel is a category
+	if channel.Type() != discord.ChannelTypeGuildCategory {
+		loopRespond(event, "❌ Only **categories** are supported. Please select a category channel.", true)
+		return
 	}
 
 	message := "@everyone"
@@ -43,7 +49,7 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 	config := &sys.LoopConfig{
 		ChannelID:     channelID,
 		ChannelName:   channel.Name(),
-		ChannelType:   channelType,
+		ChannelType:   "category",
 		Rounds:        0,
 		Interval:      0, // Default to infinite random mode
 		Message:       message,
@@ -57,13 +63,8 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		return
 	}
 
-	typeStr := "Channel"
-	if channelType == "category" {
-		typeStr = "Category"
-	}
-
 	loopRespond(event, fmt.Sprintf(
-		"✅ **%s Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/loop start` to begin.",
-		typeStr, channel.Name(),
+		"✅ **Category Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/loop start` to begin.",
+		channel.Name(),
 	), true)
 }

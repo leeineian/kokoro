@@ -40,12 +40,16 @@ func StartStatusRotator(ctx context.Context, client *bot.Client) {
 		GetTimeStatus,
 	}
 
+	// Perform initial update synchronously
+	next := GetRotationInterval()
+	updateStatus(ctx, client, next)
+
 	go func() {
 		for {
-			next := GetRotationInterval()
-			updateStatus(ctx, client, next)
 			select {
 			case <-time.After(next):
+				next = GetRotationInterval()
+				updateStatus(ctx, client, next)
 			case <-ctx.Done():
 				return
 			}

@@ -2,6 +2,8 @@ package sys
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -149,6 +151,33 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 	return nil
 }
 
+// GetBotUsername fetches the bot's username using the provided token
+func GetBotUsername(token string) (string, error) {
+	req, err := http.NewRequest("GET", "https://discord.com/api/v10/users/@me", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bot "+token)
+
+	resp, err := HttpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("discord API returned status %d", resp.StatusCode)
+	}
+
+	var user struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return "", err
+	}
+	return user.Username, nil
+}
+
 func onApplicationCommandInteraction(event *events.ApplicationCommandInteractionCreate) {
 	data := event.Data
 	if h, ok := commandHandlers[data.CommandName()]; ok {
@@ -191,7 +220,7 @@ func onReady(event *events.Ready) {
 	StartDaemons(AppContext)
 
 	// 2. Final Status
-	LogInfo(MsgBotOnline, botUser.Username, botUser.ID.String(), os.Getpid())
+	LogInfo(MsgBotReady, botUser.Username, botUser.ID.String(), os.Getpid())
 }
 
 // Daemon registry

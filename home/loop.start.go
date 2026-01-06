@@ -24,7 +24,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 
 	duration := proc.IntervalMsToDuration(0)
 	if durationStr != "" {
-		parsed, err := proc.ParseDurationString(durationStr)
+		parsed, err := proc.ParseDuration(durationStr)
 		if err != nil {
 			loopRespond(event, fmt.Sprintf("❌ Invalid duration: %v", err), true)
 			return
@@ -46,19 +46,27 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 				return
 			}
 
-			started := 0
+			var ids []snowflake.ID
 			for _, cfg := range configs {
-				if err := proc.StartLoop(sys.AppContext, event.Client(), cfg.ChannelID, duration); err == nil {
+				ids = append(ids, cfg.ChannelID)
+			}
+
+			_ = proc.BatchStartLoops(sys.AppContext, event.Client(), ids, duration)
+
+			activeNow := proc.GetActiveLoops()
+			started := 0
+			for _, id := range ids {
+				if _, ok := activeNow[id]; ok {
 					started++
 				}
 			}
 
 			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 				SetIsComponentsV2(true).
-				AddComponents(discord.NewContainer(discord.NewTextDisplay(fmt.Sprintf("🚀 Started **%d** loop(s).", started)))).
+				AddComponents(discord.NewContainer(discord.NewTextDisplay(fmt.Sprintf("Started **%d** loop(s).", started)))).
 				Build())
 		}()
-	} else if targetID != "" {
+	} else {
 		tID, err := snowflake.Parse(targetID)
 		if err != nil {
 			loopRespond(event, "❌ Invalid selection.", true)
@@ -68,7 +76,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 		_ = event.DeferCreateMessage(true)
 		go func() {
 			err = proc.StartLoop(sys.AppContext, event.Client(), tID, duration)
-			msg := "🚀 Loop started!"
+			msg := "Loop started!"
 			if err != nil {
 				msg = fmt.Sprintf("❌ Failed to start: %v", err)
 			}
@@ -78,120 +86,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 				AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
 				Build())
 		}()
-	} else {
-		// Show selection UI
-		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
-		if len(configs) == 0 {
-			loopRespond(event, "❌ No channels configured! Use `/loop set` first.", true)
-			return
-		}
-
-		var selectOptions []discord.StringSelectMenuOption
-		activeLoops := proc.GetActiveLoops()
-
-		if len(configs) > 1 {
-			selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
-				"🚀 Start All",
-				"all",
-			).WithDescription(fmt.Sprintf("Start all %d configured loops", len(configs))))
-		}
-
-		for _, cfg := range configs {
-			_, running := activeLoops[cfg.ChannelID]
-			status := "Idle"
-			emoji := "💬"
-			if running {
-				status = "Running"
-			}
-			if cfg.ChannelType == "category" {
-				emoji = "📁"
-			}
-
-			// Try to get latest name from cache
-			displayName := cfg.ChannelName
-			if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
-				displayName = ch.Name()
-			}
-
-			selectOptions = append(selectOptions, discord.NewStringSelectMenuOption(
-				displayName,
-				cfg.ChannelID.String(),
-			).WithDescription(status).
-				WithEmoji(discord.ComponentEmoji{Name: emoji}))
-		}
-
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().
-			SetIsComponentsV2(true).
-			SetEphemeral(true).
-			AddComponents(
-				discord.NewContainer(
-					discord.NewTextDisplay("# 🚀 Start Loop\nSelect a configuration to start."),
-					discord.NewActionRow(
-						discord.NewStringSelectMenu("start_loop_select", "Select a loop to start", selectOptions...),
-					),
-				),
-			).
-			Build())
 	}
-}
-
-// handleStartLoopSelect handles the start_loop_select select menu
-func handleStartLoopSelect(event *events.ComponentInteractionCreate) {
-	data := event.StringSelectMenuInteractionData()
-	if len(data.Values) == 0 {
-		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().SetContent("❌ No selection made.").Build())
-		return
-	}
-
-	selection := data.Values[0]
-	duration := proc.IntervalMsToDuration(0) // Default to random for select menu
-
-	// Defer immediately because StartLoop/Webhook prep can be slow
-	_ = event.DeferUpdateMessage()
-
-	go func() {
-		if selection == "all" {
-			configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
-			started := 0
-			for _, cfg := range configs {
-				if err := proc.StartLoop(sys.AppContext, event.Client(), cfg.ChannelID, duration); err == nil {
-					started++
-				}
-			}
-
-			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				ClearComponents().
-				AddComponents(
-					discord.NewContainer(
-						discord.NewTextDisplay(fmt.Sprintf("🚀 Started **%d** loop(s).", started)),
-					),
-				).
-				Build())
-		} else {
-			cID, err := snowflake.Parse(selection)
-			if err != nil {
-				_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().SetContent("❌ Invalid selection.").Build())
-				return
-			}
-
-			err = proc.StartLoop(sys.AppContext, event.Client(), cID, duration)
-			msg := "🚀 Loop started!"
-			if err != nil {
-				msg = fmt.Sprintf("❌ Failed to start: %v", err)
-			}
-
-			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				ClearComponents().
-				AddComponents(
-					discord.NewContainer(
-						discord.NewTextDisplay(msg),
-					),
-				).
-				Build())
-		}
-	}()
 }
 
 // handleWebhookLooperAutocomplete provides autocomplete for webhook looper commands
@@ -207,13 +102,24 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 		if len(configs) > 1 {
 			if focusedOpt == "" || strings.Contains(strings.ToLower("start all configured loops"), strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  "🚀 Start All Configured Loops",
+					Name:  "Start All Configured Loops",
 					Value: "all",
 				})
 			}
 		}
 
 		for _, data := range configs {
+			// Only show configs for the current guild
+			if ch, ok := event.Client().Caches.Channel(data.ChannelID); ok {
+				if ch.GuildID() != *event.GuildID() {
+					continue
+				}
+			} else {
+				// If not in cache, we can't be sure, but usually we only want to show what's relevant to this interaction
+				// For safety, let's keep it if we can't verify guild, or better, skip it.
+				continue
+			}
+
 			_, isRunning := activeLoops[data.ChannelID]
 			status := "⚪ (Idle)"
 			if isRunning {
@@ -229,15 +135,30 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 			// Filter by channel name
 			if focusedOpt == "" || strings.Contains(strings.ToLower(displayName), strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  fmt.Sprintf("🚀 Start Loop: %s %s", displayName, status),
+					Name:  fmt.Sprintf("Start Loop: %s %s", displayName, status),
 					Value: data.ChannelID.String(),
 				})
+			}
+		}
+
+	case "set":
+		// Only show categories in the current guild
+		guildID := *event.GuildID()
+		for ch := range event.Client().Caches.Channels() {
+			if ch.GuildID() == guildID && ch.Type() == discord.ChannelTypeGuildCategory {
+				if focusedOpt == "" || strings.Contains(strings.ToLower(ch.Name()), strings.ToLower(focusedOpt)) {
+					choices = append(choices, discord.AutocompleteChoiceString{
+						Name:  fmt.Sprintf("📁 %s", ch.Name()),
+						Value: ch.ID().String(),
+					})
+				}
 			}
 		}
 
 	case "stop":
 		activeLoops := proc.GetActiveLoops()
 		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
+		guildID := *event.GuildID()
 
 		// Add "all" option if there are multiple running loops and it matches the filter
 		if len(activeLoops) > 1 {
@@ -250,6 +171,17 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 		}
 
 		for channelID := range activeLoops {
+			// Check if the loop belongs to the current guild
+			var belongsToGuild bool
+			if ch, ok := event.Client().Caches.Channel(channelID); ok {
+				if ch.GuildID() == guildID {
+					belongsToGuild = true
+				}
+			}
+			if !belongsToGuild {
+				continue
+			}
+
 			name := channelID.String()
 			for _, cfg := range configs {
 				if cfg.ChannelID == channelID {

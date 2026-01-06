@@ -27,12 +27,13 @@ func init() {
 			},
 			discord.ApplicationCommandOptionSubCommand{
 				Name:        "set",
-				Description: "Configure a channel or category for looping",
+				Description: "Configure a category for looping",
 				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionChannel{
-						Name:        "channel",
-						Description: "Text channel or category to configure",
-						Required:    true,
+					discord.ApplicationCommandOptionString{
+						Name:         "category",
+						Description:  "Category to configure",
+						Required:     true,
+						Autocomplete: true,
 					},
 					discord.ApplicationCommandOptionString{
 						Name:        "message",
@@ -58,7 +59,7 @@ func init() {
 					discord.ApplicationCommandOptionString{
 						Name:         "target",
 						Description:  "Target to start (all or specific channel)",
-						Required:     false,
+						Required:     true,
 						Autocomplete: true,
 					},
 					discord.ApplicationCommandOptionString{
@@ -75,7 +76,7 @@ func init() {
 					discord.ApplicationCommandOptionString{
 						Name:         "target",
 						Description:  "Target to stop (all or specific channel)",
-						Required:     false,
+						Required:     true,
 						Autocomplete: true,
 					},
 				},
@@ -84,8 +85,6 @@ func init() {
 	}, handleLoop)
 
 	sys.RegisterComponentHandler("delete_loop_config", handleDeleteLoopConfig)
-	sys.RegisterComponentHandler("start_loop_select", handleStartLoopSelect)
-	sys.RegisterComponentHandler("stop_loop_select", handleStopLoopSelect)
 	sys.RegisterAutocompleteHandler("loop", handleLoopAutocomplete)
 }
 

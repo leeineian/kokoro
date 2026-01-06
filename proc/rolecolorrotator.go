@@ -44,26 +44,23 @@ var (
 
 // StartRoleColorRotator initializes the role color rotator daemon
 func StartRoleColorRotator(ctx context.Context, client *bot.Client) {
-	// Move the startup logic into a goroutine to avoid blocking other daemons
-	go func() {
-		// Load all configured guilds
-		configs, err := sys.GetAllGuildRandomColorConfigs(ctx)
-		if err != nil {
-			sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
-			return
-		}
+	// Load all configured guilds
+	configs, err := sys.GetAllGuildRandomColorConfigs(ctx)
+	if err != nil {
+		sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
+		return
+	}
 
-		for gID, rID := range configs {
-			state := &roleState{
-				guildID: gID,
-				roleID:  rID,
-			}
-			roleStates.Store(gID, state)
-
-			// Start rotation for this guild
-			ScheduleNextUpdate(ctx, client, gID, rID)
+	for gID, rID := range configs {
+		state := &roleState{
+			guildID: gID,
+			roleID:  rID,
 		}
-	}()
+		roleStates.Store(gID, state)
+
+		// Start rotation for this guild
+		ScheduleNextUpdate(ctx, client, gID, rID)
+	}
 }
 
 // StartRotationForGuild starts or restarts the rotation for a specific guild

@@ -20,9 +20,26 @@ func main() {
 	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
 	flag.Parse()
 
+	// 1. Load configuration early
+	cfg, err := sys.LoadConfig()
+	if err != nil {
+		// If config fails to load, we can't get bot name, but we can still try to run
+		// or at least log the failure. For now, let's just use project name as fallback.
+	}
+
 	if *silent {
 		sys.SetSilentMode(true)
 	}
+
+	// 2. Try to detect bot name early
+	botName := sys.GetProjectName()
+	if cfg != nil && cfg.Token != "" {
+		if name, err := sys.GetBotUsername(cfg.Token); err == nil {
+			botName = name
+		}
+	}
+
+	sys.LogInfo(sys.MsgBotStarting, botName)
 
 	// 1. Open or create the PID file
 	f, err := os.OpenFile(".bot.pid", os.O_RDWR|os.O_CREATE, 0644)
@@ -99,7 +116,7 @@ func main() {
 	}()
 
 	// 4. Run bot (blocks until shutdown signal)
-	if err := run(*silent, *skipReg); err != nil {
+	if err := run(cfg, *silent, *skipReg); err != nil {
 		sys.LogFatal(sys.MsgGenericError, err)
 	}
 
@@ -132,17 +149,20 @@ func main() {
 	}
 }
 
-func run(silent bool, skipReg bool) error {
+func run(cfg *sys.Config, silent bool, skipReg bool) error {
 	// 1. Setup global context that responds to shutdown signals
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
 	sys.SetAppContext(ctx)
 
-	// 2. Load configuration
-	cfg, err := sys.LoadConfig()
-	if err != nil {
-		return fmt.Errorf(sys.MsgConfigFailedToLoad, err)
+	// 2. Config is already loaded, but ensure it's valid
+	if cfg == nil {
+		var err error
+		cfg, err = sys.LoadConfig()
+		if err != nil {
+			return fmt.Errorf(sys.MsgConfigFailedToLoad, err)
+		}
 	}
 
 	// 3. Create disgo client
@@ -168,7 +188,6 @@ func run(silent bool, skipReg bool) error {
 	}
 
 	// 6. Connect to Gateway
-	sys.LogInfo(sys.MsgBotStarting, sys.GetProjectName())
 	if err := client.OpenGateway(ctx); err != nil {
 		return fmt.Errorf("failed to open gateway: %w", err)
 	}
