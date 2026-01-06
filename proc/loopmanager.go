@@ -83,6 +83,7 @@ type WebhookData struct {
 	WebhookID    snowflake.ID
 	WebhookToken string
 	ChannelName  string
+	ThreadIDs    []snowflake.ID
 }
 
 type ChannelData struct {
@@ -247,8 +248,11 @@ func loadWebhooksForChannelWithCache(ctx context.Context, client *bot.Client, da
 
 		if webhookMap == nil {
 			defer mu.Unlock()
-			sys.LogLoopManager("Fetching all webhooks for guild %s", guildID)
-			hooks, err := client.Rest.GetAllWebhooks(guildID, rest.WithCtx(ctx))
+			// 350+ webhooks can be slow to fetch; use a dedicated longer timeout for this heavy operation.
+			fetchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			hooks, err := client.Rest.GetAllWebhooks(guildID, rest.WithCtx(fetchCtx))
+			cancel()
+
 			if err != nil {
 				return fmt.Errorf("failed to fetch webhooks: %w", err)
 			}
@@ -294,6 +298,16 @@ func prepareWebhooksForCategory(ctx context.Context, client *bot.Client, categor
 	self, _ := client.Caches.SelfUser()
 	var hooks []WebhookData
 
+	// Find threads in cache for this guild
+	var activeThreads []discord.GuildThread
+	for ch := range client.Caches.Channels() {
+		if ch.GuildID() == guildID {
+			if thread, ok := ch.(discord.GuildThread); ok {
+				activeThreads = append(activeThreads, thread)
+			}
+		}
+	}
+
 	for _, tc := range targetChannels {
 		webhooks := webhookMap[tc.ID()]
 		var hook *discord.IncomingWebhook
@@ -315,21 +329,60 @@ func prepareWebhooksForCategory(ctx context.Context, client *bot.Client, categor
 			hook = newHook
 		}
 
+		var threadIDs []snowflake.ID
+		if data.Config.UseThread && data.Config.ThreadCount > 0 {
+			// Find existing bot threads
+			expectedName := "🧵" + tc.Name()
+			for _, thread := range activeThreads {
+				if thread.ParentID() != nil && *thread.ParentID() == tc.ID() &&
+					thread.Name() == expectedName && thread.OwnerID == self.ID {
+					threadIDs = append(threadIDs, thread.ID())
+					if len(threadIDs) >= data.Config.ThreadCount {
+						break
+					}
+				}
+			}
+
+			// Create missing threads
+			for len(threadIDs) < data.Config.ThreadCount {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				newThread, err := createThreadWithRetry(ctx, client, tc.ID(), expectedName)
+				if err != nil {
+					sys.LogLoopManager("❌ Failed to create thread for %s: %v", tc.Name(), err)
+					break
+				}
+				threadIDs = append(threadIDs, newThread.ID())
+			}
+		}
+
 		hooks = append(hooks, WebhookData{
 			WebhookID:    hook.ID(),
 			WebhookToken: hook.Token,
 			ChannelName:  tc.Name(),
+			ThreadIDs:    threadIDs,
 		})
 	}
 
 	data.Hooks = hooks
-	sys.LogLoopManager("[%s] Preparing %d webhooks...", category.Name(), len(hooks))
+	sys.LogLoopManager("[%s] Preparing %d webhooks (with %d threads total)...", category.Name(), len(hooks), data.Config.ThreadCount*len(hooks))
 	return nil
 }
 
 func createWebhookWithRetry(ctx context.Context, client *bot.Client, channelID snowflake.ID) (*discord.IncomingWebhook, error) {
 	webhookOpSem <- struct{}{}
-	defer func() { <-webhookOpSem }()
+	defer func() {
+		// Mandatory pacing to avoid rate limit warnings
+		select {
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+		}
+		<-webhookOpSem
+	}()
 
 	sys.LogLoopManager("🔨 [WEBHOOK CREATE] Attempting for channel %s", channelID)
 	hook, err := client.Rest.CreateWebhook(channelID, discord.WebhookCreate{Name: LoopWebhookName}, rest.WithCtx(ctx))
@@ -339,6 +392,29 @@ func createWebhookWithRetry(ctx context.Context, client *bot.Client, channelID s
 	}
 	sys.LogLoopManager("✅ [WEBHOOK CREATE] Success for channel %s", channelID)
 	return hook, nil
+}
+
+func createThreadWithRetry(ctx context.Context, client *bot.Client, channelID snowflake.ID, name string) (*discord.GuildThread, error) {
+	webhookOpSem <- struct{}{}
+	defer func() {
+		// Mandatory pacing to avoid rate limit warnings
+		select {
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+		}
+		<-webhookOpSem
+	}()
+
+	sys.LogLoopManager("🔨 [THREAD CREATE] Attempting for channel %s", channelID)
+	thread, err := client.Rest.CreateThread(channelID, discord.GuildPublicThreadCreate{
+		Name: name,
+	}, rest.WithCtx(ctx))
+	if err != nil {
+		sys.LogLoopManager("❌ [THREAD CREATE] Failed for channel %s: %v", channelID, err)
+		return nil, err
+	}
+	sys.LogLoopManager("✅ [THREAD CREATE] Success for channel %s", channelID)
+	return thread, nil
 }
 
 func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *ChannelData, client *bot.Client) {
@@ -399,6 +475,8 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 			}
 		}
 
+		threadContent := data.Config.ThreadMessage
+
 		for {
 			select {
 			case <-stopChan:
@@ -408,7 +486,7 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 
 			if isTimed {
 				state.CurrentRound++
-				executeRound(ctx, data, client, stopChan, content, author, avatar, rng, hookBuf)
+				executeRound(ctx, data, client, stopChan, content, threadContent, author, avatar, rng, hookBuf)
 			} else {
 				// Random Mode
 				rounds := rng.Intn(1000) + 1
@@ -426,7 +504,7 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 					default:
 					}
 					state.CurrentRound = i + 1
-					executeRound(ctx, data, client, stopChan, content, author, avatar, rng, hookBuf)
+					executeRound(ctx, data, client, stopChan, content, threadContent, author, avatar, rng, hookBuf)
 				}
 
 				state.EndTime = time.Time{}
@@ -442,7 +520,7 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 	}()
 }
 
-func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, stopChan chan struct{}, content, author, avatar string, rng *rand.Rand, hookBuf []WebhookData) {
+func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, stopChan chan struct{}, content, threadContent, author, avatar string, rng *rand.Rand, hookBuf []WebhookData) {
 	// Copy hooks to reusable buffer
 	if len(hookBuf) != len(data.Hooks) {
 		// Should not happen given logic, but safety check
@@ -474,36 +552,64 @@ func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, st
 		go func(hd WebhookData, startJitter time.Duration) {
 			defer wg.Done()
 
-			// Acquire semaphore to limit concurrent connections
-			messageSendSem <- struct{}{}
-			defer func() { <-messageSendSem }()
-
 			// Minor jitter to prevent simultaneous network spikes
 			time.Sleep(startJitter)
 
-			// Smarter Retries (Exponential Backoff)
-			backoffs := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
-			for attempt := 0; attempt <= len(backoffs); attempt++ {
-				_, err := client.Rest.CreateWebhookMessage(hd.WebhookID, hd.WebhookToken, discord.WebhookMessageCreate{
-					Content:   content,
-					Username:  author,
-					AvatarURL: avatar,
-				}, rest.CreateWebhookMessageParams{Wait: false}, rest.WithCtx(ctx))
-				if err == nil {
-					return
-				}
+			// Helper for sending with retries
+			sendWithRetry := func(threadID snowflake.ID, msgContent string) {
+				// Acquire semaphore to limit concurrent connections
+				messageSendSem <- struct{}{}
+				defer func() { <-messageSendSem }()
 
-				if attempt < len(backoffs) {
-					sys.LogLoopManager("⚠️ Failed for %s (webhook %s): %v. Retrying in %s (attempt %d/3)...", hd.ChannelName, hd.WebhookID, err, backoffs[attempt], attempt+1)
-					select {
-					case <-time.After(backoffs[attempt]):
-					case <-stopChan:
-						return
-					case <-ctx.Done():
+				backoffs := []time.Duration{2 * time.Second, 4 * time.Second}
+				for attempt := 0; attempt <= len(backoffs); attempt++ {
+					params := rest.CreateWebhookMessageParams{Wait: false}
+					if threadID != 0 {
+						params.ThreadID = threadID
+					}
+
+					_, err := client.Rest.CreateWebhookMessage(hd.WebhookID, hd.WebhookToken, discord.WebhookMessageCreate{
+						Content:   msgContent,
+						Username:  author,
+						AvatarURL: avatar,
+						AllowedMentions: &discord.AllowedMentions{
+							Parse: []discord.AllowedMentionType{
+								discord.AllowedMentionTypeEveryone,
+								discord.AllowedMentionTypeRoles,
+								discord.AllowedMentionTypeUsers,
+							},
+						},
+					}, params, rest.WithCtx(ctx))
+					if err == nil {
 						return
 					}
-				} else {
-					sys.LogLoopManager("❌ Failed for %s (webhook %s) after %d attempts: %v", hd.ChannelName, hd.WebhookID, attempt+1, err)
+
+					if attempt < len(backoffs) {
+						select {
+						case <-time.After(backoffs[attempt]):
+						case <-stopChan:
+							return
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+			}
+
+			// Send to main channel
+			if content != "" {
+				sendWithRetry(0, content)
+			}
+
+			// Send to threads
+			if threadContent != "" && len(hd.ThreadIDs) > 0 {
+				for _, tid := range hd.ThreadIDs {
+					select {
+					case <-stopChan:
+						return
+					default:
+						sendWithRetry(tid, threadContent)
+					}
 				}
 			}
 		}(h, workerJitter)

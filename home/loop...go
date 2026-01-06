@@ -61,6 +61,16 @@ func init() {
 						Description: "Webhook avatar URL",
 						Required:    false,
 					},
+					discord.ApplicationCommandOptionString{
+						Name:        "thread_message",
+						Description: "Message for threads (default: disabled)",
+						Required:    false,
+					},
+					discord.ApplicationCommandOptionInt{
+						Name:        "thread_count",
+						Description: "Amount of threads per channel (default: disabled)",
+						Required:    false,
+					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommand{

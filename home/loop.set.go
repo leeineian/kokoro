@@ -56,6 +56,16 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 			}
 		}
 
+		threadMessage := ""
+		if tmsg, ok := data.OptString("thread_message"); ok {
+			threadMessage = tmsg
+		}
+
+		threadCount := 0
+		if count, ok := data.OptInt("thread_count"); ok {
+			threadCount = count
+		}
+
 		config := &sys.LoopConfig{
 			ChannelID:     channelID,
 			ChannelName:   channel.Name(),
@@ -65,7 +75,9 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 			Message:       message,
 			WebhookAuthor: webhookAuthor,
 			WebhookAvatar: webhookAvatar,
-			UseThread:     false,
+			UseThread:     threadCount > 0,
+			ThreadMessage: threadMessage,
+			ThreadCount:   threadCount,
 		}
 
 		if err := proc.SetLoopConfig(sys.AppContext, event.Client(), channelID, config); err != nil {
