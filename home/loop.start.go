@@ -54,16 +54,26 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 			_ = proc.BatchStartLoops(sys.AppContext, event.Client(), ids, duration)
 
 			activeNow := proc.GetActiveLoops()
-			started := 0
-			for _, id := range ids {
-				if _, ok := activeNow[id]; ok {
-					started++
+			var startedNames []string
+			for _, cfg := range configs {
+				if _, ok := activeNow[cfg.ChannelID]; ok {
+					// Use latest name if available
+					name := cfg.ChannelName
+					if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+						name = ch.Name()
+					}
+					startedNames = append(startedNames, name)
 				}
+			}
+
+			msg := "❌ No loops were started."
+			if len(startedNames) > 0 {
+				msg = fmt.Sprintf("Started **%d** loop(s) for: **%s**", len(startedNames), strings.Join(startedNames, "**, **"))
 			}
 
 			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 				SetIsComponentsV2(true).
-				AddComponents(discord.NewContainer(discord.NewTextDisplay(fmt.Sprintf("Started **%d** loop(s).", started)))).
+				AddComponents(discord.NewContainer(discord.NewTextDisplay("> "+msg))).
 				Build())
 		}()
 	} else {
@@ -76,14 +86,20 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 		_ = event.DeferCreateMessage(true)
 		go func() {
 			err = proc.StartLoop(sys.AppContext, event.Client(), tID, duration)
-			msg := "Loop started!"
+
+			name := targetID
+			if ch, ok := event.Client().Caches.Channel(tID); ok {
+				name = ch.Name()
+			}
+
+			msg := fmt.Sprintf("✅ Started loop for: **%s**", name)
 			if err != nil {
-				msg = fmt.Sprintf("❌ Failed to start: %v", err)
+				msg = fmt.Sprintf("❌ Failed to start **%s**: %v", name, err)
 			}
 
 			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 				SetIsComponentsV2(true).
-				AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
+				AddComponents(discord.NewContainer(discord.NewTextDisplay("> "+msg))).
 				Build())
 		}()
 	}

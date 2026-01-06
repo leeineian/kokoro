@@ -18,27 +18,34 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 		targetID = t
 	}
 
+	// Always defer for loop stop as it might involve multiple database/memory operations
+	_ = event.DeferCreateMessage(true)
+
 	if targetID == "all" {
-		activeLoops := proc.GetActiveLoops()
-		if len(activeLoops) == 0 {
-			loopRespond(event, "ℹ️ No loops are currently running.", true)
-			return
-		}
-
-		stopped := 0
-		for channelID := range activeLoops {
-			if proc.StopLoopInternal(sys.AppContext, channelID, event.Client()) {
-				stopped++
+		go func() {
+			activeLoops := proc.GetActiveLoops()
+			if len(activeLoops) == 0 {
+				loopRespond(event, "ℹ️ No loops are currently running.", true)
+				return
 			}
-		}
 
-		loopRespond(event, fmt.Sprintf("🛑 Stopped **%d** loop(s).", stopped), true)
+			stopped := 0
+			for channelID := range activeLoops {
+				if proc.StopLoopInternal(sys.AppContext, channelID, event.Client()) {
+					stopped++
+				}
+			}
+
+			loopRespond(event, fmt.Sprintf("🛑 Stopped **%d** loop(s).", stopped), true)
+		}()
 	} else {
 		tID, err := snowflake.Parse(targetID)
-		if err == nil && proc.StopLoopInternal(sys.AppContext, tID, event.Client()) {
-			loopRespond(event, "✅ Stopped the selected loop.", true)
-		} else {
-			loopRespond(event, "❌ Could not find or stop the loop.", true)
-		}
+		go func() {
+			if err == nil && proc.StopLoopInternal(sys.AppContext, tID, event.Client()) {
+				loopRespond(event, "✅ Stopped the selected loop.", true)
+			} else {
+				loopRespond(event, "❌ Could not find or stop the loop.", true)
+			}
+		}()
 	}
 }

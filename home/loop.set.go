@@ -19,52 +19,57 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		return
 	}
 
-	channel, ok := event.Client().Caches.Channel(channelID)
-	if !ok {
-		loopRespond(event, "❌ Failed to fetch channel.", true)
-		return
-	}
+	// Always defer to be safe
+	_ = event.DeferCreateMessage(true)
 
-	// Validate that channel is a category
-	if channel.Type() != discord.ChannelTypeGuildCategory {
-		loopRespond(event, "❌ Only **categories** are supported. Please select a category channel.", true)
-		return
-	}
+	go func() {
+		channel, ok := event.Client().Caches.Channel(channelID)
+		if !ok {
+			loopRespond(event, "❌ Failed to fetch channel.", true)
+			return
+		}
 
-	message := "@everyone"
-	if msg, ok := data.OptString("message"); ok {
-		message = msg
-	}
+		// Validate that channel is a category
+		if channel.Type() != discord.ChannelTypeGuildCategory {
+			loopRespond(event, "❌ Only **categories** are supported. Please select a category channel.", true)
+			return
+		}
 
-	webhookAuthor := "LoopHook"
-	if author, ok := data.OptString("webhook_author"); ok {
-		webhookAuthor = author
-	}
+		message := "@everyone"
+		if msg, ok := data.OptString("message"); ok {
+			message = msg
+		}
 
-	webhookAvatar := ""
-	if avatar, ok := data.OptString("webhook_avatar"); ok {
-		webhookAvatar = avatar
-	}
+		webhookAuthor := "LoopHook"
+		if author, ok := data.OptString("webhook_author"); ok {
+			webhookAuthor = author
+		}
 
-	config := &sys.LoopConfig{
-		ChannelID:     channelID,
-		ChannelName:   channel.Name(),
-		ChannelType:   "category",
-		Rounds:        0,
-		Interval:      0, // Default to infinite random mode
-		Message:       message,
-		WebhookAuthor: webhookAuthor,
-		WebhookAvatar: webhookAvatar,
-		UseThread:     false,
-	}
+		webhookAvatar := ""
+		if avatar, ok := data.OptString("webhook_avatar"); ok {
+			webhookAvatar = avatar
+		}
 
-	if err := proc.SetLoopConfig(sys.AppContext, event.Client(), channelID, config); err != nil {
-		loopRespond(event, fmt.Sprintf("❌ Failed to save configuration: %v", err), true)
-		return
-	}
+		config := &sys.LoopConfig{
+			ChannelID:     channelID,
+			ChannelName:   channel.Name(),
+			ChannelType:   "category",
+			Rounds:        0,
+			Interval:      0, // Default to infinite random mode
+			Message:       message,
+			WebhookAuthor: webhookAuthor,
+			WebhookAvatar: webhookAvatar,
+			UseThread:     false,
+		}
 
-	loopRespond(event, fmt.Sprintf(
-		"✅ **Category Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/loop start` to begin.",
-		channel.Name(),
-	), true)
+		if err := proc.SetLoopConfig(sys.AppContext, event.Client(), channelID, config); err != nil {
+			loopRespond(event, fmt.Sprintf("❌ Failed to save configuration: %v", err), true)
+			return
+		}
+
+		loopRespond(event, fmt.Sprintf(
+			"✅ **Category Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/loop start` to begin.",
+			channel.Name(),
+		), true)
+	}()
 }

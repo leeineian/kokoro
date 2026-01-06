@@ -20,8 +20,8 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 	}
 
 	// Set connection pool settings for better concurrency
-	// SQLite works best with a single connection for writing, but WAL allows multiple readers.
-	DB.SetMaxOpenConns(1)
+	// WAL mode enables one writer and multiple readers.
+	DB.SetMaxOpenConns(5)
 
 	// Apply optimizations
 	pragmas := []string{

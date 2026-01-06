@@ -2,9 +2,7 @@ package proc
 
 import (
 	"context"
-	crand "crypto/rand"
 	"fmt"
-	"math/big"
 	"math/rand"
 	"regexp"
 	"strconv"
@@ -28,6 +26,9 @@ const (
 var (
 	// Global semaphore to limit webhook creation/deletion operations
 	webhookOpSem = make(chan struct{}, 1)
+
+	// Global semaphore to limit concurrent message sends (prevents connection exhaustion/503s)
+	messageSendSem = make(chan struct{}, 200)
 )
 
 // Utilities
@@ -69,17 +70,6 @@ func ParseDuration(duration string) (time.Duration, error) {
 }
 
 func IntervalMsToDuration(ms int) time.Duration { return time.Duration(ms) * time.Millisecond }
-
-func secureIntn(max int) int {
-	if max <= 0 {
-		return 0
-	}
-	nBig, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
-	if err != nil {
-		return rand.Intn(max)
-	}
-	return int(nBig.Int64())
-}
 
 // LoopManager
 
@@ -131,14 +121,36 @@ func InitLoopManager(ctx context.Context, client *bot.Client) {
 		return
 	}
 
+	var toResume []*ChannelData
 	for _, config := range configs {
-		configuredChannels.Store(config.ChannelID, &ChannelData{
+		data := &ChannelData{
 			Config: config,
 			Hooks:  nil,
-		})
+		}
+		configuredChannels.Store(config.ChannelID, data)
+		if config.IsRunning {
+			toResume = append(toResume, data)
+		}
 	}
 
 	sys.LogLoopManager(sys.MsgLoopLoadedChannels, len(configs))
+
+	if len(toResume) > 0 {
+		sys.LogLoopManager("Resuming %d active loops...", len(toResume))
+		for _, data := range toResume {
+			// Check if we need to wait for cache before going async to keep logs ordered
+			if _, found := client.Caches.Channel(data.Config.ChannelID); !found {
+				sys.LogLoopManager("Waiting for category %s to appear in cache...", data.Config.ChannelID)
+			}
+			go func(d *ChannelData) {
+				if err := loadWebhooksForChannelWithCache(ctx, client, d); err != nil {
+					sys.LogLoopManager("❌ Failed to resume loop for %s: %v", d.Config.ChannelName, err)
+					return
+				}
+				startLoopInternal(ctx, d.Config.ChannelID, d, client)
+			}(data)
+		}
+	}
 }
 
 func StartLoop(ctx context.Context, client *bot.Client, channelID snowflake.ID, interval time.Duration) error {
@@ -183,7 +195,26 @@ func BatchStartLoops(ctx context.Context, client *bot.Client, channelIDs []snowf
 }
 
 func loadWebhooksForChannelWithCache(ctx context.Context, client *bot.Client, data *ChannelData) error {
-	channel, ok := client.Caches.Channel(data.Config.ChannelID)
+	var channel discord.GuildChannel
+	var ok bool
+
+	// Wait up to 30 seconds for the channel to appear in cache (it might be missing immediately after READY)
+	for i := 0; i < 60; i++ {
+		if ch, found := client.Caches.Channel(data.Config.ChannelID); found {
+			channel = ch
+			ok = true
+			break
+		}
+		if i == 10 { // Only log if still missing after 5 seconds
+			sys.LogLoopManager("Still waiting for category %s to appear in cache...", data.Config.ChannelID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
 	if !ok {
 		return fmt.Errorf("channel %s not in cache", data.Config.ChannelID)
 	}
@@ -216,7 +247,7 @@ func loadWebhooksForChannelWithCache(ctx context.Context, client *bot.Client, da
 
 		if webhookMap == nil {
 			defer mu.Unlock()
-			sys.LogLoopManager("🔍 [WEBHOOK FETCH] Fetching all webhooks for guild %s", guildID)
+			sys.LogLoopManager("Fetching all webhooks for guild %s", guildID)
 			hooks, err := client.Rest.GetAllWebhooks(guildID, rest.WithCtx(ctx))
 			if err != nil {
 				return fmt.Errorf("failed to fetch webhooks: %w", err)
@@ -239,7 +270,7 @@ func loadWebhooksForChannelWithCache(ctx context.Context, client *bot.Client, da
 				Webhooks: webhookMap,
 				Fetched:  time.Now(),
 			})
-			sys.LogLoopManager("✅ [WEBHOOK FETCH] Cached %d webhooks for guild %s", len(hooks), guildID)
+			sys.LogLoopManager("Cached %d webhooks for guild %s", len(hooks), guildID)
 		}
 	}
 
@@ -292,7 +323,7 @@ func prepareWebhooksForCategory(ctx context.Context, client *bot.Client, categor
 	}
 
 	data.Hooks = hooks
-	sys.LogLoopManager(sys.MsgLoopPreparedCategoryHooks, len(hooks), category.Name())
+	sys.LogLoopManager("[%s] Preparing %d webhooks...", category.Name(), len(hooks))
 	return nil
 }
 
@@ -321,6 +352,22 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 			activeLoops.Delete(channelID)
 			sys.SetLoopState(ctx, channelID, false)
 		}()
+
+		// Local RNG for this loop instance (avoids global lock convention)
+		seed := time.Now().UnixNano()
+		rng := rand.New(rand.NewSource(seed))
+
+		// Pre-allocated buffer for hooks to reduce GC pressure
+		hookBuf := make([]WebhookData, len(data.Hooks))
+
+		// Jitter: random 0 to 5-second delay before starting
+		jitter := time.Duration(rng.Intn(5000)) * time.Millisecond
+		sys.LogLoopManager("[%s] Applying %s startup jitter...", data.Config.ChannelName, jitter)
+		select {
+		case <-time.After(jitter):
+		case <-stopChan:
+			return
+		}
 
 		interval := time.Duration(data.Config.Interval) * time.Millisecond
 		isTimed := interval > 0
@@ -352,11 +399,11 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 
 			if isTimed {
 				state.CurrentRound++
-				executeRound(data, client, stopChan, content, author, avatar)
+				executeRound(ctx, data, client, stopChan, content, author, avatar, rng, hookBuf)
 			} else {
 				// Random Mode
-				rounds := secureIntn(1000) + 1
-				delay := time.Duration(secureIntn(1000)+1) * time.Second
+				rounds := rng.Intn(1000) + 1
+				delay := time.Duration(rng.Intn(1000)+1) * time.Second
 
 				state.RoundsTotal = rounds
 				state.CurrentRound = 0
@@ -370,7 +417,7 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 					default:
 					}
 					state.CurrentRound = i + 1
-					executeRound(data, client, stopChan, content, author, avatar)
+					executeRound(ctx, data, client, stopChan, content, author, avatar, rng, hookBuf)
 				}
 
 				state.EndTime = time.Time{}
@@ -386,51 +433,74 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 	}()
 }
 
-func executeRound(data *ChannelData, client *bot.Client, stopChan chan struct{}, content, author, avatar string) {
-	// Create a local copy of hooks to shuffle
-	hooks := make([]WebhookData, len(data.Hooks))
-	copy(hooks, data.Hooks)
+func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, stopChan chan struct{}, content, author, avatar string, rng *rand.Rand, hookBuf []WebhookData) {
+	// Copy hooks to reusable buffer
+	if len(hookBuf) != len(data.Hooks) {
+		// Should not happen given logic, but safety check
+		hookBuf = make([]WebhookData, len(data.Hooks))
+	}
+	copy(hookBuf, data.Hooks)
 
 	// Shuffle the hooks for true randomness
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(hooks), func(i, j int) {
-		hooks[i], hooks[j] = hooks[j], hooks[i]
+	rng.Shuffle(len(hookBuf), func(i, j int) {
+		hookBuf[i], hookBuf[j] = hookBuf[j], hookBuf[i]
 	})
 
+	// Randomize rate for this round: 1-50 messages per second
+	rate := rng.Intn(50) + 1
+	delay := time.Second / time.Duration(rate)
+
 	var wg sync.WaitGroup
-	for _, h := range hooks {
+	for _, h := range hookBuf {
 		select {
 		case <-stopChan:
 			goto Wait
 		default:
 		}
 
+		// Calculate jitter for this worker using the single-threaded RNG
+		workerJitter := time.Duration(rng.Intn(50)) * time.Millisecond
+
 		wg.Add(1)
-		go func(hd WebhookData) {
+		go func(hd WebhookData, startJitter time.Duration) {
 			defer wg.Done()
 
-			// Minor jitter to prevent simultaneous network spikes
-			time.Sleep(time.Duration(secureIntn(50)) * time.Millisecond)
+			// Acquire semaphore to limit concurrent connections
+			messageSendSem <- struct{}{}
+			defer func() { <-messageSendSem }()
 
-			for attempt := 0; attempt < 2; attempt++ {
+			// Minor jitter to prevent simultaneous network spikes
+			time.Sleep(startJitter)
+
+			// Smarter Retries (Exponential Backoff)
+			backoffs := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+			for attempt := 0; attempt <= len(backoffs); attempt++ {
 				_, err := client.Rest.CreateWebhookMessage(hd.WebhookID, hd.WebhookToken, discord.WebhookMessageCreate{
 					Content:   content,
 					Username:  author,
 					AvatarURL: avatar,
-				}, rest.CreateWebhookMessageParams{Wait: false})
+				}, rest.CreateWebhookMessageParams{Wait: false}, rest.WithCtx(ctx))
 				if err == nil {
 					return
 				}
-				if attempt == 0 {
-					sys.LogLoopManager("⚠️ [MESSAGE SEND] Failed for %s (webhook %s): %v", hd.ChannelName, hd.WebhookID, err)
-				}
-				time.Sleep(2 * time.Second) // Simple rate limit backoff
-			}
-		}(h)
 
-		// Delay between message starts to ensure a smooth flow
-		// 20ms = 50 messages per second.
-		time.Sleep(20 * time.Millisecond)
+				if attempt < len(backoffs) {
+					sys.LogLoopManager("⚠️ Failed for %s (webhook %s): %v. Retrying in %s (attempt %d/3)...", hd.ChannelName, hd.WebhookID, err, backoffs[attempt], attempt+1)
+					select {
+					case <-time.After(backoffs[attempt]):
+					case <-stopChan:
+						return
+					case <-ctx.Done():
+						return
+					}
+				} else {
+					sys.LogLoopManager("❌ Failed for %s (webhook %s) after %d attempts: %v", hd.ChannelName, hd.WebhookID, attempt+1, err)
+				}
+			}
+		}(h, workerJitter)
+
+		// Variable delay based on randomized rate
+		time.Sleep(delay)
 	}
 
 Wait:

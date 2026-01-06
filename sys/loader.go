@@ -123,9 +123,6 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 			}
 		}
 
-		// Brief pause to satisfy Discord rate limits during rapid restarts
-		time.Sleep(1 * time.Second)
-
 		// 2. Clear Global (Optional, only if needed or first time)
 		LogInfo(MsgLoaderGlobalClear)
 		_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
@@ -239,7 +236,10 @@ func RegisterDaemon(logger func(format string, v ...interface{}), starter func(c
 // StartDaemons starts all registered daemons with their individual colored logging
 func StartDaemons(ctx context.Context) {
 	for _, daemon := range registeredDaemons {
-		daemon.logger("Starting...")
-		daemon.starter(ctx)
+		// Launch each daemon in parallel to avoid blocking on DB reads or setup
+		go func(d daemonEntry) {
+			d.logger("Starting...")
+			d.starter(ctx)
+		}(daemon)
 	}
 }

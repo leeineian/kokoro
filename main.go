@@ -15,23 +15,21 @@ import (
 )
 
 func main() {
-	// Parse flags
 	silent := flag.Bool("silent", false, "Disable all log output")
 	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
+	noLogFile := flag.Bool("no-log-file", false, "Disable logging to file")
 	flag.Parse()
 
 	// 1. Load configuration early
 	cfg, err := sys.LoadConfig()
 	if err != nil {
-		// If config fails to load, we can't get bot name, but we can still try to run
-		// or at least log the failure. For now, let's just use project name as fallback.
+		sys.LogError("Failed to load config: %v", err)
 	}
 
-	if *silent {
-		sys.SetSilentMode(true)
-	}
+	// 2. Initialize Logger (handle flags)
+	sys.InitLogger(*silent, !*noLogFile)
 
-	// 2. Try to detect bot name early
+	// 3. Try to detect bot name
 	botName := sys.GetProjectName()
 	if cfg != nil && cfg.Token != "" {
 		if name, err := sys.GetBotUsername(cfg.Token); err == nil {
@@ -41,14 +39,14 @@ func main() {
 
 	sys.LogInfo(sys.MsgBotStarting, botName)
 
-	// 1. Open or create the PID file
+	// 4. Open or create the PID file
 	f, err := os.OpenFile(".bot.pid", os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		sys.LogFatal("Failed to open PID file: %v", err)
 	}
 	defer f.Close()
 
-	// 2. Try to acquire an exclusive lock
+	// 5. Try to acquire an exclusive lock
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -103,7 +101,7 @@ func main() {
 		// Loop will retry Flock on next iteration
 	}
 
-	// 3. We have the lock. Write our PID.
+	// 6. We have the lock. Write our PID.
 	_ = f.Truncate(0)
 	_, _ = f.Seek(0, 0)
 	_, _ = fmt.Fprintf(f, "%d", os.Getpid())
@@ -115,12 +113,12 @@ func main() {
 		_ = os.Remove(".bot.pid")
 	}()
 
-	// 4. Run bot (blocks until shutdown signal)
+	// 7. Run bot (blocks until shutdown signal)
 	if err := run(cfg, *silent, *skipReg); err != nil {
 		sys.LogFatal(sys.MsgGenericError, err)
 	}
 
-	// 5. Handle Reboot
+	// 8. Handle Reboot
 	if sys.RestartRequested {
 		sys.LogInfo("Self-restarting process...")
 		// Manually trigger cleanup since syscall.Exec won't run defers
@@ -180,9 +178,12 @@ func run(cfg *sys.Config, silent bool, skipReg bool) error {
 
 	// 5. Command Registration
 	if !skipReg {
-		if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
-			sys.LogError(sys.MsgBotRegisterFail, err)
-		}
+		// Run asynchronously to allow instant startup
+		go func() {
+			if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
+				sys.LogError(sys.MsgBotRegisterFail, err)
+			}
+		}()
 	} else {
 		sys.LogInfo("Skipping command registration as requested.")
 	}

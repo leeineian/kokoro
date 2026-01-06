@@ -118,15 +118,27 @@ func loopRespond(event *events.ApplicationCommandInteractionCreate, content stri
 		displayContent = content
 	}
 
-	event.CreateMessage(discord.NewMessageCreateBuilder().
+	builder := discord.NewMessageCreateBuilder().
 		SetIsComponentsV2(true).
 		AddComponents(
 			discord.NewContainer(
 				discord.NewTextDisplay(displayContent),
 			),
 		).
-		SetEphemeral(ephemeral).
-		Build())
+		SetEphemeral(ephemeral)
+
+	// Try to create a message. If it fails (likely due to defer), try updating the original response.
+	err := event.CreateMessage(builder.Build())
+	if err != nil {
+		updateBuilder := discord.NewMessageUpdateBuilder().
+			SetIsComponentsV2(true).
+			AddComponents(
+				discord.NewContainer(
+					discord.NewTextDisplay(displayContent),
+				),
+			)
+		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), updateBuilder.Build())
+	}
 }
 
 func loopTruncate(s string, max int) string {

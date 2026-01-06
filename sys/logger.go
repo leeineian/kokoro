@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,37 +25,75 @@ var (
 	errorColor         = color.New(color.FgHiRed)
 	fatalColor         = color.New(color.FgHiRed, color.Bold)
 	databaseColor      = color.New(color.FgHiBlack)
-	reminderColor      = color.New(color.FgMagenta)
-	statusRotatorColor = color.New(color.FgGreen)
-	roleRotatorColor   = color.New(color.FgYellow)
-	loopManagerColor   = color.New(color.FgBlue)
-	catColor           = color.New(color.FgCyan)
-	undertextColor     = color.New(color.FgRed)
-	debugColor         = color.New(color.FgHiGreen)
+	reminderColor      = color.New(color.FgHiMagenta)
+	statusRotatorColor = color.New(color.FgHiMagenta)
+	roleRotatorColor   = color.New(color.FgHiMagenta)
+	loopManagerColor   = color.New(color.FgHiMagenta)
+	catColor           = color.New(color.FgHiMagenta)
+	undertextColor     = color.New(color.FgHiMagenta)
 
-	IsSilent = false
+	IsSilent  = false
+	LogToFile = false
 
 	errorMapCache map[string]string
 	errorMapOnce  sync.Once
 
 	// Global default logger
 	Logger *slog.Logger
+
+	// Log file handling
+	logFile *os.File
+	logMu   sync.Mutex
 )
 
 func init() {
-	// Initialize with a default handler immediately
-	InitLogger(false)
+	// Initialize with a default handler immediately (Stdout only)
+	InitLogger(false, false)
 }
 
 // InitLogger initializes the global structured logger
-func InitLogger(silent bool) {
+func InitLogger(silent bool, saveToFile bool) {
+	logMu.Lock()
+	defer logMu.Unlock()
+
 	IsSilent = silent
+	LogToFile = saveToFile
 	level := slog.LevelInfo
 	if strings.ToLower(os.Getenv("DEBUG")) == "true" {
 		level = slog.LevelDebug
 	}
 
-	handler := NewBotLogHandler(os.Stdout, &BotLogHandlerOptions{
+	// Clean up previous file if it exists (e.g. during reload)
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+	}
+
+	var writer io.Writer = os.Stdout
+	var err error
+
+	// Open log file if requested
+	if LogToFile {
+		// Determine log file name from executable name
+		exePath, exeErr := os.Executable()
+		logName := "minder.log" // Fallback
+		if exeErr == nil {
+			logName = filepath.Base(exePath) + ".log"
+		}
+
+		// Open log file
+		logFile, err = os.OpenFile(logName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open %s: %v\n", logName, err)
+		} else {
+			writer = io.MultiWriter(os.Stdout, logFile)
+		}
+	}
+
+	// Force colors to be enabled even if writing to a file/pipe avoids detection
+	color.NoColor = false
+
+	handler := NewBotLogHandler(writer, &BotLogHandlerOptions{
 		Silent: IsSilent,
 		Level:  level,
 	})
@@ -63,8 +102,7 @@ func InitLogger(silent bool) {
 }
 
 func SetSilentMode(silent bool) {
-	IsSilent = silent
-	InitLogger(silent)
+	InitLogger(silent, LogToFile)
 }
 
 // --- Log Functions (Signatures preserved for compatibility) ---
@@ -188,9 +226,6 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	case r.Level >= slog.LevelInfo:
 		levelStr = "INFO"
 		levelColor = infoColor
-	default:
-		levelStr = "DEBUG"
-		levelColor = debugColor
 	}
 
 	// Extract component if present
@@ -371,7 +406,7 @@ const (
 // @loop
 const (
 	MsgLoopFailedToLoadConfigs   = "Failed to load configs: %v"
-	MsgLoopLoadedChannels        = "Loaded configuration for %d channels (Lazy)."
+	MsgLoopLoadedChannels        = "Loaded configuration for %d categories."
 	MsgLoopFailedToResume        = "Failed to resume %s: %v"
 	MsgLoopResuming              = "Resuming %d active loops..."
 	MsgLoopWebhookLimitReached   = "Channel %s has 10 webhooks, skipping"
