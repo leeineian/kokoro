@@ -389,6 +389,15 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 			author = LoopWebhookName
 		}
 		avatar := data.Config.WebhookAvatar
+		if avatar == "" {
+			if ch, ok := client.Caches.Channel(channelID); ok {
+				if guild, ok := client.Caches.Guild(ch.GuildID()); ok {
+					if iconURL := guild.IconURL(); iconURL != nil {
+						avatar = *iconURL
+					}
+				}
+			}
+		}
 
 		for {
 			select {

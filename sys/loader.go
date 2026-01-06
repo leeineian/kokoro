@@ -105,6 +105,23 @@ func TriggerClientReady(ctx context.Context, client *bot.Client) {
 func RegisterCommands(client *bot.Client, guildIDStr string) error {
 	LogInfo(MsgLoaderRegistering)
 
+	// Transition handling: Detect if we've switched modes or guilds
+	lastGuildID, _ := GetBotConfig(context.Background(), "last_guild_id")
+	if lastGuildID != "" && lastGuildID != guildIDStr {
+		LogInfo(MsgLoaderTransitionClear, lastGuildID)
+		oldGID, err := snowflake.Parse(lastGuildID)
+		if err == nil {
+			// Effort to clear old guild commands
+			_, err = client.Rest.SetGuildCommands(client.ApplicationID, oldGID, []discord.ApplicationCommandCreate{})
+			if err != nil {
+				LogWarn("Failed to clear previous guild commands: %v", err)
+			}
+		}
+	}
+
+	// Update the last known state after transition check
+	_ = SetBotConfig(context.Background(), "last_guild_id", guildIDStr)
+
 	// If a guild ID is provided, register to guild and then clear global sequentially
 	if guildIDStr != "" {
 		guildID, err := snowflake.Parse(guildIDStr)

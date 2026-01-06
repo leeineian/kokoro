@@ -48,6 +48,12 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		webhookAvatar := ""
 		if avatar, ok := data.OptString("webhook_avatar"); ok {
 			webhookAvatar = avatar
+		} else {
+			if guild, ok := event.Client().Caches.Guild(*event.GuildID()); ok {
+				if icon := guild.IconURL(); icon != nil {
+					webhookAvatar = *icon
+				}
+			}
 		}
 
 		config := &sys.LoopConfig{

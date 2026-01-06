@@ -333,6 +333,7 @@ const (
 	MsgLoaderRegisteringGlobal  = "Registering commands globally..."
 	MsgLoaderRegisterGlobalFail = "[ERROR] Failed to register global commands: %w"
 	MsgLoaderGlobalRegistered   = "Registered global command: %s"
+	MsgLoaderTransitionClear    = "Transition detected: Clearing commands from previous guild %s"
 
 	// Bot Lifecycle
 	MsgBotStarting      = "Starting %s..."

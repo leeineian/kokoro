@@ -1,12 +1,15 @@
 package home
 
 import (
+	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/omit"
+	"github.com/leeineian/minder/proc"
 	"github.com/leeineian/minder/sys"
 )
 
@@ -22,8 +25,16 @@ func init() {
 		},
 		Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionSubCommand{
-				Name:        "list",
-				Description: "List configured loop channels",
+				Name:        "erase",
+				Description: "Erase a configured loop category",
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
+						Name:         "target",
+						Description:  "Target configuration to erase",
+						Required:     true,
+						Autocomplete: true,
+					},
+				},
 			},
 			discord.ApplicationCommandOptionSubCommand{
 				Name:        "set",
@@ -84,7 +95,6 @@ func init() {
 		},
 	}, handleLoop)
 
-	sys.RegisterComponentHandler("delete_loop_config", handleDeleteLoopConfig)
 	sys.RegisterAutocompleteHandler("loop", handleLoopAutocomplete)
 }
 
@@ -96,8 +106,8 @@ func handleLoop(event *events.ApplicationCommandInteractionCreate) {
 
 	subCmd := *data.SubCommandName
 	switch subCmd {
-	case "list":
-		handleLoopList(event)
+	case "erase":
+		handleLoopErase(event)
 	case "set":
 		handleLoopSet(event, data)
 	case "start":
@@ -141,13 +151,6 @@ func loopRespond(event *events.ApplicationCommandInteractionCreate, content stri
 	}
 }
 
-func loopTruncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
-}
-
 func handleLoopAutocomplete(event *events.AutocompleteInteractionCreate) {
 	data := event.Data
 	focusedOpt := ""
@@ -166,4 +169,196 @@ func handleLoopAutocomplete(event *events.AutocompleteInteractionCreate) {
 	}
 
 	handleWebhookLooperAutocomplete(event, subCmd, focusedOpt)
+}
+
+func getLoopStatusDetails(cfg *sys.LoopConfig, state *proc.LoopState) (string, string) {
+	if state == nil {
+		return "⚪", ""
+	}
+	emoji := "🟢"
+	details := ""
+	if cfg.Interval > 0 {
+		details += fmt.Sprintf(" (Round %d)", state.CurrentRound)
+	} else {
+		details += fmt.Sprintf(" (Round %d/%d)", state.CurrentRound, state.RoundsTotal)
+	}
+
+	if !state.NextRun.IsZero() {
+		details += fmt.Sprintf(" (Next: %s)", state.NextRun.Format("15:04:05"))
+	} else if !state.EndTime.IsZero() {
+		if state.EndTime.After(time.Now().UTC()) {
+			details += fmt.Sprintf(" (Ends: %s)", state.EndTime.Format("15:04:05"))
+		} else {
+			details += " (Finishing...)"
+		}
+	}
+	return emoji, details
+}
+
+// handleWebhookLooperAutocomplete provides autocomplete for webhook looper commands
+func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate, subCmd string, focusedOpt string) {
+	var choices []discord.AutocompleteChoice
+
+	switch subCmd {
+	case "start":
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
+		activeLoops := proc.GetActiveLoops()
+
+		// Add "all" option if there are multiple configs and it matches the filter
+		if len(configs) > 1 {
+			if focusedOpt == "" || strings.Contains(strings.ToLower("start all configured loops"), strings.ToLower(focusedOpt)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  "▶️ Start All Configured Loops",
+					Value: "all",
+				})
+			}
+		}
+
+		for _, data := range configs {
+			// Only show configs for the current guild
+			if ch, ok := event.Client().Caches.Channel(data.ChannelID); ok {
+				if ch.GuildID() != *event.GuildID() {
+					continue
+				}
+			} else {
+				continue
+			}
+
+			// Try to get latest name from cache
+			displayName := data.ChannelName
+			if ch, ok := event.Client().Caches.Channel(data.ChannelID); ok {
+				displayName = ch.Name()
+			}
+
+			intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(data.Interval))
+			emoji, details := getLoopStatusDetails(data, activeLoops[data.ChannelID])
+
+			if focusedOpt == "" || strings.Contains(strings.ToLower(displayName), strings.ToLower(focusedOpt)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  fmt.Sprintf("▶️ Start Loop: %s %s%s (Duration: %s)", displayName, emoji, details, intervalStr),
+					Value: data.ChannelID.String(),
+				})
+			}
+		}
+
+	case "set":
+		// Only show categories in the current guild
+		guildID := *event.GuildID()
+		for ch := range event.Client().Caches.Channels() {
+			if ch.GuildID() == guildID && ch.Type() == discord.ChannelTypeGuildCategory {
+				if focusedOpt == "" || strings.Contains(strings.ToLower(ch.Name()), strings.ToLower(focusedOpt)) {
+					choices = append(choices, discord.AutocompleteChoiceString{
+						Name:  fmt.Sprintf("📁 %s", ch.Name()),
+						Value: ch.ID().String(),
+					})
+				}
+			}
+		}
+
+	case "erase":
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
+		guildID := *event.GuildID()
+
+		// Add "all" option if there are multiple configs and it matches the filter
+		if len(configs) > 1 {
+			if focusedOpt == "" || strings.Contains(strings.ToLower("erase all configured loops"), strings.ToLower(focusedOpt)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  "🗑️ Erase All Configured Loops",
+					Value: "all",
+				})
+			}
+		}
+
+		activeLoops := proc.GetActiveLoops()
+
+		for _, cfg := range configs {
+			// Check if the loop belongs to the current guild
+			if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+				if ch.GuildID() != guildID {
+					continue
+				}
+			} else {
+				continue
+			}
+
+			displayName := cfg.ChannelName
+			if ch, ok := event.Client().Caches.Channel(cfg.ChannelID); ok {
+				displayName = ch.Name()
+			}
+
+			intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
+			emoji, details := getLoopStatusDetails(cfg, activeLoops[cfg.ChannelID])
+
+			if focusedOpt == "" || strings.Contains(strings.ToLower(displayName), strings.ToLower(focusedOpt)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  fmt.Sprintf("🗑️ Erase Loop: %s %s%s (Duration: %s)", displayName, emoji, details, intervalStr),
+					Value: cfg.ChannelID.String(),
+				})
+			}
+		}
+
+	case "stop":
+		activeLoops := proc.GetActiveLoops()
+		configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
+		guildID := *event.GuildID()
+
+		// Add "all" option if there are multiple running loops and it matches the filter
+		if len(activeLoops) > 1 {
+			if focusedOpt == "" || strings.Contains(strings.ToLower("stop all running loops"), strings.ToLower(focusedOpt)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  "🛑 Stop All Running Loops",
+					Value: "all",
+				})
+			}
+		}
+
+		for channelID, state := range activeLoops {
+			// Check if the loop belongs to the current guild
+			var belongsToGuild bool
+			if ch, ok := event.Client().Caches.Channel(channelID); ok {
+				if ch.GuildID() == guildID {
+					belongsToGuild = true
+				}
+			}
+			if !belongsToGuild {
+				continue
+			}
+
+			var config *sys.LoopConfig
+			name := channelID.String()
+			for _, cfg := range configs {
+				if cfg.ChannelID == channelID {
+					config = cfg
+					name = cfg.ChannelName
+					// Try to get latest name from cache
+					if ch, ok := event.Client().Caches.Channel(channelID); ok {
+						name = ch.Name()
+					}
+					break
+				}
+			}
+
+			if config == nil {
+				continue
+			}
+
+			intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(config.Interval))
+			emoji, details := getLoopStatusDetails(config, state)
+
+			// Filter by channel name
+			if focusedOpt == "" || strings.Contains(strings.ToLower(name), strings.ToLower(focusedOpt)) {
+				choices = append(choices, discord.AutocompleteChoiceString{
+					Name:  fmt.Sprintf("🛑 Stop Loop: %s %s%s (Duration: %s)", name, emoji, details, intervalStr),
+					Value: channelID.String(),
+				})
+			}
+		}
+	}
+
+	// Limit to 25
+	if len(choices) > 25 {
+		choices = choices[:25]
+	}
+
+	event.AutocompleteResult(choices)
 }
