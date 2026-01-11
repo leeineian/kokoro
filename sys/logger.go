@@ -44,6 +44,9 @@ var (
 	// Log file handling
 	logFile *os.File
 	logMu   sync.Mutex
+
+	// Rate limit failsafe
+	onRateLimitExceeded func()
 )
 
 func init() {
@@ -112,6 +115,13 @@ func GetLogPath() string {
 		return ""
 	}
 	return logFile.Name()
+}
+
+// OnRateLimitExceeded registers a callback to be called when a rate limit is detected in the logs.
+func OnRateLimitExceeded(fn func()) {
+	logMu.Lock()
+	defer logMu.Unlock()
+	onRateLimitExceeded = fn
 }
 
 // --- Log Functions (Signatures preserved for compatibility) ---
@@ -233,6 +243,13 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	case r.Level >= slog.LevelInfo:
 		levelStr = "INFO"
 		levelColor = infoColor
+	}
+
+	// Rate limit detection
+	if r.Level >= slog.LevelWarn && strings.Contains(strings.ToLower(r.Message), "rate limit exceeded") {
+		if onRateLimitExceeded != nil {
+			go onRateLimitExceeded()
+		}
 	}
 
 	// Extract component if present

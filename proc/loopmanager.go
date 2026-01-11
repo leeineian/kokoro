@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
@@ -111,11 +112,18 @@ var (
 
 	globalWebhookCache sync.Map // map[snowflake.ID]webhookCacheEntry
 	globalWebhookMu    sync.Map // map[snowflake.ID]*sync.Mutex
+
+	isEmergencyStop int32
 )
 
 const WebhookCacheTTL = 5 * time.Minute
 
 func InitLoopManager(ctx context.Context, client *bot.Client) {
+	// Register rate limit failsafe
+	sys.OnRateLimitExceeded(func() {
+		StopAllLoops(ctx, client)
+	})
+
 	configs, err := sys.GetAllLoopConfigs(ctx)
 	if err != nil {
 		sys.LogLoopManager(sys.MsgLoopFailedToLoadConfigs, err)
@@ -158,6 +166,10 @@ func StartLoop(ctx context.Context, client *bot.Client, channelID snowflake.ID, 
 	return BatchStartLoops(ctx, client, []snowflake.ID{channelID}, interval)
 }
 func BatchStartLoops(ctx context.Context, client *bot.Client, channelIDs []snowflake.ID, interval time.Duration) error {
+	if atomic.LoadInt32(&isEmergencyStop) == 1 {
+		return fmt.Errorf("cannot start loops: system is currently in emergency stop due to rate limits")
+	}
+
 	var toStart []*ChannelData
 
 	// 1. Preparation Phase (Webhooks)
@@ -620,6 +632,34 @@ func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, st
 
 Wait:
 	wg.Wait()
+}
+
+// StopAllLoops stops all active loops immediately. Called by the rate-limit fail-safe.
+func StopAllLoops(ctx context.Context, client *bot.Client) {
+	if !atomic.CompareAndSwapInt32(&isEmergencyStop, 0, 1) {
+		return
+	}
+
+	sys.LogLoopManager("🚨 FAILURE DETECTED: Rate limit threshold exceeded.")
+	sys.LogLoopManager("🛑 Loop system fail-safe triggered. Stopping all active operations to protect the account.")
+
+	count := 0
+	activeLoops.Range(func(key, value interface{}) bool {
+		channelID := key.(snowflake.ID)
+		if StopLoopInternal(ctx, channelID, client) {
+			count++
+		}
+		return true
+	})
+
+	sys.LogLoopManager("✅ Fail-safe complete. %d loops have been stopped.", count)
+
+	// Keep the system locked for a short cooldown period to allow Discord side to settle
+	go func() {
+		time.Sleep(30 * time.Second)
+		atomic.StoreInt32(&isEmergencyStop, 0)
+		sys.LogLoopManager("ℹ️ Fail-safe cooldown complete. Loops can now be restarted.")
+	}()
 }
 
 func StopLoopInternal(ctx context.Context, channelID snowflake.ID, client *bot.Client) bool {
