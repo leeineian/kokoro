@@ -1,13 +1,14 @@
 package home
 
 import (
+	"fmt"
+
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
-	"github.com/leeineian/minder/proc"
 	"github.com/leeineian/minder/sys"
 )
 
-func handleRoleColorReset(event *events.ApplicationCommandInteractionCreate) {
+func handleRoleColorStats(event *events.ApplicationCommandInteractionCreate) {
 	guildID := event.GuildID()
 	if guildID == nil {
 		event.CreateMessage(discord.NewMessageCreateBuilder().
@@ -22,14 +23,13 @@ func handleRoleColorReset(event *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	err := sys.SetGuildRandomColorRole(sys.AppContext, *guildID, 0)
-	if err != nil {
-		sys.LogDebug(sys.MsgDebugRoleColorResetFail, err)
+	roleID, err := sys.GetGuildRandomColorRole(sys.AppContext, *guildID)
+	if err != nil || roleID == 0 {
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay(sys.MsgRoleColorErrResetFail),
+					discord.NewTextDisplay(sys.MsgRoleColorErrNoRoleStats),
 				),
 			).
 			SetEphemeral(true).
@@ -37,16 +37,16 @@ func handleRoleColorReset(event *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	// Stop rotation daemon
-	proc.StopRotationForGuild(*guildID)
+	content := sys.MsgRoleColorStatsHeader + "\n\n" + fmt.Sprintf(sys.MsgRoleColorStatsContent, roleID)
 
-	event.CreateMessage(discord.NewMessageCreateBuilder().
+	builder := discord.NewMessageCreateBuilder().
 		SetIsComponentsV2(true).
 		AddComponents(
 			discord.NewContainer(
-				discord.NewTextDisplay(sys.MsgRoleColorResetSuccess),
+				discord.NewTextDisplay(content),
 			),
 		).
-		SetEphemeral(true).
-		Build())
+		SetEphemeral(true)
+
+	_ = event.CreateMessage(builder.Build())
 }

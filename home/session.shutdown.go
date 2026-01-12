@@ -11,13 +11,13 @@ import (
 )
 
 func handleSessionShutdown(event *events.ApplicationCommandInteractionCreate) {
-	sys.LogWarn("Shutdown commanded by user %s (%s)", event.User().Username, event.User().ID)
+	sys.LogWarn(sys.MsgSessionShutdownCommanded, event.User().Username, event.User().ID)
 
 	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
 		SetIsComponentsV2(true).
 		AddComponents(
 			discord.NewContainer(
-				discord.NewTextDisplay("🛑 **Shutting down...**"),
+				discord.NewTextDisplay(sys.MsgSessionShuttingDown),
 			),
 		).
 		SetEphemeral(true).

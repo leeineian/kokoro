@@ -16,7 +16,7 @@ func handleRoleColorSet(event *events.ApplicationCommandInteractionCreate, data 
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ This command can only be used in a server."),
+					discord.NewTextDisplay(sys.MsgRoleColorErrGuildOnly),
 				),
 			).
 			SetEphemeral(true).
@@ -32,7 +32,7 @@ func handleRoleColorSet(event *events.ApplicationCommandInteractionCreate, data 
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to set role color configuration."),
+					discord.NewTextDisplay(sys.MsgRoleColorErrSetFail),
 				),
 			).
 			SetEphemeral(true).
@@ -50,7 +50,7 @@ func handleRoleColorSet(event *events.ApplicationCommandInteractionCreate, data 
 		SetIsComponentsV2(true).
 		AddComponents(
 			discord.NewContainer(
-				discord.NewTextDisplay(fmt.Sprintf("✅ Role <@&%s> will now have random colors!", roleID)),
+				discord.NewTextDisplay(fmt.Sprintf(sys.MsgRoleColorSetSuccess, roleID)),
 			),
 		).
 		SetEphemeral(true).

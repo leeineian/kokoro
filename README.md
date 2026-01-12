@@ -5,8 +5,7 @@ flowchart TB
     end
 
     subgraph Core["Core Systems (sys)"]
-        Config["config.go<br/>━━━━━━━━━<br/>Environment Logic<br/>Custom Prefixes"]
-        Database["database.go<br/>━━━━━━━━━<br/>Context-Aware SQLite<br/>• Standardized Snowflake IDs<br/>• WAL-Mode Performance"]
+        Database["database.go<br/>━━━━━━━━━<br/>Environment & SQLite Layer<br/>• Standardized Snowflake IDs<br/>• WAL-Mode Performance"]
         Loader["loader.go<br/>━━━━━━━━━<br/>Bulk Registration<br/>Interaction Router<br/>V2 Component Support"]
         Logger["logger.go<br/>━━━━━━━━━<br/>Structured slog Logging<br/>Dynamic AST Discovery<br/>Custom Colored Handler"]
     end
@@ -18,6 +17,7 @@ flowchart TB
             CatFact["fact (API)"]
             CatImage["image (API)"]
             CatSay["say (ANSI ASCII)"]
+            CatStats["stats (System)"]
         end
         
         subgraph SessionCmd["/session"]
@@ -25,37 +25,40 @@ flowchart TB
             SessionShutdown["shutdown (Graceful)"]
             SessionStats["stats (Metrics)"]
             SessionStatus["status (Presence)"]
+            SessionConsole["console (Log Viewer)"]
         end
 
         subgraph LoopCmd["/loop"]
-            LoopList["list (Configs)"]
+            LoopStats["stats (State)"]
             LoopSet["set (Target)"]
             LoopStart["start (Stress)"]
             LoopStop["stop (Cleanup)"]
+            LoopErase["erase (Category)"]
         end
 
         subgraph ReminderCmd["/reminder"]
             ReminderSet["set (Natural Time)"]
             ReminderList["list (Interactive)"]
+            ReminderStats["stats (Summary)"]
         end
 
         subgraph RoleColorCmd["/rolecolor"]
-            RoleColorSet["set (RGB Cycle)"]
+            RoleColorSet["set (Binding)"]
+            RoleColorReset["reset (Cleanup)"]
             RoleColorRefresh["refresh (Immediate)"]
+            RoleColorStats["stats (Config)"]
         end
         
         subgraph UtilityCmd["Utilities"]
-            EchoCmd["/echo (ANSI)"]
             UndertextCmd["/undertext (Sprites)"]
         end
     end
 
     subgraph Daemons["Background Daemons (proc)"]
-        ReminderScheduler["reminderscheduler.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
-        StatusRotator["statusrotator.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
-        RoleColorRotator["rolecolorrotator.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
-        LoopCycle["loopcycle.go<br/>━━━━━━━━━<br/>State-Aware Scheduling<br/>Websocket Health Hooks"]
-        LoopManager["loopmanager.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
+        ReminderManager["reminder.manager.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
+        StatusManager["status.manager.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
+        RoleColorManager["rolecolor.manager.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
+        LoopManager["loop.manager.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
     end
 
     subgraph External["External Services"]
@@ -65,7 +68,6 @@ flowchart TB
     end
 
     %% Entry connections
-    Main --> Config
     Main --> Database
     Main --> Loader
     
@@ -82,16 +84,14 @@ flowchart TB
     Loader --> UtilityCmd
 
     %% Daemon startup
-    Main --> ReminderScheduler
-    Main --> StatusRotator
-    Main --> RoleColorRotator
-    Main --> LoopCycle
+    Main --> ReminderManager
+    Main --> StatusManager
+    Main --> RoleColorManager
     Main --> LoopManager
 
     %% Daemon dependencies
-    ReminderScheduler --> Database
-    RoleColorRotator --> Database
-    LoopCycle --> Database
+    ReminderManager --> Database
+    RoleColorManager --> Database
     LoopManager --> Database
 
     %% External API connections
@@ -108,9 +108,9 @@ flowchart TB
     classDef externalStyle fill:#2d3436,stroke:#00b894,stroke-width:2px,color:#fff
 
     class Main entryStyle
-    class Config,Database,Loader,Logger coreStyle
-    class CatFact,CatImage,CatSay,SessionReboot,SessionShutdown,SessionStats,SessionStatus,LoopList,LoopSet,LoopStart,LoopStop,ReminderSet,ReminderList,RoleColorSet,RoleColorRefresh,EchoCmd,UndertextCmd cmdStyle
-    class ReminderScheduler,StatusRotator,RoleColorRotator,LoopCycle,LoopManager daemonStyle
+    class Database,Loader,Logger coreStyle
+    class CatFact,CatImage,CatSay,CatStats,SessionReboot,SessionShutdown,SessionStats,SessionStatus,SessionConsole,LoopStats,LoopSet,LoopStart,LoopStop,LoopErase,ReminderSet,ReminderList,ReminderStats,RoleColorSet,RoleColorReset,RoleColorRefresh,RoleColorStats,UndertextCmd cmdStyle
+    class ReminderManager,StatusManager,RoleColorManager,LoopManager daemonStyle
     class Discord,CatAPI,UndertaleAPI externalStyle
 ```
 
@@ -124,41 +124,43 @@ minder/
 ├── Dockerfile                    # Multi-stage build
 ├── docker-compose.yml            # Multi-service deployment
 |
-├── home/                         # [Discord Commands]
-│   ├── cat...go                  # /cat command router
-│   ├── cat.fact.go               # /cat fact handler
-│   ├── cat.image.go              # /cat image handler
-│   ├── cat.say.go                # /cat say (ANSI) handler
-│   ├── echo...go                 # /echo command (Admin)
-│   ├── loop...go                 # /loop command router
-│   ├── loop.list.go              # /loop list handler
-│   ├── loop.set.go               # /loop set handler
-│   ├── loop.start.go             # /loop start (Stress) handler
-│   ├── loop.stop.go              # /loop stop (Cleanup) handler
-│   ├── reminder...go             # /reminder command router
-│   ├── reminder.list.go          # /reminder list handler
-│   ├── reminder.set.go           # /reminder set handler
-│   ├── rolecolor...go            # /rolecolor command router
-│   ├── rolecolor.refresh.go      # /rolecolor refresh handler
-│   ├── rolecolor.reset.go        # /rolecolor reset handler
-│   ├── rolecolor.set.go          # /rolecolor set handler
-│   ├── session...go              # /session command router
-│   ├── session.reboot.go         # /session reboot handler
-│   ├── session.shutdown.go       # /session shutdown handler
-│   ├── session.stats.go          # /session stats handler
-│   ├── session.status.go         # /session status handler
-│   └── undertext.go              # /undertext image generator
+├── home/                         # [Slash Commands]
+│   ├── cat...go                  # /cat router
+│   ├── cat.fact.go               # /cat fact
+│   ├── cat.image.go              # /cat image
+│   ├── cat.say.go                # /cat say
+│   ├── cat.stats.go              # /cat stats
+│   ├── loop...go                 # /loop router
+│   ├── loop.erase.go             # /loop erase
+│   ├── loop.set.go               # /loop set
+│   ├── loop.start.go             # /loop start
+│   ├── loop.stop.go              # /loop stop
+│   ├── loop.stats.go             # /loop stats
+│   ├── reminder...go             # /reminder router
+│   ├── reminder.list.go          # /reminder list
+│   ├── reminder.set.go           # /reminder set
+│   ├── reminder.stats.go         # /reminder stats
+│   ├── rolecolor...go            # /rolecolor router
+│   ├── rolecolor.refresh.go      # /rolecolor refresh
+│   ├── rolecolor.reset.go        # /rolecolor reset
+│   ├── rolecolor.set.go          # /rolecolor set
+│   ├── rolecolor.stats.go        # /rolecolor stats
+│   ├── session...go              # /session router
+│   ├── session.console.go        # /session console
+│   ├── session.reboot.go         # /session reboot
+│   ├── session.shutdown.go       # /session shutdown
+│   ├── session.stats.go          # /session stats
+│   ├── session.status.go         # /session status
+│   └── undertext.go              # /undertext
 │
 ├── proc/                         # [Background Daemons]
-│   ├── loopcycle.go              # State-aware scheduling
-│   ├── loopmanager.go            # Webhook loop manager
-│   ├── reminderscheduler.go      # Reminder notification daemon
-│   ├── rolecolorrotator.go       # Role color cycle daemon
-│   └── statusrotator.go          # Status cycle daemon
+│   ├── loop.manager.go           # Webhook loop manager
+│   ├── reminder.manager.go       # Reminder notification daemon
+│   ├── rolecolor.manager.go      # Role color cycle daemon
+│   └── status.manager.go         # Status cycle daemon
 │
 └── sys/                          # [Core Systems]
-    ├── config.go                 # Environment configuration
-    ├── database.go               # SQLite database layer
+    ├── database.go               # Configuration & SQLite layer
     ├── loader.go                 # Session creation & registration
     └── logger.go                 # Leveled Logging & AST Discovery
 ```

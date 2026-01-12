@@ -14,7 +14,7 @@ func handleRoleColorRefresh(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ This command can only be used in a server."),
+					discord.NewTextDisplay(sys.MsgRoleColorErrGuildOnly),
 				),
 			).
 			SetEphemeral(true).
@@ -29,7 +29,7 @@ func handleRoleColorRefresh(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ No role is configured for color rotation."),
+					discord.NewTextDisplay(sys.MsgRoleColorErrNoRole),
 				),
 			).
 			SetEphemeral(true).
@@ -40,12 +40,12 @@ func handleRoleColorRefresh(event *events.ApplicationCommandInteractionCreate) {
 	// Actually update the role color
 	err = proc.UpdateRoleColor(sys.AppContext, event.Client(), *guildID, roleID)
 	if err != nil {
-		sys.LogDebug("Failed to refresh role color: %v", err)
+		sys.LogDebug(sys.MsgDebugRoleColorRefreshFail, err)
 		event.CreateMessage(discord.NewMessageCreateBuilder().
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ Failed to refresh role color."),
+					discord.NewTextDisplay(sys.MsgRoleColorErrRefreshFail),
 				),
 			).
 			SetEphemeral(true).
@@ -57,7 +57,7 @@ func handleRoleColorRefresh(event *events.ApplicationCommandInteractionCreate) {
 		SetIsComponentsV2(true).
 		AddComponents(
 			discord.NewContainer(
-				discord.NewTextDisplay("🎨 Role color has been refreshed!"),
+				discord.NewTextDisplay(sys.MsgRoleColorRefreshSuccess),
 			),
 		).
 		SetEphemeral(true).

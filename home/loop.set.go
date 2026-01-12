@@ -15,7 +15,7 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 	channelIDStr, _ := data.OptString("category")
 	channelID, err := snowflake.Parse(channelIDStr)
 	if err != nil {
-		loopRespond(event, "❌ Invalid channel selection.", true)
+		loopRespond(event, sys.MsgLoopErrInvalidChannel, true)
 		return
 	}
 
@@ -25,13 +25,13 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 	go func() {
 		channel, ok := event.Client().Caches.Channel(channelID)
 		if !ok {
-			loopRespond(event, "❌ Failed to fetch channel.", true)
+			loopRespond(event, sys.MsgLoopErrChannelFetchFail, true)
 			return
 		}
 
 		// Validate that channel is a category
 		if channel.Type() != discord.ChannelTypeGuildCategory {
-			loopRespond(event, "❌ Only **categories** are supported. Please select a category channel.", true)
+			loopRespond(event, sys.MsgLoopErrOnlyCategories, true)
 			return
 		}
 
@@ -81,12 +81,12 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 		}
 
 		if err := proc.SetLoopConfig(sys.AppContext, event.Client(), channelID, config); err != nil {
-			loopRespond(event, fmt.Sprintf("❌ Failed to save configuration: %v", err), true)
+			loopRespond(event, fmt.Sprintf(sys.MsgLoopSaveFail, err), true)
 			return
 		}
 
 		loopRespond(event, fmt.Sprintf(
-			"✅ **Category Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/loop start` to begin.",
+			sys.MsgLoopConfiguredDisp,
 			channel.Name(),
 		), true)
 	}()

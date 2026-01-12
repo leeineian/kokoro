@@ -6,6 +6,74 @@ import (
 	"github.com/leeineian/minder/sys"
 )
 
+// Cat API Types
+type CatFact struct {
+	Fact   string `json:"fact"`
+	Length int    `json:"length"`
+}
+
+type CatImage struct {
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+// Cat ANSI Art Constants
+const (
+	catAsciiWidth = 13
+	catAnsiReset  = "\u001b[0m"
+)
+
+var catAnsiColors = map[string]string{
+	"gray":   "30",
+	"red":    "31",
+	"green":  "32",
+	"yellow": "33",
+	"blue":   "34",
+	"pink":   "35",
+	"cyan":   "36",
+	"white":  "37",
+}
+
+func getCatAnsiCode(color string) string {
+	if code, ok := catAnsiColors[color]; ok {
+		return "\u001b[0;" + code + "m"
+	}
+	return ""
+}
+
+func getCatColorChoices() []discord.ApplicationCommandOptionChoiceString {
+	return []discord.ApplicationCommandOptionChoiceString{
+		{Name: "Gray", Value: "gray"},
+		{Name: "Red", Value: "red"},
+		{Name: "Green", Value: "green"},
+		{Name: "Yellow", Value: "yellow"},
+		{Name: "Blue", Value: "blue"},
+		{Name: "Pink", Value: "pink"},
+		{Name: "Cyan", Value: "cyan"},
+		{Name: "White", Value: "white"},
+	}
+}
+
+func getCatExpressionChoices() []discord.ApplicationCommandOptionChoiceString {
+	return []discord.ApplicationCommandOptionChoiceString{
+		{Name: "Neutral", Value: "o.o"},
+		{Name: "Shocked", Value: "O.O"},
+		{Name: "Happy", Value: "^.^"},
+		{Name: "Sleeping", Value: "-.-"},
+		{Name: "Confused", Value: "o.O"},
+		{Name: "Silly", Value: ">.<"},
+		{Name: "Wink", Value: "o.~"},
+		{Name: "Dizzy", Value: "@.@"},
+		{Name: "Crying", Value: "T.T"},
+		{Name: "Angry", Value: "ò.ó"},
+		{Name: "Star Eyes", Value: "*.*"},
+		{Name: "Money", Value: "$.$"},
+		{Name: "None", Value: "   "},
+	}
+}
+
 func init() {
 	sys.RegisterCommand(discord.SlashCommandCreate{
 		Name:        "cat",
@@ -56,6 +124,10 @@ func init() {
 					},
 				},
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "stats",
+				Description: "View cat system status and details",
+			},
 		},
 	}, func(event *events.ApplicationCommandInteractionCreate) {
 		data := event.SlashCommandInteractionData()
@@ -65,6 +137,8 @@ func init() {
 		}
 
 		switch *subCmd {
+		case "stats":
+			handleCatStats(event)
 		case "fact":
 			handleCatFact(event)
 		case "image":

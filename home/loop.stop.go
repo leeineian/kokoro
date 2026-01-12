@@ -25,7 +25,7 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 		go func() {
 			activeLoops := proc.GetActiveLoops()
 			if len(activeLoops) == 0 {
-				loopRespond(event, "ℹ️ No loops are currently running.", true)
+				loopRespond(event, sys.MsgLoopNoRunning, true)
 				return
 			}
 
@@ -36,15 +36,15 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 				}
 			}
 
-			loopRespond(event, fmt.Sprintf("🛑 Stopped **%d** loop(s).", stopped), true)
+			loopRespond(event, fmt.Sprintf(sys.MsgLoopStoppedBatch, stopped), true)
 		}()
 	} else {
 		tID, err := snowflake.Parse(targetID)
 		go func() {
 			if err == nil && proc.StopLoopInternal(sys.AppContext, tID, event.Client()) {
-				loopRespond(event, "✅ Stopped the selected loop.", true)
+				loopRespond(event, sys.MsgLoopStoppedDisp, true)
 			} else {
-				loopRespond(event, "❌ Could not find or stop the loop.", true)
+				loopRespond(event, sys.MsgLoopErrStopFail, true)
 			}
 		}()
 	}

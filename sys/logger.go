@@ -18,12 +18,16 @@ import (
 	"github.com/fatih/color"
 )
 
+// --- Globals & Styles ---
+
 var (
-	// Style definitions
-	infoColor          = color.New(color.FgBlack)
-	warnColor          = color.New(color.FgYellow)
-	errorColor         = color.New(color.FgRed)
-	fatalColor         = color.New(color.FgRed, color.Bold)
+	// Level colors
+	infoColor  = color.New(color.FgBlack)
+	warnColor  = color.New(color.FgYellow)
+	errorColor = color.New(color.FgRed)
+	fatalColor = color.New(color.FgRed, color.Bold)
+
+	// Component colors
 	databaseColor      = color.New(color.FgBlack)
 	reminderColor      = color.New(color.FgMagenta)
 	statusRotatorColor = color.New(color.FgMagenta)
@@ -32,22 +36,21 @@ var (
 	catColor           = color.New(color.FgMagenta)
 	undertextColor     = color.New(color.FgMagenta)
 
-	IsSilent  = false
-	LogToFile = false
+	// Global state
+	DefaultTimeFormat = "15:04:05"
+	IsSilent          = false
+	LogToFile         = false
+	Logger            *slog.Logger
 
-	errorMapCache map[string]string
-	errorMapOnce  sync.Once
-
-	// Global default logger
-	Logger *slog.Logger
-
-	// Log file handling
-	logFile *os.File
-	logMu   sync.Mutex
-
-	// Rate limit failsafe
+	// Internal state
+	logFile             *os.File
+	logMu               sync.Mutex
+	errorMapCache       map[string]string
+	errorMapOnce        sync.Once
 	onRateLimitExceeded func()
 )
+
+// --- Initialization ---
 
 func init() {
 	// Initialize with a default handler immediately (Stdout only)
@@ -66,7 +69,6 @@ func InitLogger(silent bool, saveToFile bool) {
 		level = slog.LevelDebug
 	}
 
-	// Clean up previous file if it exists (e.g. during reload)
 	if logFile != nil {
 		_ = logFile.Close()
 		logFile = nil
@@ -75,16 +77,13 @@ func InitLogger(silent bool, saveToFile bool) {
 	var writer io.Writer = os.Stdout
 	var err error
 
-	// Open log file if requested
 	if LogToFile {
-		// Determine log file name from executable name
 		exePath, exeErr := os.Executable()
-		logName := "minder.log" // Fallback
+		logName := GetProjectName() + ".log"
 		if exeErr == nil {
 			logName = filepath.Base(exePath) + ".log"
 		}
 
-		// Open log file
 		logFile, err = os.OpenFile(logName, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open %s: %v\n", logName, err)
@@ -93,7 +92,6 @@ func InitLogger(silent bool, saveToFile bool) {
 		}
 	}
 
-	// Force colors to be enabled even if writing to a file/pipe avoids detection
 	color.NoColor = false
 
 	handler := NewBotLogHandler(writer, &BotLogHandlerOptions{
@@ -108,23 +106,7 @@ func SetSilentMode(silent bool) {
 	InitLogger(silent, LogToFile)
 }
 
-func GetLogPath() string {
-	logMu.Lock()
-	defer logMu.Unlock()
-	if logFile == nil {
-		return ""
-	}
-	return logFile.Name()
-}
-
-// OnRateLimitExceeded registers a callback to be called when a rate limit is detected in the logs.
-func OnRateLimitExceeded(fn func()) {
-	logMu.Lock()
-	defer logMu.Unlock()
-	onRateLimitExceeded = fn
-}
-
-// --- Log Functions (Signatures preserved for compatibility) ---
+// --- Public Logging API ---
 
 func LogInfo(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...))
@@ -140,9 +122,15 @@ func LogError(format string, v ...interface{}) {
 
 func LogFatal(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
-	slog.Log(context.Background(), slog.LevelError+4, msg) // Custom Fatal level
+	slog.Log(context.Background(), slog.LevelError+4, msg)
 	os.Exit(1)
 }
+
+func LogDebug(format string, v ...interface{}) {
+	slog.Debug(fmt.Sprintf(format, v...))
+}
+
+// Component Loggers
 
 func LogDatabase(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "database"))
@@ -156,23 +144,12 @@ func LogStatusRotator(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "status_rotator"))
 }
 
-func ColorizeHex(colorInt int) string {
-	hex := fmt.Sprintf("#%06X", colorInt)
-	// Discord only supports standard 16 colors in ANSI blocks.
-	// We'll use Magenta (35) as a representational color for hex indicators.
-	return fmt.Sprintf("\x1b[35m⬤ %s\x1b[0m", hex)
-}
-
 func LogRoleColorRotator(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role_color"))
 }
 
 func LogLoopManager(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop_manager"))
-}
-
-func LogCustom(tag string, tagColor *color.Color, format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", tag))
 }
 
 func LogCat(format string, v ...interface{}) {
@@ -183,11 +160,11 @@ func LogUndertext(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "undertext"))
 }
 
-func LogDebug(format string, v ...interface{}) {
-	slog.Debug(fmt.Sprintf(format, v...))
+func LogCustom(tag string, tagColor *color.Color, format string, v ...interface{}) {
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", tag))
 }
 
-// --- Custom Slog Handler ---
+// --- Log Handler Implementation ---
 
 type BotLogHandlerOptions struct {
 	Silent bool
@@ -226,12 +203,12 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		return nil
 	}
 
-	timeStr := time.Now().Format("15:04:05")
+	timeStr := time.Now().Format(DefaultTimeFormat)
 	var levelStr string
 	var levelColor *color.Color
 
 	switch {
-	case r.Level >= slog.LevelError+4: // Fatal
+	case r.Level >= slog.LevelError+4:
 		levelStr = "FATAL"
 		levelColor = fatalColor
 	case r.Level >= slog.LevelError:
@@ -245,14 +222,12 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		levelColor = infoColor
 	}
 
-	// Rate limit detection
 	if r.Level >= slog.LevelWarn && strings.Contains(strings.ToLower(r.Message), "rate limit exceeded") {
 		if onRateLimitExceeded != nil {
 			go onRateLimitExceeded()
 		}
 	}
 
-	// Extract component if present
 	component := ""
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "component" {
@@ -262,20 +237,22 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		return true
 	})
 
-	// Output: 15:04:05 [INFO] [COMPONENT] Message
-	// Timestamp is always printed in default color.
 	fmt.Fprintf(h.w, "%s", timeStr)
 
 	if component != "" {
-		// Component-specific logs: Level tag (if not INFO) is isolated, Message bleeds component color
 		if levelStr != "INFO" {
 			fmt.Fprintf(h.w, " %s", levelColor.Sprintf("[%s]", levelStr))
 		}
 		compColor := getComponentColor(component)
 		fmt.Fprintf(h.w, " %s\n", colorizeWithResets(compColor, fmt.Sprintf("[%s] %s", component, r.Message)))
 	} else {
-		// General logs: Level tag color bleeds into the message
-		fmt.Fprintf(h.w, " %s\n", colorizeWithResets(levelColor, fmt.Sprintf("[%s] %s", levelStr, r.Message)))
+		displayMsg := fmt.Sprintf("[%s] %s", levelStr, r.Message)
+		if levelStr == "INFO" && strings.HasPrefix(r.Message, "[") {
+			if idx := strings.Index(r.Message, "]"); idx > 0 && idx < 20 {
+				displayMsg = r.Message
+			}
+		}
+		fmt.Fprintf(h.w, " %s\n", colorizeWithResets(levelColor, displayMsg))
 	}
 
 	return nil
@@ -283,6 +260,8 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 
 func (h *BotLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
 func (h *BotLogHandler) WithGroup(name string) slog.Handler       { return h }
+
+// --- Formatting Helpers ---
 
 func getComponentColor(name string) *color.Color {
 	switch name {
@@ -305,67 +284,128 @@ func getComponentColor(name string) *color.Color {
 	}
 }
 
-// colorizeWithResets ensures that if the text contains ANSI reset codes,
-// the starting color of the Color object is re-applied after each reset.
-// This allows nested coloring (like hex codes) to work within component logs.
 func colorizeWithResets(c *color.Color, text string) string {
 	if !strings.Contains(text, "\x1b[0m") {
 		return c.Sprint(text)
 	}
 
-	// Extract starting ANSI sequence
 	marker := "@@@MSG@@@"
 	wrapped := c.Sprint(marker)
 	idx := strings.Index(wrapped, marker)
 	if idx <= 0 {
-		return text // No color applied or something went wrong
+		return text
 	}
 	startSeq := wrapped[:idx]
 
-	// Re-apply start sequences after each reset to maintain the outer color
-	// Also re-apply it at the beginning of the string to be safe (Sprint handles it)
 	modifiedText := strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+startSeq)
 	return c.Sprint(modifiedText)
 }
 
-// @src
-const (
-	// Configuration
-	MsgConfigFailedToLoad = "Failed to load config: %v"
-	MsgConfigMissingToken = "DISCORD_TOKEN is not set in .env file"
+func ColorizeHex(colorInt int) string {
+	hex := fmt.Sprintf("#%06X", colorInt)
+	r := (colorInt >> 16) & 0xFF
+	g := (colorInt >> 8) & 0xFF
+	b := colorInt & 0xFF
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm⬤ %s\x1b[0m", r, g, b, hex)
+}
 
-	// Data layer
+// --- Utilities & State ---
+
+func GetLogPath() string {
+	logMu.Lock()
+	defer logMu.Unlock()
+	if logFile == nil {
+		return ""
+	}
+	return logFile.Name()
+}
+
+func OnRateLimitExceeded(fn func()) {
+	logMu.Lock()
+	defer logMu.Unlock()
+	onRateLimitExceeded = fn
+}
+
+func GetUserErrors() map[string]string {
+	errorMapOnce.Do(func() {
+		errorMapCache = make(map[string]string)
+
+		_, filename, _, ok := runtime.Caller(0)
+		if !ok {
+			return
+		}
+
+		fset := token.NewFileSet()
+		node, err := parser.ParseFile(fset, filename, nil, 0)
+		if err != nil {
+			return
+		}
+
+		ast.Inspect(node, func(n ast.Node) bool {
+			genDecl, isGenDecl := n.(*ast.GenDecl)
+			if isGenDecl && genDecl.Tok == token.CONST {
+				for _, spec := range genDecl.Specs {
+					valueSpec, isValueSpec := spec.(*ast.ValueSpec)
+					if isValueSpec {
+						for i, name := range valueSpec.Names {
+							constName := name.Name
+							if strings.HasPrefix(constName, "Err") || strings.HasPrefix(constName, "Msg") {
+								if len(valueSpec.Values) > i {
+									if basicLit, isBasicLit := valueSpec.Values[i].(*ast.BasicLit); isBasicLit && basicLit.Kind == token.STRING {
+										constValue := strings.Trim(basicLit.Value, `"`)
+										if !strings.Contains(constValue, "%") {
+											errorMapCache[constName] = constValue
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+	})
+
+	return errorMapCache
+}
+
+// --- Message Constants ---
+
+const (
+	// --- Infrastructure & Lifecycle ---
+	MsgConfigFailedToLoad  = "Failed to load config: %v"
+	MsgConfigMissingToken  = "DISCORD_TOKEN is not set in .env file"
 	MsgDatabaseInitSuccess = "Database initialized successfully"
 	MsgDatabaseTableError  = "Failed to create table: %w"
 	MsgDatabasePragmaError = "Failed to set pragma %s: %w"
+	MsgDaemonStarting      = "Starting..."
+	MsgBotStarting         = "Starting %s..."
+	MsgBotReady            = "%s is ready! (ID: %s) (PID: %d)"
+	MsgBotShutdown         = "Shutting down %s..."
+	MsgBotKillingOld       = "Killing running instance... (PID: %d)"
+	MsgBotKillFail         = "Failed to kill old instance: %v"
+	MsgBotOldTerminated    = "Old instance terminated."
+	MsgBotPIDWriteFail     = "Failed to write PID file: %v"
+	MsgBotRegisterFail     = "Command registration failed: %v"
+	MsgBotAPIStatusError   = "discord API returned status %d"
+	MsgGenericError        = "%v"
 
-	// Command Registry
-	MsgLoaderRegistering        = "Registering commands..."
-	MsgLoaderGuildRegister      = "Registering commands to guild: %s"
-	MsgLoaderGlobalClear        = "Clearing global commands..."
-	MsgLoaderGlobalCleared      = "Global commands cleared."
-	MsgLoaderGlobalClearFail    = "Failed to clear global commands: %v"
-	MsgLoaderCommandRegistered  = "Registered guild command: %s"
-	MsgGenericError             = "%v"
-	MsgLoaderRegisteringGlobal  = "Registering commands globally..."
-	MsgLoaderRegisterGlobalFail = "[ERROR] Failed to register global commands: %w"
-	MsgLoaderGlobalRegistered   = "Registered global command: %s"
-	MsgLoaderTransitionClear    = "Transition detected: Clearing commands from previous guild %s"
+	// --- Command Loader & Registry ---
+	MsgLoaderSyncCommands       = "Syncing commands... Mode: %s"
+	MsgLoaderTransition         = "[TRANSITION] Switching from %s to %s mode."
+	MsgLoaderCleanup            = "[CLEANUP] Removing commands from previous dev guild: %s"
+	MsgLoaderDevStarting        = "[DEV] Registering commands to guild: %s"
+	MsgLoaderDevRegistered      = "[DEV] Registered: %s"
+	MsgLoaderDevFail            = "[DEV] Registration failed: %v"
+	MsgLoaderDevGlobalClear     = "[DEV] Verifying global commands are cleared..."
+	MsgLoaderDevGlobalClearFail = "[DEV] Global clear skipped (likely rate limited): %v"
+	MsgLoaderProdStarting       = "[PROD] Registering commands globally..."
+	MsgLoaderProdRegistered     = "[PROD] Registered: %s"
+	MsgLoaderProdFail           = "[PROD] Global registration failed: %w"
+	MsgLoaderPanicRecovered     = "Panic recovered in handler: %v"
 
-	// Bot Lifecycle
-	MsgBotStarting      = "Starting %s..."
-	MsgBotReady         = "%s is ready! (ID: %s) (PID: %d)"
-	MsgBotShutdown      = "Shutting down %s..."
-	MsgBotKillingOld    = "Killing running instance... (PID: %d)"
-	MsgBotKillFail      = "Failed to kill old instance: %v"
-	MsgBotOldTerminated = "Old instance terminated."
-	MsgBotPIDWriteFail  = "Failed to write PID file: %v"
-	MsgBotRegisterFail  = "Command registration failed: %v"
-)
-
-// @cat
-const (
-	// System logs
+	// --- Cat System ---
 	MsgCatFailedToFetchFact         = "Failed to fetch cat fact: %v"
 	MsgCatFactAPIStatusError        = "Cat fact API returned status %d"
 	MsgCatFailedToDecodeFact        = "Failed to decode cat fact: %v"
@@ -375,8 +415,19 @@ const (
 	MsgCatImageAPIEmptyArray        = "Cat image API returned empty array"
 	MsgCatCannotSendErrorResponse   = "Cannot send error response: nil session or interaction"
 	MsgCatFailedToSendErrorResponse = "Failed to send error response: %v"
-
-	// User-facing messages
+	MsgCatFactAPIUnreachable        = "**API Unreachable**: The cat fact service is currently offline or timing out.\n> _%v_"
+	MsgCatImageAPIUnreachable       = "**API Unreachable**: The cat image service is currently offline or timing out.\n> _%v_"
+	MsgCatSystemStatus              = "**Minder Cat System Status**\n\n" +
+		"**External APIs:**\n" +
+		"> • Cat Facts: `https://catfact.ninja/fact`\n" +
+		"> • Cat Images: `https://api.thecatapi.com/v1`\n" +
+		"> • ASCII Engine: `Minder Internal ANSI v1`\n\n" +
+		"**Usage Tip:** Use `/cat say` with `catcolor` and `expression` for custom ASCII art!"
+	MsgCatAPIStatusErrorDisp      = "**Service Error**: The API returned an unexpected status code: **%d %s**"
+	MsgCatDataError               = "**Data Error**: Failed to read the response body from the API."
+	MsgCatFormatError             = "**Format Error**: The API returned data in an invalid format."
+	MsgCatFormatErrorExt          = "**Format Error**: The API returned data in an invalid format.\n> _%v_"
+	MsgCatImageEmptyResult        = "**Empty Result**: The API returned an empty list of images."
 	ErrCatFailedToFetchFact       = "Failed to fetch cat fact"
 	ErrCatFactServiceUnavailable  = "Cat fact service is unavailable"
 	ErrCatFailedToDecodeFact      = "Failed to decode cat fact"
@@ -384,11 +435,8 @@ const (
 	ErrCatImageServiceUnavailable = "Cat image service is unavailable"
 	ErrCatFailedToDecodeImage     = "Failed to decode cat image"
 	ErrCatNoImagesAvailable       = "No cat images available"
-)
 
-// @reminder
-const (
-	// System logs
+	// --- Reminder System ---
 	MsgReminderFailedToQueryDue      = "Failed to query due reminders: %v"
 	MsgReminderFailedToCreateDM      = "Failed to create DM channel for user %s: %v"
 	MsgReminderFailedToSend          = "Failed to send reminder %d: %v"
@@ -401,35 +449,38 @@ const (
 	MsgReminderAutocompleteFailed    = "Failed to query reminders for autocomplete: %v"
 	MsgReminderRespondError          = "Failed to respond to interaction: %v"
 	MsgReminderNaturalTimeInitFail   = "Failed to initialize naturaltime parser: %v"
+	ErrReminderParseFailed           = "Failed to parse the date/time. Try formats like 'tomorrow', 'in 2 hours', 'next friday at 3pm'."
+	ErrReminderPastTime              = "The reminder time must be in the future!"
+	ErrReminderSaveFailed            = "Failed to save reminder. Please try again."
+	ErrReminderFetchFailed           = "Failed to retrieve your reminders."
+	ErrReminderDismissFailed         = "Failed to dismiss reminder."
+	ErrReminderDismissAllFail        = "Failed to dismiss all reminders."
+	MsgReminderSetSuccess            = "Reminder set for %s\n\n %s"
+	MsgReminderDismissedBatch        = "Dismissed **%d** reminder(s)!"
+	MsgReminderNoActive              = "You have no active reminders. Set one with `/reminder set`!"
+	MsgReminderDismissed             = "Reminder dismissed!"
+	MsgReminderListHeader            = "**Your Reminders** (%d active)\n\n"
+	MsgReminderListItem              = "%d. **%s** - %s\n"
+	MsgReminderChoiceAll             = "Dismiss All (%d reminders)"
+	MsgReminderStatsHeader           = "**Your Active Reminders (%d)**\n\n"
+	MsgReminderStatsMore             = "> ...and %d more."
+	MsgReminderStatsDue              = "> Due %s (`%s`)\n"
+	MsgReminderStatsDM               = "> Delivery: Direct Message\n"
+	MsgReminderRelLessMinute         = "in less than a minute"
+	MsgReminderRelMinute             = "in 1 minute"
+	MsgReminderRelMinutes            = "in %d minutes"
+	MsgReminderRelHour               = "in 1 hour"
+	MsgReminderRelHours              = "in %d hours"
+	MsgReminderRelDay                = "in 1 day"
+	MsgReminderRelDays               = "in %d days"
+	MsgReminderRelWeek               = "in 1 week"
+	MsgReminderRelWeeks              = "in %d weeks"
+	MsgReminderRelMonth              = "in 1 month"
+	MsgReminderRelMonths             = "in %d months"
+	MsgReminderRelYear               = "in 1 year"
+	MsgReminderRelYears              = "in %d years"
 
-	// User-facing messages
-	ErrReminderParseFailed    = "Failed to parse the date/time. Try formats like 'tomorrow', 'in 2 hours', 'next friday at 3pm'."
-	ErrReminderPastTime       = "The reminder time must be in the future!"
-	ErrReminderSaveFailed     = "Failed to save reminder. Please try again."
-	ErrReminderFetchFailed    = "Failed to fetch reminders."
-	ErrReminderDismissFailed  = "Failed to dismiss reminder."
-	ErrReminderDismissAllFail = "Failed to dismiss all reminders."
-	MsgReminderNoActive       = "You have no active reminders."
-	MsgReminderDismissed      = "Reminder dismissed!"
-)
-
-// @rolecolor
-const (
-	MsgRoleColorFailedToFetchConfigs = "Failed to fetch configs: %v"
-	MsgRoleColorNextUpdate           = "Guild %s next update in %d minutes"
-	MsgRoleColorUpdateFail           = "Failed to update role %s in guild %s: %v"
-	MsgRoleColorUpdated              = "Updated role %s in guild %s to %s"
-)
-
-// @status
-const (
-	MsgStatusUpdateFail        = "Update failed: %v"
-	MsgStatusRotated           = "Status rotated to: \"%s\" (Next rotate in %v)"
-	MsgStatusRotatedNoInterval = "Status rotated to: \"%s\""
-)
-
-// @loop
-const (
+	// --- Loop System ---
 	MsgLoopFailedToLoadConfigs   = "Failed to load configs: %v"
 	MsgLoopLoadedChannels        = "Loaded configuration for %d categories."
 	MsgLoopFailedToResume        = "Failed to resume %s: %v"
@@ -448,70 +499,104 @@ const (
 	MsgLoopRenameFail            = "Failed to rename channel: %v"
 	MsgLoopStopped               = "Stopped loop for: %s"
 	MsgLoopConfigured            = "Configured channel: %s"
+	MsgLoopEraseNoConfigs        = "No configurations were found to erase."
+	MsgLoopErasedBatch           = "Erased **%d** configuration(s)."
+	MsgLoopErrInvalidSelection   = "Invalid selection."
+	MsgLoopErrConfigNotFound     = "Configuration not found."
+	MsgLoopDeleteFail            = "Failed to delete configuration for **%s**: %v"
+	MsgLoopDeleted               = "Deleted configuration for **%s**."
+	MsgLoopErrInvalidChannel     = "Invalid channel selection."
+	MsgLoopErrChannelFetchFail   = "Failed to fetch channel."
+	MsgLoopErrOnlyCategories     = "Only **categories** are supported. Please select a category channel."
+	MsgLoopSaveFail              = "Failed to save configuration: %v"
+	MsgLoopConfiguredDisp        = "**Category Configured**\n> **%s**\n> Duration: ∞ (Random)\n> Run `/loop start` to begin."
+	MsgLoopErrInvalidDuration    = "Invalid duration: %v"
+	MsgLoopErrNoChannels         = "No channels configured!"
+	MsgLoopErrNoneStarted        = "No loops were started."
+	MsgLoopStartedBatch          = "Started **%d** loop(s) for: **%s**"
+	MsgLoopStarted               = "Started loop for: **%s**"
+	MsgLoopStartFail             = "Failed to start **%s**: %v"
+	MsgLoopNoRunning             = "No loops are currently running."
+	MsgLoopStoppedBatch          = "Stopped **%d** loop(s)."
+	MsgLoopStoppedDisp           = "Stopped the selected loop."
+	MsgLoopErrStopFail           = "Could not find or stop the loop."
+	MsgLoopErrGuildOnly          = "This command can only be used in a server."
+	MsgLoopErrRetrieveFail       = "Failed to retrieve loop configurations."
+	MsgLoopErrNoGuildConfigs     = "No loops are currently configured for this server."
+	MsgLoopStatsHeader           = "**Current Loop Configurations**\n\n"
+	MsgLoopStatsInterval         = "> • Interval: `%s`\n"
+	MsgLoopStatsStatus           = "> • Status: %s\n"
+	MsgLoopStatsThreads          = "> • Threads: `Enabled` (%d per channel)\n"
+	MsgLoopStatusStopped         = "[.]"
+	MsgLoopStatusRunning         = "[!]"
+	MsgLoopStatusRound           = " (Round %d)"
+	MsgLoopStatusRoundBatch      = " (Round %d/%d)"
+	MsgLoopStatusNextRun         = " (Next: %s)"
+	MsgLoopStatusEnds            = " (Ends: %s)"
+	MsgLoopStatusFinishing       = " (Finishing...)"
+	MsgLoopChoiceStartAll        = "Start All Configured Loops"
+	MsgLoopChoiceStart           = "Start Loop: %s %s%s (Duration: %s)"
+	MsgLoopChoiceCategory        = "%s"
+	MsgLoopChoiceEraseAll        = "Erase All Configured Loops"
+	MsgLoopChoiceErase           = "Erase Loop: %s %s%s (Duration: %s)"
+	MsgLoopChoiceStopAll         = "Stop All Running Loops"
+	MsgLoopChoiceStop            = "Stop Loop: %s %s%s (Duration: %s)"
+	MsgLoopSearchStartAll        = "start all configured loops"
+	MsgLoopSearchEraseAll        = "erase all configured loops"
+	MsgLoopSearchStopAll         = "stop all running loops"
+
+	// --- Role Color System ---
+	MsgRoleColorFailedToFetchConfigs = "Failed to fetch configs: %v"
+	MsgRoleColorNextUpdate           = "Guild %s next update in %d minutes"
+	MsgRoleColorUpdateFail           = "Failed to update role %s in guild %s: %v"
+	MsgRoleColorUpdated              = "Updated role %s in guild %s to %s"
+	MsgRoleColorErrGuildOnly         = "This command can only be used in a server."
+	MsgRoleColorErrSetFail           = "Failed to set role color configuration."
+	MsgRoleColorErrResetFail         = "Failed to reset role color configuration."
+	MsgRoleColorErrNoRole            = "No role is configured for color rotation."
+	MsgRoleColorErrRefreshFail       = "Failed to refresh role color."
+	MsgRoleColorErrNoRoleStats       = "No random color role is currently configured for this server. Use `/rolecolor set` to start!"
+	MsgRoleColorSetSuccess           = "Role <@&%s> will now have random colors!"
+	MsgRoleColorResetSuccess         = "Role color rotation has been disabled."
+	MsgRoleColorRefreshSuccess       = "Role color has been refreshed!"
+	MsgRoleColorStatsHeader          = "**Random Role Color Status**"
+	MsgRoleColorStatsContent         = "**Current Role:** <@&%s>\n" +
+		"**Status:** `Active`\n\n" +
+		"The bot will periodically change the color of this role to a random vibrant hue."
+
+	// --- Session System ---
+	MsgSessionRebootCommanded   = "Reboot commanded by user %s (%s)"
+	MsgSessionShutdownCommanded = "Shutdown commanded by user %s (%s)"
+	MsgSessionLogReadFail       = "Failed to read log file: %v"
+	MsgSessionRebooting         = "**Rebooting...**"
+	MsgSessionShuttingDown      = "**Shutting down...**"
+	MsgSessionStatsLoading      = "Loading stats..."
+	MsgSessionStatusUpdated     = "Status visibility updated!"
+	MsgSessionStatusEnabled     = "Status rotation enabled!"
+	MsgSessionStatusDisabled    = "Status rotation disabled!"
+	MsgSessionConsoleDisabled   = "Logging to file is disabled."
+	MsgSessionConsoleEmpty      = "No logs available."
+	MsgSessionStatsSendFail     = "Failed to send initial stats: %v"
+	MsgSessionConsoleBtnOldest  = "[Oldest]"
+	MsgSessionConsoleBtnOlder   = "[Older]"
+	MsgSessionConsoleBtnRefresh = "[Refresh]"
+	MsgSessionConsoleBtnNewer   = "[Newer]"
+	MsgSessionConsoleBtnLatest  = "[Latest]"
+
+	MsgSessionRebootBuilding     = "**Building...**"
+	MsgSessionRebootBuildFail    = "❌ **Build Failed**\n```\n%s\n```"
+	MsgSessionRebootBuildSuccess = "✅ **Build Successful**"
+
+	// --- Status & Activity ---
+	MsgStatusUpdateFail        = "Update failed: %v"
+	MsgStatusRotated           = "Status rotated to: \"%s\" (Next rotate in %v)"
+	MsgStatusRotatedNoInterval = "Status rotated to: \"%s\""
+
+	// --- Debug & Miscellaneous ---
+	MsgDebugRoleColorUpdateFail  = "Failed to update guild config: %v"
+	MsgDebugRoleColorResetFail   = "Failed to reset guild config: %v"
+	MsgDebugRoleColorRefreshFail = "Failed to refresh role color: %v"
+	MsgDebugStatusCmdFail        = "Failed to respond to status command: %v"
+	MsgDebugTestErrorSendFail    = "Failed to send error preview: %v"
+	MsgUndertextRespondError     = "Failed to respond to interaction: %v"
 )
-
-// @debug
-const (
-	MsgDebugEchoFail            = "Failed to respond to echo: %v"
-	MsgDebugRoleColorUpdateFail = "Failed to update guild config: %v"
-	MsgDebugRoleColorResetFail  = "Failed to reset guild config: %v"
-	MsgDebugStatusCmdFail       = "Failed to respond to status command: %v"
-	MsgDebugTestErrorSendFail   = "Failed to send error preview: %v"
-)
-
-// @undertext
-const (
-	// System logs
-	MsgUndertextRespondError = "Failed to respond to interaction: %v"
-
-	// User-facing messages
-)
-
-// GetUserErrors dynamically parses the source file to discover all 'Err' and 'Msg' constants.
-func GetUserErrors() map[string]string {
-	errorMapOnce.Do(func() {
-		errorMapCache = make(map[string]string)
-
-		// Get the current file path
-		_, filename, _, ok := runtime.Caller(0)
-		if !ok {
-			return
-		}
-
-		fset := token.NewFileSet()
-		// Parse the current file to discover constants
-		node, err := parser.ParseFile(fset, filename, nil, 0)
-		if err != nil {
-			return
-		}
-
-		ast.Inspect(node, func(n ast.Node) bool {
-			genDecl, isGenDecl := n.(*ast.GenDecl)
-			if isGenDecl && genDecl.Tok == token.CONST {
-				for _, spec := range genDecl.Specs {
-					valueSpec, isValueSpec := spec.(*ast.ValueSpec)
-					if isValueSpec {
-						for i, name := range valueSpec.Names {
-							constName := name.Name
-							// Only include Err... or Msg... constants (heuristics for user-facing)
-							if strings.HasPrefix(constName, "Err") || strings.HasPrefix(constName, "Msg") {
-								if len(valueSpec.Values) > i {
-									if basicLit, isBasicLit := valueSpec.Values[i].(*ast.BasicLit); isBasicLit && basicLit.Kind == token.STRING {
-										constValue := strings.Trim(basicLit.Value, `"`)
-										// Filter out constants with formatting placeholders (system logs)
-										if !strings.Contains(constValue, "%") {
-											errorMapCache[constName] = constValue
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			return true
-		})
-	})
-
-	return errorMapCache
-}

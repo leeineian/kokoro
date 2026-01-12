@@ -16,7 +16,7 @@ import (
 
 func init() {
 	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
-		sys.RegisterDaemon(sys.LogStatusRotator, func(ctx context.Context) { StartStatusRotator(ctx, client) })
+		sys.RegisterDaemon(sys.LogStatusRotator, func(ctx context.Context) (bool, func()) { return StartStatusRotator(ctx, client) })
 	})
 }
 
@@ -31,7 +31,12 @@ var (
 	configKeyStatus = "status_visible"
 )
 
-func StartStatusRotator(ctx context.Context, client *bot.Client) {
+func StartStatusRotator(ctx context.Context, client *bot.Client) (bool, func()) {
+	visibleStr, _ := sys.GetBotConfig(ctx, configKeyStatus)
+	if visibleStr == "false" {
+		return false, nil
+	}
+
 	statusList = []func(context.Context, *bot.Client) string{
 		GetRemindersStatus,
 		GetColorStatus,
@@ -40,11 +45,9 @@ func StartStatusRotator(ctx context.Context, client *bot.Client) {
 		GetTimeStatus,
 	}
 
-	// Perform initial update synchronously
-	next := GetRotationInterval()
-	updateStatus(ctx, client, next)
-
-	go func() {
+	return true, func() {
+		next := GetRotationInterval()
+		updateStatus(ctx, client, next)
 		for {
 			select {
 			case <-time.After(next):
@@ -54,7 +57,7 @@ func StartStatusRotator(ctx context.Context, client *bot.Client) {
 				return
 			}
 		}
-	}()
+	}
 }
 
 func updateStatus(ctx context.Context, client *bot.Client, nextInterval time.Duration) {

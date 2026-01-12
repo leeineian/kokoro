@@ -178,12 +178,9 @@ func run(cfg *sys.Config, silent bool, skipReg bool) error {
 
 	// 5. Command Registration
 	if !skipReg {
-		// Run asynchronously to allow instant startup
-		go func() {
-			if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
-				sys.LogError(sys.MsgBotRegisterFail, err)
-			}
-		}()
+		if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
+			sys.LogError(sys.MsgBotRegisterFail, err)
+		}
 	} else {
 		sys.LogInfo("Skipping command registration as requested.")
 	}

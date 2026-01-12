@@ -15,18 +15,23 @@ var reminderSchedulerRunning = false
 
 func init() {
 	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
-		sys.RegisterDaemon(sys.LogReminder, func(ctx context.Context) { StartReminderScheduler(ctx, client) })
+		sys.RegisterDaemon(sys.LogReminder, func(ctx context.Context) (bool, func()) { return StartReminderScheduler(ctx, client) })
 	})
 }
 
 // StartReminderScheduler starts the reminder scheduler daemon
-func StartReminderScheduler(ctx context.Context, client *bot.Client) {
+func StartReminderScheduler(ctx context.Context, client *bot.Client) (bool, func()) {
 	if reminderSchedulerRunning {
-		return
+		return false, nil
 	}
 	reminderSchedulerRunning = true
 
-	go func() {
+	count, _ := sys.GetRemindersCount(ctx)
+	if count == 0 {
+		return false, nil
+	}
+
+	return true, func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
@@ -38,7 +43,7 @@ func StartReminderScheduler(ctx context.Context, client *bot.Client) {
 				return
 			}
 		}
-	}()
+	}
 }
 
 func checkAndSendReminders(parentCtx context.Context, client *bot.Client) {

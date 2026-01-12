@@ -76,7 +76,7 @@ func IntervalMsToDuration(ms int) time.Duration { return time.Duration(ms) * tim
 
 func init() {
 	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
-		sys.RegisterDaemon(sys.LogLoopManager, func(ctx context.Context) { InitLoopManager(ctx, client) })
+		sys.RegisterDaemon(sys.LogLoopManager, func(ctx context.Context) (bool, func()) { return InitLoopManager(ctx, client) })
 	})
 }
 
@@ -118,7 +118,7 @@ var (
 
 const WebhookCacheTTL = 5 * time.Minute
 
-func InitLoopManager(ctx context.Context, client *bot.Client) {
+func InitLoopManager(ctx context.Context, client *bot.Client) (bool, func()) {
 	// Register rate limit failsafe
 	sys.OnRateLimitExceeded(func() {
 		StopAllLoops(ctx, client)
@@ -127,7 +127,11 @@ func InitLoopManager(ctx context.Context, client *bot.Client) {
 	configs, err := sys.GetAllLoopConfigs(ctx)
 	if err != nil {
 		sys.LogLoopManager(sys.MsgLoopFailedToLoadConfigs, err)
-		return
+		return false, nil
+	}
+
+	if len(configs) == 0 {
+		return false, nil
 	}
 
 	var toResume []*ChannelData
@@ -142,22 +146,26 @@ func InitLoopManager(ctx context.Context, client *bot.Client) {
 		}
 	}
 
-	sys.LogLoopManager(sys.MsgLoopLoadedChannels, len(configs))
+	if len(configs) > 0 {
+		sys.LogLoopManager(sys.MsgLoopLoadedChannels, len(configs))
+	}
 
-	if len(toResume) > 0 {
-		sys.LogLoopManager("Resuming %d active loops...", len(toResume))
-		for _, data := range toResume {
-			// Check if we need to wait for cache before going async to keep logs ordered
-			if _, found := client.Caches.Channel(data.Config.ChannelID); !found {
-				sys.LogLoopManager("Waiting for category %s to appear in cache...", data.Config.ChannelID)
-			}
-			go func(d *ChannelData) {
-				if err := loadWebhooksForChannelWithCache(ctx, client, d); err != nil {
-					sys.LogLoopManager("❌ Failed to resume loop for %s: %v", d.Config.ChannelName, err)
-					return
+	return true, func() {
+		if len(toResume) > 0 {
+			sys.LogLoopManager("Resuming %d active loops...", len(toResume))
+			for _, data := range toResume {
+				// Check if we need to wait for cache before going async to keep logs ordered
+				if _, found := client.Caches.Channel(data.Config.ChannelID); !found {
+					sys.LogLoopManager("Waiting for category %s to appear in cache...", data.Config.ChannelID)
 				}
-				startLoopInternal(ctx, d.Config.ChannelID, d, client)
-			}(data)
+				go func(d *ChannelData) {
+					if err := loadWebhooksForChannelWithCache(ctx, client, d); err != nil {
+						sys.LogLoopManager("❌ Failed to resume loop for %s: %v", d.Config.ChannelName, err)
+						return
+					}
+					startLoopInternal(ctx, d.Config.ChannelID, d, client)
+				}(data)
+			}
 		}
 	}
 }

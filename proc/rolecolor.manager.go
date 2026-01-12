@@ -22,7 +22,7 @@ const (
 
 func init() {
 	sys.OnClientReady(func(ctx context.Context, client *bot.Client) {
-		sys.RegisterDaemon(sys.LogRoleColorRotator, func(ctx context.Context) { StartRoleColorRotator(ctx, client) })
+		sys.RegisterDaemon(sys.LogRoleColorRotator, func(ctx context.Context) (bool, func()) { return StartRoleColorRotator(ctx, client) })
 	})
 }
 
@@ -43,23 +43,29 @@ var (
 )
 
 // StartRoleColorRotator initializes the role color rotator daemon
-func StartRoleColorRotator(ctx context.Context, client *bot.Client) {
+func StartRoleColorRotator(ctx context.Context, client *bot.Client) (bool, func()) {
 	// Load all configured guilds
 	configs, err := sys.GetAllGuildRandomColorConfigs(ctx)
 	if err != nil {
 		sys.LogRoleColorRotator(sys.MsgRoleColorFailedToFetchConfigs, err)
-		return
+		return false, nil
 	}
 
-	for gID, rID := range configs {
-		state := &roleState{
-			guildID: gID,
-			roleID:  rID,
-		}
-		roleStates.Store(gID, state)
+	if len(configs) == 0 {
+		return false, nil
+	}
 
-		// Start rotation for this guild
-		ScheduleNextUpdate(ctx, client, gID, rID)
+	return true, func() {
+		for gID, rID := range configs {
+			state := &roleState{
+				guildID: gID,
+				roleID:  rID,
+			}
+			roleStates.Store(gID, state)
+
+			// Start rotation for this guild
+			ScheduleNextUpdate(ctx, client, gID, rID)
+		}
 	}
 }
 

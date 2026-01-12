@@ -57,7 +57,7 @@ func handleReminderSet(event *events.ApplicationCommandInteractionCreate, data d
 
 	// Create response
 	relativeTime := formatReminderRelativeTime(time.Now().UTC(), parsedTime)
-	response := fmt.Sprintf("✅ Reminder set for %s\n\n📝 %s", relativeTime, message)
+	response := fmt.Sprintf(sys.MsgReminderSetSuccess, relativeTime, message)
 
 	reminderRespondImmediate(event, response)
 }

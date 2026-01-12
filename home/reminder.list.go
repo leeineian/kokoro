@@ -23,7 +23,7 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 				reminderRespondImmediate(event, sys.ErrReminderDismissAllFail)
 				return
 			}
-			reminderRespondImmediate(event, fmt.Sprintf("Dismissed %d reminders!", count))
+			reminderRespondImmediate(event, fmt.Sprintf(sys.MsgReminderDismissedBatch, count))
 			return
 		}
 
@@ -54,10 +54,10 @@ func handleReminderList(event *events.ApplicationCommandInteractionCreate, data 
 
 	// Build reminder list
 	var content string
-	content = fmt.Sprintf("📋 **Your Reminders** (%d active)\n\n", len(reminders))
+	content = fmt.Sprintf(sys.MsgReminderListHeader, len(reminders))
 	for i, r := range reminders {
 		relTime := formatReminderRelativeTime(time.Now().UTC(), r.RemindAt)
-		content += fmt.Sprintf("%d. **%s** - %s\n", i+1, reminderTruncate(r.Message, 50), relTime)
+		content += fmt.Sprintf(sys.MsgReminderListItem, i+1, reminderTruncate(r.Message, 50), relTime)
 	}
 
 	reminderRespondImmediate(event, content)
@@ -76,7 +76,7 @@ func handleReminderAutocomplete(event *events.AutocompleteInteractionCreate) {
 	// Add "dismiss all" option if there are reminders
 	if len(reminders) > 0 {
 		choices = append(choices, discord.AutocompleteChoiceString{
-			Name:  fmt.Sprintf("Dismiss All (%d reminders)", len(reminders)),
+			Name:  fmt.Sprintf(sys.MsgReminderChoiceAll, len(reminders)),
 			Value: "all",
 		})
 	}

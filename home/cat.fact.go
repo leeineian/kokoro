@@ -12,11 +12,6 @@ import (
 
 const apiURL = "https://catfact.ninja/fact"
 
-type CatFact struct {
-	Fact   string `json:"fact"`
-	Length int    `json:"length"`
-}
-
 func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 	resp, err := sys.HttpClient.Get(apiURL)
 	if err != nil {
@@ -24,7 +19,7 @@ func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ **API Unreachable**: The cat fact service is currently offline or timing out.\n> _" + err.Error() + "_"),
+					discord.NewTextDisplay(fmt.Sprintf(sys.MsgCatFactAPIUnreachable, err)),
 				),
 			).
 			SetEphemeral(true).
@@ -38,7 +33,7 @@ func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay(fmt.Sprintf("❌ **Service Error**: The API returned an unexpected status code: **%d %s**", resp.StatusCode, resp.Status)),
+					discord.NewTextDisplay(fmt.Sprintf(sys.MsgCatAPIStatusErrorDisp, resp.StatusCode, resp.Status)),
 				),
 			).
 			SetEphemeral(true).
@@ -52,7 +47,7 @@ func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ **Data Error**: Failed to read the response body from the API."),
+					discord.NewTextDisplay(sys.MsgCatDataError),
 				),
 			).
 			SetEphemeral(true).
@@ -66,7 +61,7 @@ func handleCatFact(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ **Format Error**: The API returned data in an invalid format.\n> _" + err.Error() + "_"),
+					discord.NewTextDisplay(fmt.Sprintf(sys.MsgCatFormatErrorExt, err)),
 				),
 			).
 			SetEphemeral(true).

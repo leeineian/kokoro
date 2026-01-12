@@ -4,11 +4,111 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/disgoorg/snowflake/v2"
+	"github.com/joho/godotenv"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// --- Phase 1: Configuration & Environment ---
+
+type Config struct {
+	Token        string
+	GuildID      string
+	DatabasePath string
+	OwnerIDs     []string
+	StreamingURL string
+	Silent       bool
+}
+
+var GlobalConfig *Config
+
+// LoadConfig initializes the configuration from environment variables.
+func LoadConfig() (*Config, error) {
+	_ = godotenv.Load()
+
+	token := os.Getenv("DISCORD_TOKEN")
+	dbPath := os.Getenv("DATABASE_PATH")
+	if dbPath == "" {
+		folder := "."
+		if info, err := os.Stat("data"); err == nil && info.IsDir() {
+			folder = "./data"
+		}
+		dbPath = filepath.Join(folder, GetProjectName()+".db")
+	}
+
+	silent, _ := strconv.ParseBool(os.Getenv("SILENT"))
+	streamingURL := os.Getenv("STREAMING_URL")
+	if streamingURL == "" {
+		streamingURL = "https://www.twitch.tv/videos/1110069047"
+	}
+
+	ownerIDsStr := os.Getenv("OWNER_IDS")
+	var ownerIDs []string
+	if ownerIDsStr != "" {
+		ownerIDs = strings.Split(ownerIDsStr, ",")
+		for i := range ownerIDs {
+			ownerIDs[i] = strings.TrimSpace(ownerIDs[i])
+		}
+	}
+
+	cfg := &Config{
+		Token:        token,
+		GuildID:      os.Getenv("GUILD_ID"),
+		DatabasePath: fmt.Sprintf("%s?_journal_mode=WAL&_timeout=5000", dbPath),
+		OwnerIDs:     ownerIDs,
+		StreamingURL: streamingURL,
+		Silent:       silent,
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	if cfg.Silent {
+		SetSilentMode(true)
+	}
+
+	GlobalConfig = cfg
+	return cfg, nil
+}
+
+func (c *Config) Validate() error {
+	if c.Token == "" {
+		return fmt.Errorf(MsgConfigMissingToken)
+	}
+	if c.GuildID != "" && (len(c.GuildID) < 17 || len(c.GuildID) > 20) {
+		return fmt.Errorf("invalid GUILD_ID: must be a valid Snowflake")
+	}
+	return nil
+}
+
+func GetProjectName() string {
+	exePath, err := os.Executable()
+	projectName := "bot"
+	if err == nil {
+		projectName = filepath.Base(exePath)
+		projectName = strings.TrimSuffix(projectName, ".exe")
+
+		if projectName == "main" || strings.HasPrefix(projectName, "go_build_") {
+			if modData, err := os.ReadFile("go.mod"); err == nil {
+				lines := strings.Split(string(modData), "\n")
+				if len(lines) > 0 && strings.HasPrefix(lines[0], "module ") {
+					parts := strings.Split(lines[0], "/")
+					projectName = strings.TrimSpace(parts[len(parts)-1])
+				}
+			}
+		}
+	}
+	return projectName
+}
+
+// --- Phase 2: Database Connection & Lifecycle ---
 
 var DB *sql.DB
 
@@ -19,17 +119,15 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		return err
 	}
 
-	// Set connection pool settings for better concurrency
-	// WAL mode enables one writer and multiple readers.
 	DB.SetMaxOpenConns(5)
 
-	// Apply optimizations
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
 		"PRAGMA busy_timeout=5000;",
-		"PRAGMA cache_size=-2000;", // ~2MB cache
+		"PRAGMA cache_size=-2000;",
 	}
+
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -39,13 +137,10 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		}
 	}
 
-	// Create tables in a single transaction for speed and atomicity
 	tx, err := DB.BeginTx(initCtx, nil)
 	if err != nil {
 		return err
 	}
-
-	// Ensure transaction rollback on error
 	defer tx.Rollback()
 
 	tableQueries := []string{
@@ -96,15 +191,39 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		return err
 	}
 
-	// Migrations: Add new columns if they don't exist
-	// We ignore errors here because the columns might already exist from previous runs
 	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN thread_count INTEGER DEFAULT 0")
 
 	LogDatabase(MsgDatabaseInitSuccess)
 	return nil
 }
 
-// --- Reminder Logic ---
+func CloseDatabase() {
+	if DB != nil {
+		DB.Close()
+	}
+}
+
+// --- Phase 3: Infrastructure & Bot Persistence ---
+
+// BotConfig helpers are used by the loader for mode tracking and state.
+func GetBotConfig(ctx context.Context, key string) (string, error) {
+	var value string
+	err := DB.QueryRowContext(ctx, "SELECT value FROM bot_config WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+func SetBotConfig(ctx context.Context, key, value string) error {
+	_, err := DB.ExecContext(ctx, `
+		INSERT INTO bot_config (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+	`, key, value)
+	return err
+}
+
+// --- Phase 4: Application Logic (Reminders) ---
 
 type Reminder struct {
 	ID        int64
@@ -113,7 +232,7 @@ type Reminder struct {
 	GuildID   snowflake.ID
 	Message   string
 	RemindAt  time.Time
-	SendTo    string // "dm" or "channel"
+	SendTo    string
 	CreatedAt time.Time
 }
 
@@ -152,8 +271,6 @@ func GetRemindersForUser(ctx context.Context, userID snowflake.ID) ([]*Reminder,
 }
 
 func ClaimDueReminders(ctx context.Context) ([]*Reminder, error) {
-	// Using DELETE ... RETURNING is atomic in SQLite 3.35.0+
-	// This ensures each reminder is "claimed" by exactly one caller.
 	rows, err := DB.QueryContext(ctx, `
 		DELETE FROM reminders 
 		WHERE remind_at <= ? 
@@ -234,67 +351,27 @@ func GetRemindersCountForUser(ctx context.Context, userID snowflake.ID) (int, er
 	return count, err
 }
 
-// --- Guild Config Logic ---
-
-type GuildConfig struct {
-	GuildID           string
-	RandomColorRoleID string
-	UpdatedAt         time.Time
+func GetRemindersCount(ctx context.Context) (int, error) {
+	var count int
+	err := DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reminders").Scan(&count)
+	return count, err
 }
 
-func SetGuildRandomColorRole(ctx context.Context, guildID, roleID snowflake.ID) error {
-	_, err := DB.ExecContext(ctx, `
-		INSERT INTO guild_configs (guild_id, random_color_role_id) VALUES (?, ?)
-		ON CONFLICT(guild_id) DO UPDATE SET random_color_role_id = excluded.random_color_role_id, updated_at = CURRENT_TIMESTAMP
-	`, guildID.String(), roleID.String())
-	return err
-}
-
-func GetGuildRandomColorRole(ctx context.Context, guildID snowflake.ID) (snowflake.ID, error) {
-	var roleIDStr sql.NullString
-	err := DB.QueryRowContext(ctx, "SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", guildID.String()).Scan(&roleIDStr)
-	if err == sql.ErrNoRows || !roleIDStr.Valid || roleIDStr.String == "" {
-		return 0, nil
-	}
-	roleID, _ := snowflake.Parse(roleIDStr.String)
-	return roleID, err
-}
-
-func GetAllGuildRandomColorConfigs(ctx context.Context) (map[snowflake.ID]snowflake.ID, error) {
-	rows, err := DB.QueryContext(ctx, "SELECT guild_id, random_color_role_id FROM guild_configs WHERE random_color_role_id IS NOT NULL AND random_color_role_id != ''")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	configs := make(map[snowflake.ID]snowflake.ID)
-	for rows.Next() {
-		var gStr, rStr string
-		if err := rows.Scan(&gStr, &rStr); err != nil {
-			continue
-		}
-		gID, _ := snowflake.Parse(gStr)
-		rID, _ := snowflake.Parse(rStr)
-		configs[gID] = rID
-	}
-	return configs, nil
-}
-
-// --- Loop Logic ---
+// --- Phase 5: Application Logic (Loop Channels) ---
 
 type LoopConfig struct {
 	ChannelID     snowflake.ID
 	ChannelName   string
-	ChannelType   string // "category" (loop system is category-only)
+	ChannelType   string
 	Rounds        int
-	Interval      int // milliseconds
+	Interval      int
 	Message       string
 	WebhookAuthor string
 	WebhookAvatar string
 	UseThread     bool
 	ThreadMessage string
 	ThreadCount   int
-	Threads       string // JSON
+	Threads       string
 	IsRunning     bool
 }
 
@@ -433,33 +510,48 @@ func UpdateLoopChannelName(ctx context.Context, channelID snowflake.ID, name str
 	return err
 }
 
-// --- General Config & Stats ---
+// --- Phase 6: Application Logic (Guild Configs) ---
 
-func GetRemindersCount(ctx context.Context) (int, error) {
-	var count int
-	err := DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reminders").Scan(&count)
-	return count, err
+type GuildConfig struct {
+	GuildID           string
+	RandomColorRoleID string
+	UpdatedAt         time.Time
 }
 
-func GetBotConfig(ctx context.Context, key string) (string, error) {
-	var value string
-	err := DB.QueryRowContext(ctx, "SELECT value FROM bot_config WHERE key = ?", key).Scan(&value)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return value, err
-}
-
-func SetBotConfig(ctx context.Context, key, value string) error {
+func SetGuildRandomColorRole(ctx context.Context, guildID, roleID snowflake.ID) error {
 	_, err := DB.ExecContext(ctx, `
-		INSERT INTO bot_config (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-	`, key, value)
+		INSERT INTO guild_configs (guild_id, random_color_role_id) VALUES (?, ?)
+		ON CONFLICT(guild_id) DO UPDATE SET random_color_role_id = excluded.random_color_role_id, updated_at = CURRENT_TIMESTAMP
+	`, guildID.String(), roleID.String())
 	return err
 }
 
-func CloseDatabase() {
-	if DB != nil {
-		DB.Close()
+func GetGuildRandomColorRole(ctx context.Context, guildID snowflake.ID) (snowflake.ID, error) {
+	var roleIDStr sql.NullString
+	err := DB.QueryRowContext(ctx, "SELECT random_color_role_id FROM guild_configs WHERE guild_id = ?", guildID.String()).Scan(&roleIDStr)
+	if err == sql.ErrNoRows || !roleIDStr.Valid || roleIDStr.String == "" {
+		return 0, nil
 	}
+	roleID, _ := snowflake.Parse(roleIDStr.String)
+	return roleID, err
+}
+
+func GetAllGuildRandomColorConfigs(ctx context.Context) (map[snowflake.ID]snowflake.ID, error) {
+	rows, err := DB.QueryContext(ctx, "SELECT guild_id, random_color_role_id FROM guild_configs WHERE random_color_role_id IS NOT NULL AND random_color_role_id != ''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	configs := make(map[snowflake.ID]snowflake.ID)
+	for rows.Next() {
+		var gStr, rStr string
+		if err := rows.Scan(&gStr, &rStr); err != nil {
+			continue
+		}
+		gID, _ := snowflake.Parse(gStr)
+		rID, _ := snowflake.Parse(rStr)
+		configs[gID] = rID
+	}
+	return configs, nil
 }

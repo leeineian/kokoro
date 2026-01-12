@@ -39,6 +39,10 @@ func init() {
 				Name:        "refresh",
 				Description: "Force an immediate color change",
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "stats",
+				Description: "View current random color role configuration",
+			},
 		},
 	}, handleRoleColor)
 }
@@ -51,6 +55,8 @@ func handleRoleColor(event *events.ApplicationCommandInteractionCreate) {
 
 	subCmd := *data.SubCommandName
 	switch subCmd {
+	case "stats":
+		handleRoleColorStats(event)
 	case "set":
 		handleRoleColorSet(event, data)
 	case "reset":

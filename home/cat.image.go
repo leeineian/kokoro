@@ -12,13 +12,6 @@ import (
 
 const catImageApiURL = "https://api.thecatapi.com/v1/images/search"
 
-type CatImage struct {
-	ID     string `json:"id"`
-	URL    string `json:"url"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-}
-
 func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
 	resp, err := sys.HttpClient.Get(catImageApiURL)
 	if err != nil {
@@ -26,7 +19,7 @@ func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ **API Unreachable**: The cat image service is currently offline or timing out.\n> _" + err.Error() + "_"),
+					discord.NewTextDisplay(fmt.Sprintf(sys.MsgCatImageAPIUnreachable, err)),
 				),
 			).
 			SetEphemeral(true).
@@ -40,7 +33,7 @@ func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay(fmt.Sprintf("❌ **Service Error**: The API returned an unexpected status code: **%d %s**", resp.StatusCode, resp.Status)),
+					discord.NewTextDisplay(fmt.Sprintf(sys.MsgCatAPIStatusErrorDisp, resp.StatusCode, resp.Status)),
 				),
 			).
 			SetEphemeral(true).
@@ -54,7 +47,7 @@ func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
 			SetIsComponentsV2(true).
 			AddComponents(
 				discord.NewContainer(
-					discord.NewTextDisplay("❌ **Data Error**: Failed to read the response body from the API."),
+					discord.NewTextDisplay(sys.MsgCatDataError),
 				),
 			).
 			SetEphemeral(true).
@@ -64,11 +57,11 @@ func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
 
 	var data []CatImage
 	if err := json.Unmarshal(body, &data); err != nil || len(data) == 0 {
-		errorMsg := "❌ **Format Error**: The API returned data in an invalid format."
+		errorMsg := sys.MsgCatFormatError
 		if len(data) == 0 && err == nil {
-			errorMsg = "❌ **Empty Result**: The API returned an empty list of images."
+			errorMsg = sys.MsgCatImageEmptyResult
 		} else if err != nil {
-			errorMsg += "\n> _" + err.Error() + "_"
+			errorMsg = fmt.Sprintf(sys.MsgCatFormatErrorExt, err)
 		}
 
 		event.CreateMessage(discord.NewMessageCreateBuilder().

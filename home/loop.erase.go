@@ -26,7 +26,7 @@ func handleLoopSelect(event *events.ApplicationCommandInteractionCreate, targetI
 		go func() {
 			configs, _ := sys.GetAllLoopConfigs(sys.AppContext)
 			if len(configs) == 0 {
-				loopRespond(event, "ℹ️ No configurations were found to erase.", true)
+				loopRespond(event, sys.MsgLoopEraseNoConfigs, true)
 				return
 			}
 
@@ -37,21 +37,21 @@ func handleLoopSelect(event *events.ApplicationCommandInteractionCreate, targetI
 				}
 			}
 
-			loopRespond(event, fmt.Sprintf("✅ Erased **%d** configuration(s).", count), true)
+			loopRespond(event, fmt.Sprintf(sys.MsgLoopErasedBatch, count), true)
 		}()
 		return
 	}
 
 	tID, err := snowflake.Parse(targetID)
 	if err != nil {
-		loopRespond(event, "❌ Invalid selection.", true)
+		loopRespond(event, sys.MsgLoopErrInvalidSelection, true)
 		return
 	}
 
 	go func() {
 		cfg, err := sys.GetLoopConfig(sys.AppContext, tID)
 		if err != nil || cfg == nil {
-			loopRespond(event, "❌ Configuration not found.", true)
+			loopRespond(event, sys.MsgLoopErrConfigNotFound, true)
 			return
 		}
 
@@ -63,10 +63,10 @@ func handleLoopSelect(event *events.ApplicationCommandInteractionCreate, targetI
 
 		err = proc.DeleteLoopConfig(sys.AppContext, tID, event.Client())
 		if err != nil {
-			loopRespond(event, fmt.Sprintf("❌ Failed to delete configuration for **%s**: %v", currentName, err), true)
+			loopRespond(event, fmt.Sprintf(sys.MsgLoopDeleteFail, currentName, err), true)
 			return
 		}
 
-		loopRespond(event, fmt.Sprintf("✅ Deleted configuration for **%s**.", currentName), true)
+		loopRespond(event, fmt.Sprintf(sys.MsgLoopDeleted, currentName), true)
 	}()
 }

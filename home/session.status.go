@@ -16,11 +16,11 @@ func handleSessionStatus(event *events.ApplicationCommandInteractionCreate) {
 		sys.SetBotConfig(sys.AppContext, "status_visible", "false")
 	}
 
-	content := "✅ Status visibility updated!"
+	content := sys.MsgSessionStatusUpdated
 	if visible {
-		content = "✅ Status rotation enabled!"
+		content = sys.MsgSessionStatusEnabled
 	} else {
-		content = "✅ Status rotation disabled!"
+		content = sys.MsgSessionStatusDisabled
 	}
 
 	err := event.CreateMessage(discord.NewMessageCreateBuilder().

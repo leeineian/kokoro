@@ -26,8 +26,7 @@ jobs:
       - name: Create Date Tag
         id: tag
         run: |
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          VERSION="v1.0.0-$TIMESTAMP"
+          VERSION="v1.0.0-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::12}"
           
           echo "Creating tag: $VERSION"
           

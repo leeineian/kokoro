@@ -102,6 +102,10 @@ func init() {
 					},
 				},
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "stats",
+				Description: "View all current loop configurations and their status",
+			},
 		},
 	}, handleLoop)
 
@@ -116,6 +120,8 @@ func handleLoop(event *events.ApplicationCommandInteractionCreate) {
 
 	subCmd := *data.SubCommandName
 	switch subCmd {
+	case "stats":
+		handleLoopStats(event)
 	case "erase":
 		handleLoopErase(event)
 	case "set":
@@ -183,23 +189,23 @@ func handleLoopAutocomplete(event *events.AutocompleteInteractionCreate) {
 
 func getLoopStatusDetails(cfg *sys.LoopConfig, state *proc.LoopState) (string, string) {
 	if state == nil {
-		return "⚪", ""
+		return sys.MsgLoopStatusStopped, ""
 	}
-	emoji := "🟢"
+	emoji := sys.MsgLoopStatusRunning
 	details := ""
 	if cfg.Interval > 0 {
-		details += fmt.Sprintf(" (Round %d)", state.CurrentRound)
+		details += fmt.Sprintf(sys.MsgLoopStatusRound, state.CurrentRound)
 	} else {
-		details += fmt.Sprintf(" (Round %d/%d)", state.CurrentRound, state.RoundsTotal)
+		details += fmt.Sprintf(sys.MsgLoopStatusRoundBatch, state.CurrentRound, state.RoundsTotal)
 	}
 
 	if !state.NextRun.IsZero() {
-		details += fmt.Sprintf(" (Next: %s)", state.NextRun.Format("15:04:05"))
+		details += fmt.Sprintf(sys.MsgLoopStatusNextRun, state.NextRun.Format(sys.DefaultTimeFormat))
 	} else if !state.EndTime.IsZero() {
 		if state.EndTime.After(time.Now().UTC()) {
-			details += fmt.Sprintf(" (Ends: %s)", state.EndTime.Format("15:04:05"))
+			details += fmt.Sprintf(sys.MsgLoopStatusEnds, state.EndTime.Format(sys.DefaultTimeFormat))
 		} else {
-			details += " (Finishing...)"
+			details += sys.MsgLoopStatusFinishing
 		}
 	}
 	return emoji, details
@@ -216,9 +222,9 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 
 		// Add "all" option if there are multiple configs and it matches the filter
 		if len(configs) > 1 {
-			if focusedOpt == "" || strings.Contains(strings.ToLower("start all configured loops"), strings.ToLower(focusedOpt)) {
+			if focusedOpt == "" || strings.Contains(sys.MsgLoopSearchStartAll, strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  "▶️ Start All Configured Loops",
+					Name:  sys.MsgLoopChoiceStartAll,
 					Value: "all",
 				})
 			}
@@ -245,7 +251,7 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 
 			if focusedOpt == "" || strings.Contains(strings.ToLower(displayName), strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  fmt.Sprintf("▶️ Start Loop: %s %s%s (Duration: %s)", displayName, emoji, details, intervalStr),
+					Name:  fmt.Sprintf(sys.MsgLoopChoiceStart, displayName, emoji, details, intervalStr),
 					Value: data.ChannelID.String(),
 				})
 			}
@@ -258,7 +264,7 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 			if ch.GuildID() == guildID && ch.Type() == discord.ChannelTypeGuildCategory {
 				if focusedOpt == "" || strings.Contains(strings.ToLower(ch.Name()), strings.ToLower(focusedOpt)) {
 					choices = append(choices, discord.AutocompleteChoiceString{
-						Name:  fmt.Sprintf("📁 %s", ch.Name()),
+						Name:  fmt.Sprintf(sys.MsgLoopChoiceCategory, ch.Name()),
 						Value: ch.ID().String(),
 					})
 				}
@@ -271,9 +277,9 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 
 		// Add "all" option if there are multiple configs and it matches the filter
 		if len(configs) > 1 {
-			if focusedOpt == "" || strings.Contains(strings.ToLower("erase all configured loops"), strings.ToLower(focusedOpt)) {
+			if focusedOpt == "" || strings.Contains(sys.MsgLoopSearchEraseAll, strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  "🗑️ Erase All Configured Loops",
+					Name:  sys.MsgLoopChoiceEraseAll,
 					Value: "all",
 				})
 			}
@@ -301,7 +307,7 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 
 			if focusedOpt == "" || strings.Contains(strings.ToLower(displayName), strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  fmt.Sprintf("🗑️ Erase Loop: %s %s%s (Duration: %s)", displayName, emoji, details, intervalStr),
+					Name:  fmt.Sprintf(sys.MsgLoopChoiceErase, displayName, emoji, details, intervalStr),
 					Value: cfg.ChannelID.String(),
 				})
 			}
@@ -314,9 +320,9 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 
 		// Add "all" option if there are multiple running loops and it matches the filter
 		if len(activeLoops) > 1 {
-			if focusedOpt == "" || strings.Contains(strings.ToLower("stop all running loops"), strings.ToLower(focusedOpt)) {
+			if focusedOpt == "" || strings.Contains(sys.MsgLoopSearchStopAll, strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  "🛑 Stop All Running Loops",
+					Name:  sys.MsgLoopChoiceStopAll,
 					Value: "all",
 				})
 			}
@@ -358,7 +364,7 @@ func handleWebhookLooperAutocomplete(event *events.AutocompleteInteractionCreate
 			// Filter by channel name
 			if focusedOpt == "" || strings.Contains(strings.ToLower(name), strings.ToLower(focusedOpt)) {
 				choices = append(choices, discord.AutocompleteChoiceString{
-					Name:  fmt.Sprintf("🛑 Stop Loop: %s %s%s (Duration: %s)", name, emoji, details, intervalStr),
+					Name:  fmt.Sprintf(sys.MsgLoopChoiceStop, name, emoji, details, intervalStr),
 					Value: channelID.String(),
 				})
 			}

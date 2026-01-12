@@ -39,54 +39,54 @@ func formatReminderRelativeTime(from, to time.Time) string {
 	duration := to.Sub(from)
 
 	if duration < time.Minute {
-		return "in less than a minute"
+		return sys.MsgReminderRelLessMinute
 	}
 
 	if duration < time.Hour {
 		minutes := int(duration.Minutes())
 		if minutes == 1 {
-			return "in 1 minute"
+			return sys.MsgReminderRelMinute
 		}
-		return fmt.Sprintf("in %d minutes", minutes)
+		return fmt.Sprintf(sys.MsgReminderRelMinutes, minutes)
 	}
 
 	if duration < 24*time.Hour {
 		hours := int(duration.Hours())
 		if hours == 1 {
-			return "in 1 hour"
+			return sys.MsgReminderRelHour
 		}
-		return fmt.Sprintf("in %d hours", hours)
+		return fmt.Sprintf(sys.MsgReminderRelHours, hours)
 	}
 
 	days := int(duration.Hours() / 24)
 	if days == 1 {
-		return "in 1 day"
+		return sys.MsgReminderRelDay
 	}
 	if days < 7 {
-		return fmt.Sprintf("in %d days", days)
+		return fmt.Sprintf(sys.MsgReminderRelDays, days)
 	}
 
 	weeks := days / 7
 	if weeks == 1 {
-		return "in 1 week"
+		return sys.MsgReminderRelWeek
 	}
 	if weeks < 4 {
-		return fmt.Sprintf("in %d weeks", weeks)
+		return fmt.Sprintf(sys.MsgReminderRelWeeks, weeks)
 	}
 
 	months := days / 30
 	if months == 1 {
-		return "in 1 month"
+		return sys.MsgReminderRelMonth
 	}
 	if months < 12 {
-		return fmt.Sprintf("in %d months", months)
+		return fmt.Sprintf(sys.MsgReminderRelMonths, months)
 	}
 
 	years := days / 365
 	if years == 1 {
-		return "in 1 year"
+		return sys.MsgReminderRelYear
 	}
-	return fmt.Sprintf("in %d years", years)
+	return fmt.Sprintf(sys.MsgReminderRelYears, years)
 }
 
 func reminderTruncate(s string, maxLen int) string {
@@ -141,6 +141,10 @@ func init() {
 					},
 				},
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "stats",
+				Description: "View a summary of your active reminders",
+			},
 		},
 	}, func(event *events.ApplicationCommandInteractionCreate) {
 		data := event.SlashCommandInteractionData()
@@ -150,6 +154,8 @@ func init() {
 		}
 
 		switch *subCmd {
+		case "stats":
+			handleReminderStats(event)
 		case "set":
 			handleReminderSet(event, data)
 		case "list":

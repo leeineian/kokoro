@@ -26,7 +26,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 	if durationStr != "" {
 		parsed, err := proc.ParseDuration(durationStr)
 		if err != nil {
-			loopRespond(event, fmt.Sprintf("❌ Invalid duration: %v", err), true)
+			loopRespond(event, fmt.Sprintf(sys.MsgLoopErrInvalidDuration, err), true)
 			return
 		}
 		duration = parsed
@@ -41,7 +41,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 			if len(configs) == 0 {
 				_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 					SetIsComponentsV2(true).
-					AddComponents(discord.NewContainer(discord.NewTextDisplay("❌ No channels configured!"))).
+					AddComponents(discord.NewContainer(discord.NewTextDisplay(sys.MsgLoopErrNoChannels))).
 					Build())
 				return
 			}
@@ -66,11 +66,10 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 				}
 			}
 
-			msg := "❌ No loops were started."
+			msg := sys.MsgLoopErrNoneStarted
 			if len(startedNames) > 0 {
-				msg = fmt.Sprintf("Started **%d** loop(s) for: **%s**", len(startedNames), strings.Join(startedNames, "**, **"))
+				msg = fmt.Sprintf(sys.MsgLoopStartedBatch, len(startedNames), strings.Join(startedNames, "**, **"))
 			}
-
 			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 				SetIsComponentsV2(true).
 				AddComponents(discord.NewContainer(discord.NewTextDisplay("> "+msg))).
@@ -79,10 +78,9 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 	} else {
 		tID, err := snowflake.Parse(targetID)
 		if err != nil {
-			loopRespond(event, "❌ Invalid selection.", true)
+			loopRespond(event, sys.MsgLoopErrInvalidSelection, true)
 			return
 		}
-
 		_ = event.DeferCreateMessage(true)
 		go func() {
 			err = proc.StartLoop(sys.AppContext, event.Client(), tID, duration)
@@ -92,11 +90,10 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 				name = ch.Name()
 			}
 
-			msg := fmt.Sprintf("✅ Started loop for: **%s**", name)
+			msg := fmt.Sprintf(sys.MsgLoopStarted, name)
 			if err != nil {
-				msg = fmt.Sprintf("❌ Failed to start **%s**: %v", name, err)
+				msg = fmt.Sprintf(sys.MsgLoopStartFail, name, err)
 			}
-
 			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
 				SetIsComponentsV2(true).
 				AddComponents(discord.NewContainer(discord.NewTextDisplay("> "+msg))).
