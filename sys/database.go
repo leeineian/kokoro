@@ -12,7 +12,7 @@ import (
 
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/joho/godotenv"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // --- Phase 1: Configuration & Environment ---
@@ -60,7 +60,7 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		Token:        token,
 		GuildID:      os.Getenv("GUILD_ID"),
-		DatabasePath: fmt.Sprintf("%s?_journal_mode=WAL&_timeout=5000", dbPath),
+		DatabasePath: dbPath,
 		OwnerIDs:     ownerIDs,
 		StreamingURL: streamingURL,
 		Silent:       silent,
@@ -114,7 +114,7 @@ var DB *sql.DB
 
 func InitDatabase(ctx context.Context, dataSourceName string) error {
 	var err error
-	DB, err = sql.Open("sqlite3", dataSourceName)
+	DB, err = sql.Open("sqlite", dataSourceName)
 	if err != nil {
 		return err
 	}

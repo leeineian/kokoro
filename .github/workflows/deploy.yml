@@ -38,7 +38,8 @@ jobs:
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            chmod +x ~/minder/minder
-            nohup ~/minder/minder -silent -no-log-file > /dev/null 2>&1 &
+            cd ~/minder
+            chmod +x minder
+            nohup ./minder -silent -no-log-file > /dev/null 2>&1 &
             sleep 1
 
