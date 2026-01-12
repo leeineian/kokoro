@@ -55,10 +55,10 @@ flowchart TB
     end
 
     subgraph Daemons["Background Daemons (proc)"]
-        ReminderManager["reminder.manager.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
-        StatusManager["status.manager.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
-        RoleColorManager["rolecolor.manager.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
-        LoopManager["loop.manager.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
+        ReminderManager["reminder.go<br/>━━━━━━━━━<br/>10s Poll Interval<br/>Context-Safe Queries"]
+        StatusManager["status.go<br/>━━━━━━━━━<br/>15-60s Cycle<br/>Live System Metrics"]
+        RoleColorManager["rolecolor.go<br/>━━━━━━━━━<br/>RGB Cycle Logic<br/>Snowflake-Safe Mapping"]
+        LoopManager["loop.go<br/>━━━━━━━━━<br/>Webhook Looper<br/>State-Aware Scheduling"]
     end
 
     subgraph External["External Services"]
@@ -154,10 +154,10 @@ minder/
 │   └── undertext.go              # /undertext
 │
 ├── proc/                         # [Background Daemons]
-│   ├── loop.manager.go           # Webhook loop manager
-│   ├── reminder.manager.go       # Reminder notification daemon
-│   ├── rolecolor.manager.go      # Role color cycle daemon
-│   └── status.manager.go         # Status cycle daemon
+│   ├── loop.go                   # Webhook loop daemon
+│   ├── reminder.go               # Reminder notification daemon
+│   ├── rolecolor.go              # Role color cycle daemon
+│   └── status.go                 # Status cycle daemon
 │
 └── sys/                          # [Core Systems]
     ├── database.go               # Configuration & SQLite layer
