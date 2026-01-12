@@ -3,6 +3,7 @@ name: Build and Deploy
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
@@ -37,6 +38,7 @@ jobs:
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            pkill -f minder || true
             chmod +x ~/minder/minder
             nohup ~/minder/minder -silent -no-log-file > /dev/null 2>&1 &
+            sleep 1
+
