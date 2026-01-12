@@ -143,6 +143,14 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 
 	LogInfo(MsgLoaderSyncCommands, strings.ToUpper(currentMode))
 
+	// --- MANUAL CLEANUP OVERRIDE ---
+	if manualID := os.Getenv("MANUAL_CLEANUP_GUILD"); manualID != "" {
+		if id, err := snowflake.Parse(manualID); err == nil {
+			LogInfo("🧹 [MANUAL CLEANUP] Clearing commands from guild: %s", manualID)
+			_, _ = client.Rest.SetGuildCommands(client.ApplicationID, id, []discord.ApplicationCommandCreate{})
+		}
+	}
+
 	// 1. Handle Transition: Mode changed (e.g. Guild -> Global or Global -> Guild)
 	if lastMode != "" && lastMode != currentMode {
 		LogInfo(MsgLoaderTransition, strings.ToUpper(lastMode), strings.ToUpper(currentMode))
