@@ -31,16 +31,32 @@ func handleSessionConsole(event *events.ApplicationCommandInteractionCreate) {
 }
 
 func handleConsolePagination(event *events.ComponentInteractionCreate) {
-	customID := event.Data.CustomID()
-	parts := strings.Split(customID, ":")
-	if len(parts) < 4 {
-		return
-	}
+	data := event.Data
+	var direction string
+	var count, offset int
 
-	// Format: console:direction:count:offset
-	direction := parts[1]
-	count, _ := strconv.Atoi(parts[2])
-	offset, _ := strconv.Atoi(parts[3])
+	if menuData, ok := data.(discord.StringSelectMenuInteractionData); ok {
+		values := menuData.Values
+		if len(values) == 0 {
+			return
+		}
+		parts := strings.Split(values[0], ":")
+		if len(parts) < 3 {
+			return
+		}
+		direction = parts[0]
+		count, _ = strconv.Atoi(parts[1])
+		offset, _ = strconv.Atoi(parts[2])
+	} else {
+		// Legacy Button interaction
+		parts := strings.Split(data.CustomID(), ":")
+		if len(parts) < 4 {
+			return
+		}
+		direction = parts[1]
+		count, _ = strconv.Atoi(parts[2])
+		offset, _ = strconv.Atoi(parts[3])
+	}
 
 	newOffset := offset
 	switch direction {
@@ -58,7 +74,7 @@ func handleConsolePagination(event *events.ComponentInteractionCreate) {
 	case "refresh":
 	}
 
-	renderConsole(event, count, newOffset, true) // Ephemeral for pagination is irrelevant as it updates existing message
+	renderConsole(event, count, newOffset, true)
 }
 
 func renderConsole(event any, count int, offset int, ephemeral bool) {
@@ -81,37 +97,44 @@ func renderConsole(event any, count int, offset int, ephemeral bool) {
 
 	content := fmt.Sprintf("```ansi\n%s\n```", logs)
 
-	var components []discord.InteractiveComponent
+	var options []discord.StringSelectMenuOption
 
-	topBtn := discord.NewSecondaryButton(sys.MsgSessionConsoleBtnOldest, fmt.Sprintf("console:top:%d:%d", count, actualOffset))
-	if !hasMoreOld {
-		topBtn = topBtn.AsDisabled()
+	// Older options (Up)
+	if hasMoreOld {
+		options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnOldest, fmt.Sprintf("top:%d:%d", count, actualOffset)).
+			WithDescription("Jump to the very beginning of the logs"))
+
+		options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnOlder, fmt.Sprintf("up:%d:%d", count, actualOffset)).
+			WithDescription(fmt.Sprintf("View %d older lines", count)))
+	} else {
+		// If we are at the top, show Oldest as the default/current state
+		options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnOldest, fmt.Sprintf("top:%d:%d", count, actualOffset)).
+			WithDescription("You are at the beginning of the logs").
+			WithDefault(true))
 	}
-	components = append(components, topBtn)
 
-	upBtn := discord.NewSecondaryButton(sys.MsgSessionConsoleBtnOlder, fmt.Sprintf("console:up:%d:%d", count, actualOffset))
-	if !hasMoreOld {
-		upBtn = upBtn.AsDisabled()
+	// Refresh
+	options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnRefresh, fmt.Sprintf("refresh:%d:%d", count, actualOffset)).
+		WithDescription("Reload current view"))
+
+	// Newer options (Down)
+	if actualOffset > 0 {
+		options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnNewer, fmt.Sprintf("down:%d:%d", count, actualOffset)).
+			WithDescription(fmt.Sprintf("View %d newer lines", count)))
+
+		options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnLatest, fmt.Sprintf("bottom:%d:%d", count, actualOffset)).
+			WithDescription("Jump to the most recent logs"))
+	} else {
+		// If we are at the bottom, show Latest as the default/current state
+		options = append(options, discord.NewStringSelectMenuOption(sys.MsgSessionConsoleBtnLatest, fmt.Sprintf("bottom:%d:%d", count, actualOffset)).
+			WithDescription("Showing the latest logs").
+			WithDefault(true))
 	}
-	components = append(components, upBtn)
 
-	refreshBtn := discord.NewSecondaryButton(sys.MsgSessionConsoleBtnRefresh, fmt.Sprintf("console:refresh:%d:%d", count, actualOffset))
-	components = append(components, refreshBtn)
-
-	downBtn := discord.NewSecondaryButton(sys.MsgSessionConsoleBtnNewer, fmt.Sprintf("console:down:%d:%d", count, actualOffset))
-	if actualOffset <= 0 {
-		downBtn = downBtn.AsDisabled()
-	}
-	components = append(components, downBtn)
-
-	bottomBtn := discord.NewSecondaryButton(sys.MsgSessionConsoleBtnLatest, fmt.Sprintf("console:bottom:%d:%d", count, actualOffset))
-	if actualOffset <= 0 {
-		bottomBtn = bottomBtn.AsDisabled()
-	}
-	components = append(components, bottomBtn)
+	navMenu := discord.NewStringSelectMenu("console:nav", "Navigate Logs...", options...)
 
 	display := discord.NewTextDisplay(content)
-	container := discord.NewContainer(display, discord.NewActionRow(components...))
+	container := discord.NewContainer(display, discord.NewActionRow(navMenu))
 
 	if ev, ok := event.(*events.ComponentInteractionCreate); ok {
 		_ = ev.UpdateMessage(discord.NewMessageUpdateBuilder().
