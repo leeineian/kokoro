@@ -18,6 +18,15 @@ func handleSessionConsole(event *events.ApplicationCommandInteractionCreate) {
 	if eph, ok := data.OptBool("ephemeral"); ok {
 		ephemeral = eph
 	}
+
+	if trunc, ok := data.OptBool("truncate"); ok && trunc {
+		logPath := sys.GetLogPath()
+		if logPath != "" {
+			_ = os.Truncate(logPath, 0)
+			sys.LogInfo("Log file truncated by user %s", event.User().Username)
+		}
+	}
+
 	renderConsole(event, 20, 0, ephemeral)
 }
 

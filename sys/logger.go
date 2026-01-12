@@ -84,7 +84,7 @@ func InitLogger(silent bool, saveToFile bool) {
 			logName = filepath.Base(exePath) + ".log"
 		}
 
-		logFile, err = os.OpenFile(logName, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
+		logFile, err = os.OpenFile(logName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open %s: %v\n", logName, err)
 		} else {

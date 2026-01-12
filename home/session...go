@@ -210,6 +210,11 @@ func init() {
 						Description: "Whether the message should be ephemeral (default: true)",
 						Required:    false,
 					},
+					discord.ApplicationCommandOptionBool{
+						Name:        "truncate",
+						Description: "Whether to clear the log file before viewing (default: false)",
+						Required:    false,
+					},
 				},
 			},
 		},

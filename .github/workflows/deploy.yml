@@ -50,6 +50,6 @@ jobs:
           script: |
             cd ~/minder
             chmod +x minder
-            nohup ./minder -silent -no-log-file > /dev/null 2>&1 &
+            nohup ./minder >> minder.log 2>&1 &
             sleep 1
 
