@@ -71,6 +71,26 @@ func init() {
 						Description: "Amount of threads per channel (default: disabled)",
 						Required:    false,
 					},
+					discord.ApplicationCommandOptionChannel{
+						Name:        "vote_channel",
+						Description: "Channel where the vote panel will be posted",
+						Required:    false,
+					},
+					discord.ApplicationCommandOptionRole{
+						Name:        "vote_role",
+						Description: "Role required to vote (and for % calculation)",
+						Required:    false,
+					},
+					discord.ApplicationCommandOptionString{
+						Name:        "vote_message",
+						Description: "Custom message to display on the vote panel",
+						Required:    false,
+					},
+					discord.ApplicationCommandOptionInt{
+						Name:        "vote_threshold",
+						Description: "Percentage of role members required to resume (1-100)",
+						Required:    false,
+					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommand{

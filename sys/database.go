@@ -177,7 +177,12 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 			thread_message TEXT,
 			thread_count INTEGER DEFAULT 0,
 			threads TEXT,
-			is_running INTEGER DEFAULT 0
+			is_running INTEGER DEFAULT 0,
+			vote_panel TEXT,
+			vote_role TEXT,
+			vote_reaction TEXT,
+			vote_message TEXT,
+			vote_threshold INTEGER DEFAULT 0
 		)`,
 	}
 
@@ -192,6 +197,11 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 	}
 
 	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN thread_count INTEGER DEFAULT 0")
+	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_panel TEXT")
+	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_role TEXT")
+	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_reaction TEXT")
+	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_message TEXT")
+	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_threshold INTEGER DEFAULT 0")
 
 	LogDatabase(MsgDatabaseInitSuccess)
 	return nil
@@ -373,6 +383,10 @@ type LoopConfig struct {
 	ThreadCount   int
 	Threads       string
 	IsRunning     bool
+	VoteChannelID string
+	VoteRole      string
+	VoteMessage   string
+	VoteThreshold int
 }
 
 func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConfig) error {
@@ -385,8 +399,10 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 		INSERT INTO loop_channels (
 			channel_id, channel_name, channel_type, rounds, interval,
 			message, webhook_author, webhook_avatar,
-			use_thread, thread_message, thread_count, threads, is_running
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT is_running FROM loop_channels WHERE channel_id = ?), 0))
+			use_thread, thread_message, thread_count, threads,
+			vote_panel, vote_role, vote_message, vote_threshold,
+			is_running
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT is_running FROM loop_channels WHERE channel_id = ?), 0))
 		ON CONFLICT(channel_id) DO UPDATE SET
 			channel_name = excluded.channel_name,
 			channel_type = excluded.channel_type,
@@ -398,10 +414,16 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 			use_thread = excluded.use_thread,
 			thread_message = excluded.thread_message,
 			thread_count = excluded.thread_count,
-			threads = excluded.threads
+			threads = excluded.threads,
+			vote_panel = excluded.vote_panel,
+			vote_role = excluded.vote_role,
+			vote_message = excluded.vote_message,
+			vote_threshold = excluded.vote_threshold
 	`, channelID.String(), config.ChannelName, config.ChannelType, config.Rounds, config.Interval,
 		config.Message, config.WebhookAuthor, config.WebhookAvatar,
-		useThread, config.ThreadMessage, config.ThreadCount, config.Threads, channelID.String())
+		useThread, config.ThreadMessage, config.ThreadCount, config.Threads,
+		config.VoteChannelID, config.VoteRole, config.VoteMessage, config.VoteThreshold,
+		channelID.String())
 	return err
 }
 
@@ -409,19 +431,22 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 	row := DB.QueryRowContext(ctx, `
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
 			message, webhook_author, webhook_avatar,
-			use_thread, thread_message, thread_count, threads, is_running
+			use_thread, thread_message, thread_count, threads, is_running,
+			vote_panel, vote_role, vote_message, vote_threshold
 		FROM loop_channels WHERE channel_id = ?
 	`, channelID.String())
 
 	config := &LoopConfig{}
 	var idStr string
 	var message, author, avatar, threadMsg, threads sql.NullString
+	var votePanel, voteRole, voteMessage sql.NullString
 	var useThread, isRunning int
 
 	err := row.Scan(
 		&idStr, &config.ChannelName, &config.ChannelType, &config.Rounds, &config.Interval,
 		&message, &author, &avatar,
 		&useThread, &threadMsg, &config.ThreadCount, &threads, &isRunning,
+		&votePanel, &voteRole, &voteMessage, &config.VoteThreshold,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -441,6 +466,9 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 	config.ThreadMessage = threadMsg.String
 	config.Threads = threads.String
 	config.IsRunning = isRunning == 1
+	config.VoteChannelID = votePanel.String
+	config.VoteRole = voteRole.String
+	config.VoteMessage = voteMessage.String
 
 	return config, nil
 }
@@ -449,7 +477,8 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 	rows, err := DB.QueryContext(ctx, `
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
 			message, webhook_author, webhook_avatar,
-			use_thread, thread_message, thread_count, threads, is_running
+			use_thread, thread_message, thread_count, threads, is_running,
+			vote_panel, vote_role, vote_message, vote_threshold
 		FROM loop_channels
 	`)
 	if err != nil {
@@ -462,12 +491,14 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 		config := &LoopConfig{}
 		var idStr string
 		var message, author, avatar, threadMsg, threads sql.NullString
+		var votePanel, voteRole, voteMessage sql.NullString
 		var useThread, isRunning int
 
 		err := rows.Scan(
 			&idStr, &config.ChannelName, &config.ChannelType, &config.Rounds, &config.Interval,
 			&message, &author, &avatar,
 			&useThread, &threadMsg, &config.ThreadCount, &threads, &isRunning,
+			&votePanel, &voteRole, &voteMessage, &config.VoteThreshold,
 		)
 		if err != nil {
 			continue
@@ -484,6 +515,9 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 		config.ThreadMessage = threadMsg.String
 		config.Threads = threads.String
 		config.IsRunning = isRunning == 1
+		config.VoteChannelID = votePanel.String
+		config.VoteRole = voteRole.String
+		config.VoteMessage = voteMessage.String
 
 		configs = append(configs, config)
 	}
@@ -502,6 +536,11 @@ func SetLoopState(ctx context.Context, channelID snowflake.ID, running bool) err
 		val = 1
 	}
 	_, err := DB.ExecContext(ctx, "UPDATE loop_channels SET is_running = ? WHERE channel_id = ?", val, channelID.String())
+	return err
+}
+
+func ResetAllLoopStates(ctx context.Context) error {
+	_, err := DB.ExecContext(ctx, "UPDATE loop_channels SET is_running = 0")
 	return err
 }
 

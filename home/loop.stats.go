@@ -50,12 +50,30 @@ func handleLoopStats(event *events.ApplicationCommandInteractionCreate) {
 		intervalStr := proc.FormatDuration(proc.IntervalMsToDuration(cfg.Interval))
 
 		sb.WriteString(fmt.Sprintf("%s **#%s**\n", emoji, cfg.ChannelName))
+		sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsStatus, details))
 		sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsInterval, intervalStr))
-		if details != "" {
-			sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsStatus, details))
+		sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsMessage, cfg.Message))
+		if cfg.WebhookAuthor != "" {
+			sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsAuthor, cfg.WebhookAuthor))
+		}
+		if cfg.WebhookAvatar != "" {
+			sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsAvatar, cfg.WebhookAvatar))
 		}
 		if cfg.UseThread {
 			sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsThreads, cfg.ThreadCount))
+			if cfg.ThreadMessage != "" {
+				sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsThreadMsg, cfg.ThreadMessage))
+			}
+		}
+		if cfg.VoteChannelID != "" {
+			sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsVoteChan, cfg.VoteChannelID))
+			if cfg.VoteRole != "" {
+				sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsVoteRole, cfg.VoteRole))
+			}
+			if cfg.VoteMessage != "" {
+				sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsVoteMsg, cfg.VoteMessage))
+			}
+			sb.WriteString(fmt.Sprintf(sys.MsgLoopStatsVoteThreshold, cfg.VoteThreshold))
 		}
 		sb.WriteString("\n")
 	}

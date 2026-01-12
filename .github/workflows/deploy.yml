@@ -1,18 +1,42 @@
-name: Deploy Minder Bot
+name: Build and Deploy
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.5'
+
+      - name: Build Binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -o minder .
+
+      - name: Upload Binary to VPS
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          source: "minder"
+          target: "~/minder/"
+          overwrite: true
+
+      - name: Restart Bot on VPS
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            bash /home/montas/minder/update-minder.sh
+            pkill -f minder || true
+            chmod +x ~/minder/minder
+            nohup ~/minder/minder -silent -no-log-file > /dev/null 2>&1 &
