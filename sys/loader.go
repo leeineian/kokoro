@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
 				gateway.IntentGuildPresences,
 				gateway.IntentMessageContent,
 				gateway.IntentGuildMessageReactions,
+				gateway.IntentGuildVoiceStates,
 			),
 			gateway.WithPresenceOpts(
 				gateway.WithPlayingActivity("Loading..."),
@@ -59,7 +61,7 @@ func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
 			),
 		),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagGuilds, cache.FlagMembers, cache.FlagRoles, cache.FlagChannels),
+			cache.WithCaches(cache.FlagGuilds, cache.FlagMembers, cache.FlagRoles, cache.FlagChannels, cache.FlagVoiceStates),
 		),
 		bot.WithEventListenerFunc(onApplicationCommandInteraction),
 		bot.WithEventListenerFunc(onAutocompleteInteraction),
@@ -132,7 +134,7 @@ func OnClientReady(cb func(ctx context.Context, client *bot.Client)) {
 
 func RegisterCommands(client *bot.Client, guildIDStr string) error {
 	ctx := context.Background()
-	lastMode, _ := GetBotConfig(ctx, "last_reg_mode")
+	_, _ = GetBotConfig(ctx, "last_reg_mode")
 	lastGuildID, _ := GetBotConfig(ctx, "last_guild_id")
 
 	isProduction := guildIDStr == ""
@@ -143,31 +145,30 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 
 	LogInfo(MsgLoaderSyncCommands, strings.ToUpper(currentMode))
 
-	// --- MANUAL CLEANUP OVERRIDE ---
-	if manualID := os.Getenv("MANUAL_CLEANUP_GUILD"); manualID != "" {
-		if id, err := snowflake.Parse(manualID); err == nil {
-			LogInfo("🧹 [MANUAL CLEANUP] Clearing commands from guild: %s", manualID)
-			_, _ = client.Rest.SetGuildCommands(client.ApplicationID, id, []discord.ApplicationCommandCreate{})
+	// 1. Production Mode (Global)
+	if isProduction {
+		LogInfo(MsgLoaderProdStarting)
+		createdCommands, err := client.Rest.SetGlobalCommands(client.ApplicationID, commands)
+		if err != nil {
+			return fmt.Errorf(MsgLoaderProdFail, err)
 		}
-	}
+		for _, cmd := range createdCommands {
+			LogInfo(MsgLoaderProdRegistered, cmd.Name())
+		}
 
-	// 1. Handle Transition: Mode changed (e.g. Guild -> Global or Global -> Guild)
-	if lastMode != "" && lastMode != currentMode {
-		LogInfo(MsgLoaderTransition, strings.ToUpper(lastMode), strings.ToUpper(currentMode))
-
-		if lastMode == "guild" && lastGuildID != "" {
-			// Clear old guild commands
-			oldID, err := snowflake.Parse(lastGuildID)
-			if err == nil {
-				LogInfo(MsgLoaderCleanup, lastGuildID)
-				_, _ = client.Rest.SetGuildCommands(client.ApplicationID, oldID, []discord.ApplicationCommandCreate{})
+		// Cleanup: If we transitioned from a Guild or have a stale Guild in history, check it
+		targetClear := lastGuildID
+		if targetClear != "" {
+			if id, err := snowflake.Parse(targetClear); err == nil {
+				// Only send DELETE if there is something to delete (saves rate limits)
+				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, id, false); err == nil && len(cmds) > 0 {
+					LogInfo(MsgLoaderCleanup, targetClear)
+					_, _ = client.Rest.SetGuildCommands(client.ApplicationID, id, []discord.ApplicationCommandCreate{})
+				}
 			}
 		}
-	}
-
-	// 2. Deployment
-	if !isProduction {
-		// --- DEVELOPMENT MODE (GUILD) ---
+	} else {
+		// 2. Development Mode (Guild)
 		guildID, err := snowflake.Parse(guildIDStr)
 		if err != nil {
 			return fmt.Errorf("invalid GUILD_ID: %w", err)
@@ -183,22 +184,23 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 			}
 		}
 
-		if lastMode == "" || lastMode == "global" {
+		// Reconcile Global: Ensure no global commands compete with our dev guild
+		if cmds, err := client.Rest.GetGlobalCommands(client.ApplicationID, false); err == nil && len(cmds) > 0 {
 			LogInfo(MsgLoaderDevGlobalClear)
 			_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
 			if err != nil {
 				LogWarn(MsgLoaderDevGlobalClearFail, err)
 			}
 		}
-	} else {
-		// --- PRODUCTION MODE (GLOBAL) ---
-		LogInfo(MsgLoaderProdStarting)
-		createdCommands, err := client.Rest.SetGlobalCommands(client.ApplicationID, commands)
-		if err != nil {
-			return fmt.Errorf(MsgLoaderProdFail, err)
-		}
-		for _, cmd := range createdCommands {
-			LogInfo(MsgLoaderProdRegistered, cmd.Name())
+
+		// Reconcile Transitions: Clear previous dev guild if it changed
+		if lastGuildID != "" && lastGuildID != guildIDStr {
+			if oldID, err := snowflake.Parse(lastGuildID); err == nil {
+				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, oldID, false); err == nil && len(cmds) > 0 {
+					LogInfo(MsgLoaderCleanup, lastGuildID)
+					_, _ = client.Rest.SetGuildCommands(client.ApplicationID, oldID, []discord.ApplicationCommandCreate{})
+				}
+			}
 		}
 	}
 
@@ -295,6 +297,7 @@ func safeGo(f func()) {
 		defer func() {
 			if r := recover(); r != nil {
 				LogError(MsgLoaderPanicRecovered, r)
+				fmt.Printf("%s\n", debug.Stack())
 			}
 		}()
 		f()

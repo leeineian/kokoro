@@ -15,16 +15,16 @@ import (
 )
 
 func main() {
-	silent := flag.Bool("silent", false, "Disable all log output")
-	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
-	noLogFile := flag.Bool("no-log-file", false, "Disable logging to file")
-	flag.Parse()
-
 	// 1. Load configuration early
 	cfg, err := sys.LoadConfig()
 	if err != nil {
 		sys.LogError("Failed to load config: %v", err)
 	}
+
+	silent := flag.Bool("silent", false, "Disable all log output")
+	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
+	noLogFile := flag.Bool("no-log-file", false, "Disable logging to file")
+	flag.Parse()
 
 	// 2. Initialize Logger (handle flags)
 	sys.InitLogger(*silent, !*noLogFile)

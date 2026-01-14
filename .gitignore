@@ -36,6 +36,8 @@ tmp/
 .air.toml
 minder
 backup
+*.sh
+*.txt
 
 # IDE
 .vscode/

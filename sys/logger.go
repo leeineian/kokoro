@@ -141,15 +141,15 @@ func LogReminder(format string, v ...interface{}) {
 }
 
 func LogStatusRotator(format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "status_rotator"))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "status"))
 }
 
 func LogRoleColorRotator(format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role_color"))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role"))
 }
 
 func LogLoopManager(format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop_manager"))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop"))
 }
 
 func LogCat(format string, v ...interface{}) {
@@ -269,11 +269,11 @@ func getComponentColor(name string) *color.Color {
 		return databaseColor
 	case "REMINDER":
 		return reminderColor
-	case "STATUS_ROTATOR":
+	case "STATUS":
 		return statusRotatorColor
-	case "ROLE_COLOR":
+	case "ROLE":
 		return roleRotatorColor
-	case "LOOP_MANAGER":
+	case "LOOP":
 		return loopManagerColor
 	case "CAT":
 		return catColor
