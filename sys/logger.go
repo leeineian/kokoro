@@ -35,6 +35,7 @@ var (
 	loopManagerColor   = color.New(color.FgMagenta)
 	catColor           = color.New(color.FgMagenta)
 	undertextColor     = color.New(color.FgMagenta)
+	voiceColor         = color.New(color.FgMagenta)
 
 	// Global state
 	DefaultTimeFormat = "15:04:05"
@@ -141,7 +142,7 @@ func LogReminder(format string, v ...interface{}) {
 }
 
 func LogStatusRotator(format string, v ...interface{}) {
-	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "status"))
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "session"))
 }
 
 func LogRoleColorRotator(format string, v ...interface{}) {
@@ -158,6 +159,10 @@ func LogCat(format string, v ...interface{}) {
 
 func LogUndertext(format string, v ...interface{}) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "undertext"))
+}
+
+func LogVoice(format string, v ...interface{}) {
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "voice"))
 }
 
 func LogCustom(tag string, tagColor *color.Color, format string, v ...interface{}) {
@@ -269,7 +274,7 @@ func getComponentColor(name string) *color.Color {
 		return databaseColor
 	case "REMINDER":
 		return reminderColor
-	case "STATUS":
+	case "SESSION":
 		return statusRotatorColor
 	case "ROLE":
 		return roleRotatorColor
@@ -279,6 +284,8 @@ func getComponentColor(name string) *color.Color {
 		return catColor
 	case "UNDERTEXT":
 		return undertextColor
+	case "VOICE":
+		return voiceColor
 	default:
 		return color.New(color.FgCyan)
 	}

@@ -21,6 +21,7 @@ tmp/
 # Runtime & Process
 .bot.pid
 *.log
+*cache/
 
 # Testing
 *.test

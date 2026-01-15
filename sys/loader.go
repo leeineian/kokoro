@@ -29,6 +29,7 @@ var commands = []discord.ApplicationCommandCreate{}
 var commandHandlers = map[string]func(event *events.ApplicationCommandInteractionCreate){}
 var autocompleteHandlers = map[string]func(event *events.AutocompleteInteractionCreate){}
 var componentHandlers = map[string]func(event *events.ComponentInteractionCreate){}
+var voiceStateUpdateHandlers []func(event *events.GuildVoiceStateUpdate)
 var onClientReadyCallbacks []func(ctx context.Context, client *bot.Client)
 
 // HttpClient is a shared thread-safe client for all external API calls.
@@ -66,6 +67,7 @@ func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
 		bot.WithEventListenerFunc(onApplicationCommandInteraction),
 		bot.WithEventListenerFunc(onAutocompleteInteraction),
 		bot.WithEventListenerFunc(onComponentInteraction),
+		bot.WithEventListenerFunc(onVoiceStateUpdate),
 		bot.WithEventListenerFunc(onReady),
 		bot.WithLogger(slog.Default()),
 	)
@@ -124,6 +126,10 @@ func RegisterAutocompleteHandler(cmdName string, handler func(event *events.Auto
 
 func RegisterComponentHandler(customID string, handler func(event *events.ComponentInteractionCreate)) {
 	componentHandlers[customID] = handler
+}
+
+func RegisterVoiceStateUpdateHandler(handler func(event *events.GuildVoiceStateUpdate)) {
+	voiceStateUpdateHandlers = append(voiceStateUpdateHandlers, handler)
 }
 
 func OnClientReady(cb func(ctx context.Context, client *bot.Client)) {
@@ -259,6 +265,12 @@ func onComponentInteraction(event *events.ComponentInteractionCreate) {
 			safeGo(func() { h(event) })
 			return
 		}
+	}
+}
+
+func onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
+	for _, h := range voiceStateUpdateHandlers {
+		safeGo(func() { h(event) })
 	}
 }
 

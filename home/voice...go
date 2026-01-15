@@ -22,33 +22,26 @@ func init() {
 						Autocomplete: true,
 					},
 					discord.ApplicationCommandOptionString{
-						Name:        "queue",
-						Description: "Playback mode",
+						Name:         "queue",
+						Description:  "Playback mode (now, next, or a number)",
+						Required:     false,
+						Autocomplete: true,
+					},
+					discord.ApplicationCommandOptionBool{
+						Name:        "autoplay",
+						Description: "Enable or disable autoplay after this song",
 						Required:    false,
-						Choices: []discord.ApplicationCommandOptionChoiceString{
-							{Name: "Play Now", Value: "now"},
-						},
+					},
+					discord.ApplicationCommandOptionBool{
+						Name:        "loop",
+						Description: "Loop the playback",
+						Required:    false,
 					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommand{
 				Name:        "stop",
 				Description: "Stop audio and leave",
-			},
-			discord.ApplicationCommandOptionSubCommand{
-				Name:        "autoplay",
-				Description: "Enable or disable autoplay",
-				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionString{
-						Name:        "state",
-						Description: "Enable or disable autoplay",
-						Required:    true,
-						Choices: []discord.ApplicationCommandOptionChoiceString{
-							{Name: "Enable", Value: "enable"},
-							{Name: "Disable", Value: "disable"},
-						},
-					},
-				},
 			},
 		},
 	}, func(event *events.ApplicationCommandInteractionCreate) {
@@ -62,8 +55,6 @@ func init() {
 			handleMusicPlay(event, data)
 		case "stop":
 			handleMusicStop(event, data)
-		case "autoplay":
-			handleMusicAutoplay(event, data)
 		}
 	})
 
