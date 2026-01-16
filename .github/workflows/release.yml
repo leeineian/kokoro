@@ -20,8 +20,9 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
+          sudo add-apt-repository ppa:savoury1/ffmpeg7 -y
           sudo apt-get update
-          sudo apt-get install -y gcc pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libswresample-dev libswscale-dev libavutil-dev
+          sudo apt-get install -y gcc pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libswresample-dev libswscale-dev libavutil-dev libpostproc-dev
 
       # 1. Run Tests
       - name: Run Tests
