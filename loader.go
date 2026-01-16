@@ -1,4 +1,4 @@
-package sys
+package main
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -20,10 +21,24 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+// safeGo runs a function in a new goroutine with panic recovery
+func safeGo(f func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				LogError(MsgLoaderPanicRecovered, r)
+				fmt.Printf("%s\n", debug.Stack())
+			}
+		}()
+		f()
+	}()
+}
+
 // --- Global State & Setup ---
 
 var AppContext context.Context
 var RestartRequested bool
+var daemonsOnce sync.Once
 
 var commands = []discord.ApplicationCommandCreate{}
 var commandHandlers = map[string]func(event *events.ApplicationCommandInteractionCreate){}
@@ -277,46 +292,54 @@ func onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 // --- Daemon System ---
 
 type daemonEntry struct {
-	starter func(ctx context.Context) (bool, func())
-	logger  func(format string, v ...interface{})
+	starter func(ctx context.Context) (bool, func(), func())
+	logger  func(format string, v ...any)
 }
 
 var registeredDaemons []daemonEntry
+var activeShutdownHooks []func()
+var activeShutdownMu sync.Mutex
 
 // RegisterDaemon registers a background daemon with a logger and start function
-func RegisterDaemon(logger func(format string, v ...interface{}), starter func(ctx context.Context) (bool, func())) {
+// The starter function returns: (shouldStart, runFunc, shutdownFunc)
+func RegisterDaemon(logger func(format string, v ...any), starter func(ctx context.Context) (bool, func(), func())) {
 	registeredDaemons = append(registeredDaemons, daemonEntry{starter: starter, logger: logger})
 }
 
 // StartDaemons starts all registered daemons with their individual colored logging
 func StartDaemons(ctx context.Context) {
-	for _, daemon := range registeredDaemons {
-		// Launch each daemon in parallel to avoid blocking on DB reads or setup
-		go func(d daemonEntry) {
-			if ok, run := d.starter(ctx); ok && run != nil {
-				d.logger(MsgDaemonStarting)
-				run()
-			}
-		}(daemon)
+	daemonsOnce.Do(func() {
+		for _, daemon := range registeredDaemons {
+			// Launch each daemon in parallel to avoid blocking on DB reads or setup
+			go func(d daemonEntry) {
+				if ok, run, shutdown := d.starter(ctx); ok && run != nil {
+					if shutdown != nil {
+						activeShutdownMu.Lock()
+						activeShutdownHooks = append(activeShutdownHooks, shutdown)
+						activeShutdownMu.Unlock()
+					}
+					d.logger(MsgDaemonStarting)
+					run()
+				}
+			}(daemon)
+		}
+	})
+}
+
+// ShutdownDaemons gracefully stops all active daemons
+func ShutdownDaemons(ctx context.Context) {
+	activeShutdownMu.Lock()
+	defer activeShutdownMu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, shutdown := range activeShutdownHooks {
+		if shutdown != nil {
+			wg.Add(1)
+			go func(s func()) {
+				defer wg.Done()
+				s()
+			}(shutdown)
+		}
 	}
-}
-
-// --- Utilities ---
-
-// safeGo runs a function in a new goroutine with panic recovery
-func safeGo(f func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				LogError(MsgLoaderPanicRecovered, r)
-				fmt.Printf("%s\n", debug.Stack())
-			}
-		}()
-		f()
-	}()
-}
-
-// Ptr returns a pointer to the given value.
-func Ptr[T any](v T) *T {
-	return &v
+	wg.Wait()
 }

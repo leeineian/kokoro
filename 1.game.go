@@ -1,4 +1,4 @@
-package home
+package main
 
 import (
 	"fmt"
@@ -13,10 +13,75 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
-	"github.com/leeineian/minder/sys"
 )
 
-// --- Constants & Types ---
+// ===========================
+// Command Registration
+// ===========================
+
+func init() {
+	RegisterCommand(discord.SlashCommandCreate{
+		Name:        "game",
+		Description: "Good games.",
+		Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "connect4",
+				Description: "Play Connect Four against another player or AI",
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionUser{
+						Name:        "opponent",
+						Description: "Challenge another user (leave empty to play against AI)",
+						Required:    false,
+					},
+					discord.ApplicationCommandOptionString{
+						Name:        "difficulty",
+						Description: "AI difficulty level (only for AI games)",
+						Required:    false,
+						Choices: []discord.ApplicationCommandOptionChoiceString{
+							{Name: "Easy", Value: "easy"},
+							{Name: "Medium", Value: "medium"},
+							{Name: "Hard", Value: "hard"},
+							{Name: "Impossible", Value: "impossible"},
+						},
+					},
+					discord.ApplicationCommandOptionInt{
+						Name:        "timer",
+						Description: "Turn timer in seconds (leave empty or 0 to disable)",
+						Required:    false,
+					},
+					discord.ApplicationCommandOptionString{
+						Name:        "size",
+						Description: "Board size",
+						Required:    false,
+						Choices: []discord.ApplicationCommandOptionChoiceString{
+							{Name: "Small (5x4)", Value: "small"},
+							{Name: "Classic (7x6)", Value: "classic"},
+							{Name: "Large (9x8)", Value: "large"},
+							{Name: "Master (10x10)", Value: "master"},
+						},
+					},
+				},
+			},
+		},
+	}, func(event *events.ApplicationCommandInteractionCreate) {
+		data := event.SlashCommandInteractionData()
+		subCmd := data.SubCommandName
+		if subCmd == nil {
+			return
+		}
+
+		switch *subCmd {
+		case "connect4":
+			handlePlayConnect4(event, data)
+		}
+	})
+
+	RegisterComponentHandler("connect4:", c4HandleMove)
+}
+
+// ===========================
+// Connect Four Game Constants & Types
+// ===========================
 
 const (
 	c4ToWin   = 4
@@ -40,6 +105,7 @@ var (
 	c4ColumnEmojis = []string{"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"}
 )
 
+// c4Difficulty represents the AI difficulty level for Connect Four
 type c4Difficulty int
 
 const (
@@ -49,48 +115,49 @@ const (
 	c4Impossible
 )
 
+// c4Game represents a Connect Four game session with all its state
 type c4Game struct {
-	board         [][]int
-	rows          int
-	cols          int
-	player1ID     snowflake.ID
-	player2ID     snowflake.ID
-	isAI          bool
-	aiDifficulty  c4Difficulty
-	aiPlayerNum   int // 1 or 2
-	currentTurn   int // 1 or 2
-	gameOver      bool
-	winner        int // 0=draw, 1=player1, 2=player2
-	winCells      [][2]int
-	moveCount     int
-	timerEnabled  bool
-	timerDuration time.Duration
-	lastMoveTime  time.Time
-	messageID     snowflake.ID
-	channelID     snowflake.ID
-	originalP1ID  snowflake.ID
-	originalP2ID  snowflake.ID
+	board         [][]int       // Game board (0=empty, 1=player1, 2=player2)
+	rows          int           // Number of rows
+	cols          int           // Number of columns
+	player1ID     snowflake.ID  // Player 1's Discord ID
+	player2ID     snowflake.ID  // Player 2's Discord ID
+	isAI          bool          // Whether this is a PvAI game
+	aiDifficulty  c4Difficulty  // AI difficulty level
+	aiPlayerNum   int           // Which player is AI (1 or 2)
+	currentTurn   int           // Current turn (1 or 2)
+	gameOver      bool          // Whether the game has ended
+	winner        int           // Winner (0=draw, 1=player1, 2=player2)
+	winCells      [][2]int      // Coordinates of winning cells
+	moveCount     int           // Total moves made
+	timerEnabled  bool          // Whether turn timer is enabled
+	timerDuration time.Duration // Duration for each turn
+	lastMoveTime  time.Time     // Time of last move
+	messageID     snowflake.ID  // Discord message ID
+	channelID     snowflake.ID  // Discord channel ID
+	originalP1ID  snowflake.ID  // Original player 1 ID (for replays)
+	originalP2ID  snowflake.ID  // Original player 2 ID (for replays)
 }
 
-// --- Global State & Initialization ---
+// ===========================
+// Global State & Initialization
+// ===========================
 
 var (
 	activeGames   = make(map[string]*c4Game)
 	activeGamesMu sync.RWMutex
 )
 
-func init() {
-	sys.RegisterComponentHandler("connect4:", c4HandleMove)
-}
-
-// --- Interaction Handlers ---
+// ===========================
+// Interaction Handlers
+// ===========================
 
 // handlePlayConnect4 initiates a new game session (Slash Command)
 func handlePlayConnect4(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	// Add panic recovery for debugging
 	defer func() {
 		if r := recover(); r != nil {
-			sys.LogError("Panic in handlePlayConnect4: %v", r)
+			LogError("Panic in handlePlayConnect4: %v", r)
 			fmt.Printf("%s\n", debug.Stack())
 		}
 	}()
@@ -228,7 +295,7 @@ func c4StartTimer(client *bot.Client, game *c4Game, gameID string, moveCount int
 
 		activeGamesMu.Lock()
 		// Check if it's still the same game and turn
-		if game.moveCount != moveCount || game.gameOver {
+		if game.moveCount != moveCount || game.gameOver || game.messageID == 0 {
 			activeGamesMu.Unlock()
 			return
 		}
@@ -270,12 +337,11 @@ func c4HandleMove(event *events.ComponentInteractionCreate) {
 	gameID := parts[1]
 	action := parts[2]
 
-	activeGamesMu.RLock()
+	activeGamesMu.Lock()
 	game, exists := activeGames[gameID]
-	activeGamesMu.RUnlock()
-
 	if !exists {
-		// Use ID check instead of nil for struct
+		activeGamesMu.Unlock()
+		// ...
 		if event.Message.ID == 0 {
 			event.DeferUpdateMessage()
 			return
@@ -302,9 +368,11 @@ func c4HandleMove(event *events.ComponentInteractionCreate) {
 	}
 
 	if game.gameOver && action != "yes" && action != "no" {
+		activeGamesMu.Unlock()
 		event.DeferUpdateMessage()
 		return
 	}
+	activeGamesMu.Unlock()
 
 	// Yes/No logic for replay
 	if action == "yes" || action == "no" {
@@ -322,9 +390,37 @@ func c4HandleMove(event *events.ComponentInteractionCreate) {
 			delete(activeGames, gameID)
 			activeGamesMu.Unlock()
 
-			// Remove buttons
+			// Generate the full message as if the game ended normally
+			fullMsg := c4BuildMessage(game, gameID, "")
+
+			var newComponents []discord.LayoutComponent
+
+			if len(fullMsg.Components) > 0 {
+				newComponents = append(newComponents, fullMsg.Components[0])
+			}
+
+			if len(fullMsg.Components) > 1 {
+				var boardSub discord.ContainerSubComponent
+
+				switch c := fullMsg.Components[1].(type) {
+				case discord.ContainerComponent:
+					if len(c.Components) > 0 {
+						boardSub = c.Components[0]
+					}
+				case *discord.ContainerComponent:
+					if len(c.Components) > 0 {
+						boardSub = c.Components[0]
+					}
+				}
+
+				if boardSub != nil {
+					newComponents = append(newComponents, discord.NewContainer(boardSub))
+				}
+			}
+
 			_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-				SetComponents().
+				SetIsComponentsV2(true).
+				SetComponents(newComponents...).
 				Build())
 			return
 		}
@@ -433,6 +529,12 @@ func c4HandleMove(event *events.ComponentInteractionCreate) {
 	}
 
 	activeGamesMu.Lock()
+	if game.gameOver && action != "yes" && action != "no" {
+		activeGamesMu.Unlock()
+		event.DeferUpdateMessage()
+		return
+	}
+
 	statusMsg := c4MakeMove(game, col)
 	activeGamesMu.Unlock()
 
@@ -457,7 +559,9 @@ func c4HandleMove(event *events.ComponentInteractionCreate) {
 	}
 }
 
-// --- UI & Rendering ---
+// ===========================
+// UI & Rendering
+// ===========================
 
 // c4BuildMessage constructs the Discord message for the current game state
 func c4BuildMessage(game *c4Game, gameID string, statusMsg string) discord.MessageCreate {
@@ -556,10 +660,7 @@ func c4BuildMessage(game *c4Game, gameID string, statusMsg string) discord.Messa
 		// Group buttons by max 5 per row
 		for i := 0; i < game.cols; i += 5 {
 			var rowButtons []discord.InteractiveComponent
-			end := i + 5
-			if end > game.cols {
-				end = game.cols
-			}
+			end := min(i+5, game.cols)
 			for col := i + 1; col <= end; col++ {
 				customID := fmt.Sprintf("connect4:%s:%d", gameID, col)
 				btn := discord.NewButton(discord.ButtonStylePrimary, c4ColumnEmojis[col-1], customID, "", 0)
@@ -584,9 +685,16 @@ func c4BuildMessage(game *c4Game, gameID string, statusMsg string) discord.Messa
 		Build()
 }
 
-// --- Game Logic ---
+// ===========================
+// Game Logic
+// ===========================
 
+// c4MakeMove attempts to place a piece in the specified column
+// Returns a status message if there's an error, empty string otherwise
 func c4MakeMove(game *c4Game, col int) string {
+	if game.gameOver {
+		return "Game is already over."
+	}
 	row := -1
 	for r := game.rows - 1; r >= 0; r-- {
 		if game.board[r][col] == 0 {
@@ -625,6 +733,8 @@ func c4MakeMove(game *c4Game, col int) string {
 	return ""
 }
 
+// c4CheckWin checks if the last move at (row, col) resulted in a win
+// Returns true and the winning cells if won, false otherwise
 func c4CheckWin(game *c4Game, row, col int) (bool, [][2]int) {
 	player := game.board[row][col]
 	if player == 0 {
@@ -657,6 +767,7 @@ func c4CheckWin(game *c4Game, row, col int) (bool, [][2]int) {
 	return false, nil
 }
 
+// c4WouldWin checks if placing a piece in col would result in a win for player
 func c4WouldWin(game *c4Game, col int, player int) bool {
 	row := -1
 	for r := game.rows - 1; r >= 0; r-- {
@@ -674,10 +785,12 @@ func c4WouldWin(game *c4Game, col int, player int) bool {
 	return res
 }
 
+// c4IsColumnFull checks if a column is full
 func c4IsColumnFull(game *c4Game, col int) bool {
 	return game.board[0][col] != 0
 }
 
+// c4IsBoardFull checks if the entire board is full
 func c4IsBoardFull(game *c4Game) bool {
 	for col := 0; col < game.cols; col++ {
 		if !c4IsColumnFull(game, col) {
@@ -687,8 +800,11 @@ func c4IsBoardFull(game *c4Game) bool {
 	return true
 }
 
-// --- AI Logic ---
+// ===========================
+// AI Logic
+// ===========================
 
+// c4MakeAIMove executes an AI move based on the configured difficulty
 func c4MakeAIMove(client *bot.Client, game *c4Game, gameID string) {
 	activeGamesMu.Lock()
 	defer activeGamesMu.Unlock()
@@ -716,9 +832,15 @@ func c4MakeAIMove(client *bot.Client, game *c4Game, gameID string) {
 		_, _ = client.Rest.UpdateMessage(game.channelID, game.messageID, discord.NewMessageUpdateBuilder().
 			SetComponents(builder.Components...).
 			Build())
+
+		// Start timer for human if enabled
+		if !game.gameOver && game.timerEnabled {
+			c4StartTimer(client, game, gameID, game.moveCount)
+		}
 	}
 }
 
+// c4AIRandomMove selects a random valid column (Easy difficulty)
 func c4AIRandomMove(game *c4Game) int {
 	var valid []int
 	for c := 0; c < game.cols; c++ {
@@ -732,16 +854,20 @@ func c4AIRandomMove(game *c4Game) int {
 	return valid[rand.Intn(len(valid))]
 }
 
+// c4AIMediumMove tries to win, then block, then random (Medium difficulty)
 func c4AIMediumMove(game *c4Game) int {
+	ai := game.aiPlayerNum
+	opponent := 3 - ai
+
 	// 1. Win if possible
 	for c := 0; c < game.cols; c++ {
-		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, 2) {
+		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, ai) {
 			return c
 		}
 	}
 	// 2. Block if must
 	for c := 0; c < game.cols; c++ {
-		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, 1) {
+		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, opponent) {
 			return c
 		}
 	}
@@ -749,15 +875,18 @@ func c4AIMediumMove(game *c4Game) int {
 }
 
 func c4AIHardMove(game *c4Game) int {
+	ai := game.aiPlayerNum
+	opponent := 3 - ai
+
 	// 1. Win if possible
 	for c := 0; c < game.cols; c++ {
-		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, 2) {
+		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, ai) {
 			return c
 		}
 	}
 	// 2. Block if must
 	for c := 0; c < game.cols; c++ {
-		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, 1) {
+		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, opponent) {
 			return c
 		}
 	}
@@ -775,10 +904,10 @@ func c4AIHardMove(game *c4Game) int {
 			}
 
 			// Simulate AI move
-			game.board[row][c] = 2
+			game.board[row][c] = ai
 			givesWin := false
 			if row > 0 {
-				if c4WouldWin(game, c, 1) {
+				if c4WouldWin(game, c, opponent) {
 					givesWin = true
 				}
 			}
@@ -805,16 +934,19 @@ func c4AIHardMove(game *c4Game) int {
 }
 
 func c4AIImpossibleMove(game *c4Game) int {
+	ai := game.aiPlayerNum
+	opponent := 3 - ai
+
 	// Combination of aggressive blocking and center bias
 	// 1. Win if possible
 	for c := 0; c < game.cols; c++ {
-		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, 2) {
+		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, ai) {
 			return c
 		}
 	}
 	// 2. Block if must
 	for c := 0; c < game.cols; c++ {
-		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, 1) {
+		if !c4IsColumnFull(game, c) && c4WouldWin(game, c, opponent) {
 			return c
 		}
 	}
@@ -830,9 +962,9 @@ func c4AIImpossibleMove(game *c4Game) int {
 					break
 				}
 			}
-			game.board[row][c] = 2
+			game.board[row][c] = ai
 			givesWin := false
-			if row > 0 && c4WouldWin(game, c, 1) {
+			if row > 0 && c4WouldWin(game, c, opponent) {
 				givesWin = true
 			}
 			game.board[row][c] = 0
@@ -845,11 +977,13 @@ func c4AIImpossibleMove(game *c4Game) int {
 	return c4AIRandomMove(game)
 }
 
-// --- UI Utilities ---
+// ===========================
+// UI Utilities
+// ===========================
 
 func c4GetHeader(cols int) string {
 	var sb strings.Builder
-	for i := 0; i < cols; i++ {
+	for i := range cols {
 		sb.WriteString(c4ColumnEmojis[i])
 	}
 	return sb.String()

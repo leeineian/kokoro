@@ -1,4 +1,4 @@
-package sys
+package main
 
 import (
 	"context"
@@ -12,18 +12,20 @@ import (
 
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/joho/godotenv"
-	_ "modernc.org/sqlite"
+	"github.com/mattn/go-sqlite3"
 )
 
 // --- Phase 1: Configuration & Environment ---
 
 type Config struct {
-	Token        string
-	GuildID      string
-	DatabasePath string
-	OwnerIDs     []string
-	StreamingURL string
-	Silent       bool
+	Token         string
+	GuildID       string
+	DatabasePath  string
+	OwnerIDs      []string
+	StreamingURL  string
+	Silent        bool
+	YoutubePrefix string
+	YTMusicPrefix string
 }
 
 var GlobalConfig *Config
@@ -48,6 +50,16 @@ func LoadConfig() (*Config, error) {
 		streamingURL = "https://www.twitch.tv/videos/1110069047"
 	}
 
+	ytPrefix := os.Getenv("VOICE_YT_PREFIX")
+	if ytPrefix == "" {
+		ytPrefix = "[YT]"
+	}
+
+	ytmPrefix := os.Getenv("VOICE_YTM_PREFIX")
+	if ytmPrefix == "" {
+		ytmPrefix = "[YTM]"
+	}
+
 	ownerIDsStr := os.Getenv("OWNER_IDS")
 	var ownerIDs []string
 	if ownerIDsStr != "" {
@@ -58,12 +70,14 @@ func LoadConfig() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Token:        token,
-		GuildID:      os.Getenv("GUILD_ID"),
-		DatabasePath: dbPath,
-		OwnerIDs:     ownerIDs,
-		StreamingURL: streamingURL,
-		Silent:       silent,
+		Token:         token,
+		GuildID:       os.Getenv("GUILD_ID"),
+		DatabasePath:  dbPath,
+		OwnerIDs:      ownerIDs,
+		StreamingURL:  streamingURL,
+		Silent:        silent,
+		YoutubePrefix: ytPrefix,
+		YTMusicPrefix: ytmPrefix,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -113,8 +127,12 @@ func GetProjectName() string {
 var DB *sql.DB
 
 func InitDatabase(ctx context.Context, dataSourceName string) error {
+	// Explicitly reference sqlite3 driver to avoid blank identifier
+	// The driver registers itself via its init() function
+	_ = sqlite3.SQLiteDriver{}
+
 	var err error
-	DB, err = sql.Open("sqlite", dataSourceName)
+	DB, err = sql.Open("sqlite3", dataSourceName)
 	if err != nil {
 		return err
 	}
@@ -196,12 +214,22 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		return err
 	}
 
-	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN thread_count INTEGER DEFAULT 0")
-	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_panel TEXT")
-	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_role TEXT")
-	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_reaction TEXT")
-	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_message TEXT")
-	_, _ = DB.ExecContext(initCtx, "ALTER TABLE loop_channels ADD COLUMN vote_threshold INTEGER DEFAULT 0")
+	migrations := []string{
+		"ALTER TABLE loop_channels ADD COLUMN thread_count INTEGER DEFAULT 0",
+		"ALTER TABLE loop_channels ADD COLUMN vote_panel TEXT",
+		"ALTER TABLE loop_channels ADD COLUMN vote_role TEXT",
+		"ALTER TABLE loop_channels ADD COLUMN vote_reaction TEXT",
+		"ALTER TABLE loop_channels ADD COLUMN vote_message TEXT",
+		"ALTER TABLE loop_channels ADD COLUMN vote_threshold INTEGER DEFAULT 0",
+	}
+
+	for _, m := range migrations {
+		if _, err := DB.ExecContext(initCtx, m); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("failed to migrate database: %w", err)
+			}
+		}
+	}
 
 	LogDatabase(MsgDatabaseInitSuccess)
 	return nil
@@ -272,9 +300,23 @@ func GetRemindersForUser(ctx context.Context, userID snowflake.ID) ([]*Reminder,
 		if err != nil {
 			return nil, err
 		}
-		r.UserID, _ = snowflake.Parse(uid)
-		r.ChannelID, _ = snowflake.Parse(cid)
-		r.GuildID, _ = snowflake.Parse(gid)
+		r.UserID, err = snowflake.Parse(uid)
+		if err != nil {
+			LogError("Failed to parse user ID '%s' for reminder %d: %v", uid, r.ID, err)
+			continue
+		}
+		r.ChannelID, err = snowflake.Parse(cid)
+		if err != nil {
+			LogError("Failed to parse channel ID '%s' for reminder %d: %v", cid, r.ID, err)
+			continue
+		}
+		r.GuildID, err = snowflake.Parse(gid)
+		if err != nil {
+			// Guild ID can be empty for DMs, but if it's there it should be valid
+			if gid != "" {
+				LogError("Failed to parse guild ID '%s' for reminder %d: %v", gid, r.ID, err)
+			}
+		}
 		reminders = append(reminders, r)
 	}
 	return reminders, nil
@@ -299,9 +341,22 @@ func ClaimDueReminders(ctx context.Context) ([]*Reminder, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.UserID, _ = snowflake.Parse(uid)
-		r.ChannelID, _ = snowflake.Parse(cid)
-		r.GuildID, _ = snowflake.Parse(gid)
+		r.UserID, err = snowflake.Parse(uid)
+		if err != nil {
+			LogError("Failed to parse user ID '%s' for claimed reminder %d: %v", uid, r.ID, err)
+			continue
+		}
+		r.ChannelID, err = snowflake.Parse(cid)
+		if err != nil {
+			LogError("Failed to parse channel ID '%s' for claimed reminder %d: %v", cid, r.ID, err)
+			continue
+		}
+		r.GuildID, err = snowflake.Parse(gid)
+		if err != nil {
+			if gid != "" {
+				LogError("Failed to parse guild ID '%s' for claimed reminder %d: %v", gid, r.ID, err)
+			}
+		}
 		reminders = append(reminders, r)
 	}
 	return reminders, nil
@@ -325,9 +380,22 @@ func GetDueReminders(ctx context.Context) ([]*Reminder, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.UserID, _ = snowflake.Parse(uid)
-		r.ChannelID, _ = snowflake.Parse(cid)
-		r.GuildID, _ = snowflake.Parse(gid)
+		r.UserID, err = snowflake.Parse(uid)
+		if err != nil {
+			LogError("Failed to parse user ID '%s' for due reminder %d: %v", uid, r.ID, err)
+			continue
+		}
+		r.ChannelID, err = snowflake.Parse(cid)
+		if err != nil {
+			LogError("Failed to parse channel ID '%s' for due reminder %d: %v", cid, r.ID, err)
+			continue
+		}
+		r.GuildID, err = snowflake.Parse(gid)
+		if err != nil {
+			if gid != "" {
+				LogError("Failed to parse guild ID '%s' for due reminder %d: %v", gid, r.ID, err)
+			}
+		}
 		reminders = append(reminders, r)
 	}
 	return reminders, nil
@@ -455,7 +523,10 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 		return nil, err
 	}
 
-	config.ChannelID, _ = snowflake.Parse(idStr)
+	config.ChannelID, err = snowflake.Parse(idStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse channel ID: %w", err)
+	}
 	config.Message = message.String
 	if config.Message == "" {
 		config.Message = "@everyone"
@@ -504,7 +575,11 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 			continue
 		}
 
-		config.ChannelID, _ = snowflake.Parse(idStr)
+		config.ChannelID, err = snowflake.Parse(idStr)
+		if err != nil {
+			LogError("Failed to parse channel ID '%s' for loop config: %v", idStr, err)
+			continue
+		}
 		config.Message = message.String
 		if config.Message == "" {
 			config.Message = "@everyone"
@@ -525,7 +600,7 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 	return configs, nil
 }
 
-func DeleteLoopConfig(ctx context.Context, channelID snowflake.ID) error {
+func DeleteLoopConfigDB(ctx context.Context, channelID snowflake.ID) error {
 	_, err := DB.ExecContext(ctx, "DELETE FROM loop_channels WHERE channel_id = ?", channelID.String())
 	return err
 }
@@ -571,7 +646,10 @@ func GetGuildRandomColorRole(ctx context.Context, guildID snowflake.ID) (snowfla
 	if err == sql.ErrNoRows || !roleIDStr.Valid || roleIDStr.String == "" {
 		return 0, nil
 	}
-	roleID, _ := snowflake.Parse(roleIDStr.String)
+	roleID, err := snowflake.Parse(roleIDStr.String)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse role ID: %w", err)
+	}
 	return roleID, err
 }
 
@@ -588,8 +666,16 @@ func GetAllGuildRandomColorConfigs(ctx context.Context) (map[snowflake.ID]snowfl
 		if err := rows.Scan(&gStr, &rStr); err != nil {
 			continue
 		}
-		gID, _ := snowflake.Parse(gStr)
-		rID, _ := snowflake.Parse(rStr)
+		gID, err := snowflake.Parse(gStr)
+		if err != nil {
+			LogError("Failed to parse guild ID '%s' in random colors: %v", gStr, err)
+			continue
+		}
+		rID, err := snowflake.Parse(rStr)
+		if err != nil {
+			LogError("Failed to parse role ID '%s' in random colors: %v", rStr, err)
+			continue
+		}
 		configs[gID] = rID
 	}
 	return configs, nil

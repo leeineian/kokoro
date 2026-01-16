@@ -22,6 +22,9 @@ tmp/
 .bot.pid
 *.log
 *cache/
+*tracks/
+*.opus
+*.part
 
 # Testing
 *.test
@@ -39,6 +42,8 @@ minder
 backup
 *.sh
 *.txt
+.BACKUP.go
+*.bak
 
 # IDE
 .vscode/

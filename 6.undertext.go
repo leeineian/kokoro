@@ -1,4 +1,4 @@
-package home
+package main
 
 import (
 	"fmt"
@@ -8,11 +8,14 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
-	"github.com/leeineian/minder/sys"
 )
 
+// ===========================
+// Command Registration
+// ===========================
+
 func init() {
-	sys.RegisterCommand(discord.SlashCommandCreate{
+	RegisterCommand(discord.SlashCommandCreate{
 		Name:        "undertext",
 		Description: "Generate an Undertale/Deltarune style text box image",
 		Options: []discord.ApplicationCommandOption{
@@ -97,7 +100,7 @@ func init() {
 		},
 	}, handleUndertext)
 
-	sys.RegisterAutocompleteHandler("undertext", undertextAutocomplete)
+	RegisterAutocompleteHandler("undertext", undertextAutocomplete)
 }
 
 // Undertext command shared utilities
@@ -126,6 +129,7 @@ var undertextCharacters = []struct {
 	{"Spamton (Deltarune)", "spamton"},
 }
 
+// undertextAutocomplete provides character name autocomplete suggestions
 func undertextAutocomplete(event *events.AutocompleteInteractionCreate) {
 	data := event.Data
 
@@ -150,7 +154,7 @@ func undertextAutocomplete(event *events.AutocompleteInteractionCreate) {
 
 	// Filter characters based on input
 	for _, char := range undertextCharacters {
-		if focusedValue == "" || containsIgnoreCase(char.Name, focusedValue) || containsIgnoreCase(char.Value, focusedValue) {
+		if focusedValue == "" || ContainsIgnoreCase(char.Name, focusedValue) || ContainsIgnoreCase(char.Value, focusedValue) {
 			choices = append(choices, discord.AutocompleteChoiceString{
 				Name:  char.Name,
 				Value: char.Value,
@@ -164,6 +168,7 @@ func undertextAutocomplete(event *events.AutocompleteInteractionCreate) {
 	event.AutocompleteResult(choices)
 }
 
+// handleUndertext generates an Undertale/Deltarune style text box image
 func handleUndertext(event *events.ApplicationCommandInteractionCreate) {
 	data := event.SlashCommandInteractionData()
 
@@ -258,7 +263,7 @@ func handleUndertext(event *events.ApplicationCommandInteractionCreate) {
 
 	err := event.CreateMessage(builder.Build())
 	if err != nil {
-		sys.LogUndertext(sys.MsgUndertextRespondError, err)
+		LogUndertext(MsgUndertextRespondError, err)
 	}
 }
 
@@ -280,13 +285,16 @@ func processUndertextColors(input string) string {
 	})
 }
 
-func containsIgnoreCase(s, substr string) bool {
+// ContainsIgnoreCase checks if a string contains a substring (case-insensitive).
+func ContainsIgnoreCase(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr ||
 		len(substr) == 0 ||
-		(len(s) > 0 && containsLower(s, substr)))
+		(len(s) > 0 && ContainsLower(s, substr)))
 }
 
-func containsLower(s, substr string) bool {
+// ContainsLower checks if a string contains a substring (case-insensitive).
+// Both strings are converted to lowercase before comparison.
+func ContainsLower(s, substr string) bool {
 	s = strings.ToLower(s)
 	substr = strings.ToLower(substr)
 	return strings.Contains(s, substr)

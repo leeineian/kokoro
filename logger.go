@@ -1,4 +1,4 @@
-package sys
+package main
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -89,7 +90,7 @@ func InitLogger(silent bool, saveToFile bool) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open %s: %v\n", logName, err)
 		} else {
-			writer = io.MultiWriter(os.Stdout, logFile)
+			writer = io.MultiWriter(os.Stdout, NewStripANSIWriter(logFile))
 		}
 	}
 
@@ -109,63 +110,63 @@ func SetSilentMode(silent bool) {
 
 // --- Public Logging API ---
 
-func LogInfo(format string, v ...interface{}) {
+func LogInfo(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...))
 }
 
-func LogWarn(format string, v ...interface{}) {
+func LogWarn(format string, v ...any) {
 	slog.Warn(fmt.Sprintf(format, v...))
 }
 
-func LogError(format string, v ...interface{}) {
+func LogError(format string, v ...any) {
 	slog.Error(fmt.Sprintf(format, v...))
 }
 
-func LogFatal(format string, v ...interface{}) {
+func LogFatal(format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
 	slog.Log(context.Background(), slog.LevelError+4, msg)
-	os.Exit(1)
+	panic(msg) // Panic ensures defers run (cleaning up PID file, DB connections, etc)
 }
 
-func LogDebug(format string, v ...interface{}) {
+func LogDebug(format string, v ...any) {
 	slog.Debug(fmt.Sprintf(format, v...))
 }
 
 // Component Loggers
 
-func LogDatabase(format string, v ...interface{}) {
+func LogDatabase(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "database"))
 }
 
-func LogReminder(format string, v ...interface{}) {
+func LogReminder(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "reminder"))
 }
 
-func LogStatusRotator(format string, v ...interface{}) {
+func LogStatusRotator(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "session"))
 }
 
-func LogRoleColorRotator(format string, v ...interface{}) {
+func LogRoleColorRotator(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "role"))
 }
 
-func LogLoopManager(format string, v ...interface{}) {
+func LogLoopManager(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loop"))
 }
 
-func LogCat(format string, v ...interface{}) {
+func LogCat(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "cat"))
 }
 
-func LogUndertext(format string, v ...interface{}) {
+func LogUndertext(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "undertext"))
 }
 
-func LogVoice(format string, v ...interface{}) {
+func LogVoice(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "voice"))
 }
 
-func LogCustom(tag string, tagColor *color.Color, format string, v ...interface{}) {
+func LogCustom(tag string, tagColor *color.Color, format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", tag))
 }
 
@@ -308,14 +309,6 @@ func colorizeWithResets(c *color.Color, text string) string {
 	return c.Sprint(modifiedText)
 }
 
-func ColorizeHex(colorInt int) string {
-	hex := fmt.Sprintf("#%06X", colorInt)
-	r := (colorInt >> 16) & 0xFF
-	g := (colorInt >> 8) & 0xFF
-	b := colorInt & 0xFF
-	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm⬤ %s\x1b[0m", r, g, b, hex)
-}
-
 // --- Utilities & State ---
 
 func GetLogPath() string {
@@ -375,6 +368,30 @@ func GetUserErrors() map[string]string {
 	})
 
 	return errorMapCache
+}
+
+// --- ANSI Stripper ---
+
+type StripANSIWriter struct {
+	w  io.Writer
+	re *regexp.Regexp
+}
+
+func NewStripANSIWriter(w io.Writer) *StripANSIWriter {
+	// Standard ANSI escape code regex
+	return &StripANSIWriter{
+		w:  w,
+		re: regexp.MustCompile(`\x1b\[[0-9;]*m`),
+	}
+}
+
+func (s *StripANSIWriter) Write(p []byte) (n int, err error) {
+	// Remove ANSI codes
+	clean := s.re.ReplaceAll(p, []byte(""))
+	_, err = s.w.Write(clean)
+	// Return the original length to satisfy io.Writer contract
+	// (otherwise callers might think it's a partial write)
+	return len(p), err
 }
 
 // --- Message Constants ---

@@ -2,7 +2,7 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -15,11 +15,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.5'
+          go-version: "1.25.5"
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
 
       - name: Build Binary
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -o minder .
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -o minder .
 
       - name: Prepare VPS for Upload
         uses: appleboy/ssh-action@v1.2.4
@@ -52,4 +57,3 @@ jobs:
             chmod +x minder
             nohup ./minder >> minder.log 2>&1 &
             sleep 1
-

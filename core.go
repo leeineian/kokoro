@@ -8,41 +8,38 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	_ "github.com/leeineian/minder/home"
-	_ "github.com/leeineian/minder/proc"
-	"github.com/leeineian/minder/sys"
 )
 
 func main() {
 	// 1. Load configuration early
-	cfg, err := sys.LoadConfig()
+	cfg, err := LoadConfig()
 	if err != nil {
-		sys.LogError("Failed to load config: %v", err)
+		LogError("Failed to load config: %v", err)
 	}
 
 	silent := flag.Bool("silent", false, "Disable all log output")
 	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
-	noLogFile := flag.Bool("no-log-file", false, "Disable logging to file")
 	flag.Parse()
 
 	// 2. Initialize Logger (handle flags)
-	sys.InitLogger(*silent, !*noLogFile)
+	InitLogger(*silent, true)
 
 	// 3. Try to detect bot name
-	botName := sys.GetProjectName()
+	botName := GetProjectName()
 	if cfg != nil && cfg.Token != "" {
-		if name, err := sys.GetBotUsername(cfg.Token); err == nil {
+		if name, err := GetBotUsername(cfg.Token); err == nil {
 			botName = name
+		} else {
+			LogError("Failed to get bot username: %v", err)
 		}
 	}
 
-	sys.LogInfo(sys.MsgBotStarting, botName)
+	LogInfo(MsgBotStarting, botName)
 
 	// 4. Open or create the PID file
 	f, err := os.OpenFile(".bot.pid", os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		sys.LogFatal("Failed to open PID file: %v", err)
+		LogFatal("Failed to open PID file: %v", err)
 	}
 	defer f.Close()
 
@@ -54,7 +51,7 @@ func main() {
 		}
 
 		if err != syscall.EWOULDBLOCK {
-			sys.LogFatal("Failed to lock PID file: %v", err)
+			LogFatal("Failed to lock PID file: %v", err)
 		}
 
 		// Lock is held by another process. Read the PID and kill it.
@@ -78,7 +75,7 @@ func main() {
 			continue
 		}
 
-		sys.LogInfo(sys.MsgBotKillingOld, oldPid)
+		LogInfo(MsgBotKillingOld, oldPid)
 		_ = process.Signal(syscall.SIGTERM)
 
 		// Wait up to 5 seconds for it to exit
@@ -92,12 +89,12 @@ func main() {
 		}
 
 		if !terminated {
-			sys.LogWarn("Old process %d is stubborn. Sending SIGKILL...", oldPid)
+			LogWarn("Old process %d is stubborn. Sending SIGKILL...", oldPid)
 			_ = process.Signal(syscall.SIGKILL)
 			time.Sleep(200 * time.Millisecond) // Give OS time to clean up
 		}
 
-		sys.LogInfo(sys.MsgBotOldTerminated)
+		LogInfo(MsgBotOldTerminated)
 		// Loop will retry Flock on next iteration
 	}
 
@@ -115,12 +112,12 @@ func main() {
 
 	// 7. Run bot (blocks until shutdown signal)
 	if err := run(cfg, *silent, *skipReg); err != nil {
-		sys.LogFatal(sys.MsgGenericError, err)
+		LogFatal(MsgGenericError, err)
 	}
 
 	// 8. Handle Reboot
-	if sys.RestartRequested {
-		sys.LogInfo("Self-restarting process...")
+	if RestartRequested {
+		LogInfo("Self-restarting process...")
 		// Manually trigger cleanup since syscall.Exec won't run defers
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
@@ -140,49 +137,54 @@ func main() {
 			args = append(args, "-skip-reg")
 		}
 
-		err := syscall.Exec(args[0], args, os.Environ())
+		exePath, err := os.Executable()
 		if err != nil {
-			sys.LogFatal("Failed to re-execute: %v", err)
+			LogFatal("Failed to resolve executable path: %v", err)
+		}
+
+		err = syscall.Exec(exePath, args, os.Environ())
+		if err != nil {
+			LogFatal("Failed to re-execute: %v", err)
 		}
 	}
 }
 
-func run(cfg *sys.Config, silent bool, skipReg bool) error {
+func run(cfg *Config, silent bool, skipReg bool) error {
 	// 1. Setup global context that responds to shutdown signals
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	sys.SetAppContext(ctx)
+	SetAppContext(ctx)
 
 	// 2. Config is already loaded, but ensure it's valid
 	if cfg == nil {
 		var err error
-		cfg, err = sys.LoadConfig()
+		cfg, err = LoadConfig()
 		if err != nil {
-			return fmt.Errorf(sys.MsgConfigFailedToLoad, err)
+			return fmt.Errorf(MsgConfigFailedToLoad, err)
 		}
 	}
 
 	// 3. Create disgo client
-	client, err := sys.CreateClient(ctx, cfg)
+	client, err := CreateClient(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create Discord client: %w", err)
 	}
 	defer client.Close(ctx)
 
 	// 4. Initialize database
-	if err := sys.InitDatabase(ctx, cfg.DatabasePath); err != nil {
+	if err := InitDatabase(ctx, cfg.DatabasePath); err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
-	defer sys.CloseDatabase()
+	defer CloseDatabase()
 
 	// 5. Command Registration
 	if !skipReg {
-		if err := sys.RegisterCommands(client, cfg.GuildID); err != nil {
-			sys.LogError(sys.MsgBotRegisterFail, err)
+		if err := RegisterCommands(client, cfg.GuildID); err != nil {
+			LogError(MsgBotRegisterFail, err)
 		}
 	} else {
-		sys.LogInfo("Skipping command registration as requested.")
+		LogInfo("Skipping command registration as requested.")
 	}
 
 	// 6. Connect to Gateway
@@ -195,11 +197,15 @@ func run(cfg *sys.Config, silent bool, skipReg bool) error {
 		fmt.Println()
 	}
 
+	// Graceful Shutdown
+	LogInfo("Shutting down all daemons...")
+	ShutdownDaemons(context.Background())
+
 	// Dynamic shutdown logging
 	if botUser, ok := client.Caches.SelfUser(); ok {
-		sys.LogInfo(sys.MsgBotShutdown, botUser.Username)
+		LogInfo(MsgBotShutdown, botUser.Username)
 	} else {
-		sys.LogInfo(sys.MsgBotShutdown, sys.GetProjectName())
+		LogInfo(MsgBotShutdown, GetProjectName())
 	}
 
 	return nil
