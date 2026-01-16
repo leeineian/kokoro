@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo add-apt-repository ppa:ubuntuhandbook1/ffmpeg8 -y
           sudo apt-get update
-          sudo apt-get install -y gcc pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libswresample-dev libswscale-dev libavutil-dev libpostproc-dev
+          sudo apt-get install -y gcc pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libswresample-dev libswscale-dev libavutil-dev
 
       # 1. Run Tests
       - name: Run Tests
