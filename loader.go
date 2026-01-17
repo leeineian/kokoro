@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -39,6 +41,7 @@ func safeGo(f func()) {
 var AppContext context.Context
 var RestartRequested bool
 var daemonsOnce sync.Once
+var StartupTime = time.Now()
 
 var commands = []discord.ApplicationCommandCreate{}
 var commandHandlers = map[string]func(event *events.ApplicationCommandInteractionCreate){}
@@ -153,7 +156,17 @@ func OnClientReady(cb func(ctx context.Context, client *bot.Client)) {
 
 // --- Command Syncing Logic ---
 
-func RegisterCommands(client *bot.Client, guildIDStr string) error {
+// calculateCommandHash generates a SHA256 hash of the commands slice
+func calculateCommandHash(cmds []discord.ApplicationCommandCreate) string {
+	data, err := json.Marshal(cmds)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) error {
 	ctx := context.Background()
 	_, _ = GetBotConfig(ctx, "last_reg_mode")
 	lastGuildID, _ := GetBotConfig(ctx, "last_guild_id")
@@ -166,24 +179,65 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 
 	LogInfo(MsgLoaderSyncCommands, strings.ToUpper(currentMode))
 
+	currentHash := calculateCommandHash(commands)
+	lastHash, _ := GetBotConfig(ctx, "last_cmd_hash")
+	lastMode, _ := GetBotConfig(ctx, "last_reg_mode")
+
+	shouldRegister := true
+	if currentHash != "" && currentHash == lastHash && currentMode == lastMode && !forceScan {
+		shouldRegister = false
+		LogInfo("[LOADER] Commands are up to date. (Hash: %s)", currentHash[:8])
+	}
+
 	// 1. Production Mode (Global)
 	if isProduction {
-		LogInfo(MsgLoaderProdStarting)
-		createdCommands, err := client.Rest.SetGlobalCommands(client.ApplicationID, commands)
-		if err != nil {
-			return fmt.Errorf(MsgLoaderProdFail, err)
+		if shouldRegister {
+			LogInfo(MsgLoaderProdStarting)
+			createdCommands, err := client.Rest.SetGlobalCommands(client.ApplicationID, commands)
+			if err != nil {
+				return fmt.Errorf(MsgLoaderProdFail, err)
+			}
+			for _, cmd := range createdCommands {
+				LogInfo(MsgLoaderProdRegistered, cmd.Name())
+			}
 		}
-		for _, cmd := range createdCommands {
-			LogInfo(MsgLoaderProdRegistered, cmd.Name())
+
+		// Automatic Scan: Find and clear any guild commands that might be "ghosting"
+		// This replaces the need for shared databases or manual environment variables
+		// Optimized: Now checks conditions and attempts to parallelize or skip if possible
+		// (We still scan if we just switched modes to be safe, or if forced)
+		shouldScan := forceScan || (lastMode != currentMode)
+		if shouldScan {
+			LogInfo(MsgLoaderScanStarting)
+			if guilds, err := client.Rest.GetCurrentUserGuilds("", 0, 0, 100, false); err == nil {
+				var wg sync.WaitGroup
+				// Limit concurrency to avoid rate limits
+				sem := make(chan struct{}, 5)
+
+				for _, g := range guilds {
+					wg.Add(1)
+					go func(guild discord.OAuth2Guild) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+
+						if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, guild.ID, false); err == nil && len(cmds) > 0 {
+							LogInfo(MsgLoaderScanCleared, guild.Name, guild.ID.String())
+							_, _ = client.Rest.SetGuildCommands(client.ApplicationID, guild.ID, []discord.ApplicationCommandCreate{})
+						}
+					}(g)
+				}
+				wg.Wait()
+			}
 		}
 
 		// Cleanup: If we transitioned from a Guild or have a stale Guild in history, check it
-		targetClear := lastGuildID
-		if targetClear != "" {
-			if id, err := snowflake.Parse(targetClear); err == nil {
-				// Only send DELETE if there is something to delete (saves rate limits)
+		if lastGuildID != "" {
+			if id, err := snowflake.Parse(lastGuildID); err == nil {
+				// Only check if we didn't just scan it above (simple check: if we scanned everything, we covered it)
+				// But since we optimizing, let's just do it sequentially as a fallback for the specific dev guild
 				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, id, false); err == nil && len(cmds) > 0 {
-					LogInfo(MsgLoaderCleanup, targetClear)
+					LogInfo(MsgLoaderCleanup, lastGuildID)
 					_, _ = client.Rest.SetGuildCommands(client.ApplicationID, id, []discord.ApplicationCommandCreate{})
 				}
 			}
@@ -195,22 +249,27 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 			return fmt.Errorf("invalid GUILD_ID: %w", err)
 		}
 
-		LogInfo(MsgLoaderDevStarting, guildIDStr)
-		createdCommands, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands)
-		if err != nil {
-			LogWarn(MsgLoaderDevFail, err)
-		} else {
-			for _, cmd := range createdCommands {
-				LogInfo(MsgLoaderDevRegistered, cmd.Name())
+		if shouldRegister {
+			LogInfo(MsgLoaderDevStarting, guildIDStr)
+			createdCommands, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands)
+			if err != nil {
+				LogWarn(MsgLoaderDevFail, err)
+			} else {
+				for _, cmd := range createdCommands {
+					LogInfo(MsgLoaderDevRegistered, cmd.Name())
+				}
 			}
 		}
 
 		// Reconcile Global: Ensure no global commands compete with our dev guild
-		if cmds, err := client.Rest.GetGlobalCommands(client.ApplicationID, false); err == nil && len(cmds) > 0 {
-			LogInfo(MsgLoaderDevGlobalClear)
-			_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
-			if err != nil {
-				LogWarn(MsgLoaderDevGlobalClearFail, err)
+		// Only check if we switched modes or force scan
+		if lastMode != currentMode || forceScan {
+			if cmds, err := client.Rest.GetGlobalCommands(client.ApplicationID, false); err == nil && len(cmds) > 0 {
+				LogInfo(MsgLoaderDevGlobalClear)
+				_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
+				if err != nil {
+					LogWarn(MsgLoaderDevGlobalClearFail, err)
+				}
 			}
 		}
 
@@ -223,6 +282,40 @@ func RegisterCommands(client *bot.Client, guildIDStr string) error {
 				}
 			}
 		}
+
+		// Optional: Force Scan in guild mode if requested
+		if forceScan {
+			LogInfo(MsgLoaderScanStarting)
+			if guilds, err := client.Rest.GetCurrentUserGuilds("", 0, 0, 100, false); err == nil {
+				var wg sync.WaitGroup
+				sem := make(chan struct{}, 5)
+
+				for _, g := range guilds {
+					if g.ID == guildID {
+						continue // Skip current dev guild
+					}
+					wg.Add(1)
+					go func(guild discord.OAuth2Guild) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+
+						if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, guild.ID, false); err == nil && len(cmds) > 0 {
+							LogInfo(MsgLoaderScanCleared, guild.Name, guild.ID.String())
+							_, _ = client.Rest.SetGuildCommands(client.ApplicationID, guild.ID, []discord.ApplicationCommandCreate{})
+						}
+					}(g)
+				}
+				wg.Wait()
+			}
+		}
+	}
+
+	// 3. Update State
+	_ = SetBotConfig(ctx, "last_reg_mode", currentMode)
+	_ = SetBotConfig(ctx, "last_guild_id", guildIDStr)
+	if currentHash != "" {
+		_ = SetBotConfig(ctx, "last_cmd_hash", currentHash)
 	}
 
 	// 3. Update State
@@ -239,7 +332,8 @@ func onReady(event *events.Ready) {
 	botUser := event.User
 
 	// 1. Final Status
-	LogInfo(MsgBotReady, botUser.Username, botUser.ID.String(), os.Getpid())
+	duration := time.Since(StartupTime)
+	LogInfo(MsgBotReady, botUser.Username, botUser.ID.String(), os.Getpid(), duration.Milliseconds())
 
 	// 2. Background Daemons
 	TriggerClientReady(AppContext, client)
@@ -309,19 +403,32 @@ func RegisterDaemon(logger func(format string, v ...any), starter func(ctx conte
 // StartDaemons starts all registered daemons with their individual colored logging
 func StartDaemons(ctx context.Context) {
 	daemonsOnce.Do(func() {
+		type activeDaemon struct {
+			entry daemonEntry
+			run   func()
+		}
+		var active []activeDaemon
+
+		// 1. Evaluate starters sequentially to determine active daemons
 		for _, daemon := range registeredDaemons {
-			// Launch each daemon in parallel to avoid blocking on DB reads or setup
-			go func(d daemonEntry) {
-				if ok, run, shutdown := d.starter(ctx); ok && run != nil {
-					if shutdown != nil {
-						activeShutdownMu.Lock()
-						activeShutdownHooks = append(activeShutdownHooks, shutdown)
-						activeShutdownMu.Unlock()
-					}
-					d.logger(MsgDaemonStarting)
-					run()
+			if ok, run, shutdown := daemon.starter(ctx); ok && run != nil {
+				if shutdown != nil {
+					activeShutdownMu.Lock()
+					activeShutdownHooks = append(activeShutdownHooks, shutdown)
+					activeShutdownMu.Unlock()
 				}
-			}(daemon)
+				active = append(active, activeDaemon{daemon, run})
+			}
+		}
+
+		// 2. Log all "Starting..." messages sequentially
+		for _, ad := range active {
+			ad.entry.logger(MsgDaemonStarting)
+		}
+
+		// 3. Launch the actual daemon loops in parallel
+		for _, ad := range active {
+			go ad.run()
 		}
 	})
 }

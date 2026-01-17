@@ -11,6 +11,19 @@ import (
 )
 
 func main() {
+	// 0. Recover from panics (LogFatal uses panic to ensure defers run)
+	defer func() {
+		if r := recover(); r != nil {
+			// If it's a string, it's likely from LogFatal
+			if msg, ok := r.(string); ok {
+				fmt.Fprintf(os.Stderr, "\n[FATAL] %s\n", msg)
+				os.Exit(1)
+			}
+			// Otherwise re-panic
+			panic(r)
+		}
+	}()
+
 	// 1. Load configuration early
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -19,6 +32,7 @@ func main() {
 
 	silent := flag.Bool("silent", false, "Disable all log output")
 	skipReg := flag.Bool("skip-reg", false, "Skip command registration")
+	clearAll := flag.Bool("clear-all", false, "Force clear guild commands (scan all guilds)")
 	flag.Parse()
 
 	// 2. Initialize Logger (handle flags)
@@ -111,7 +125,7 @@ func main() {
 	}()
 
 	// 7. Run bot (blocks until shutdown signal)
-	if err := run(cfg, *silent, *skipReg); err != nil {
+	if err := run(cfg, *silent, *skipReg, *clearAll); err != nil {
 		LogFatal(MsgGenericError, err)
 	}
 
@@ -149,7 +163,7 @@ func main() {
 	}
 }
 
-func run(cfg *Config, silent bool, skipReg bool) error {
+func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 	// 1. Setup global context that responds to shutdown signals
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -180,7 +194,7 @@ func run(cfg *Config, silent bool, skipReg bool) error {
 
 	// 5. Command Registration
 	if !skipReg {
-		if err := RegisterCommands(client, cfg.GuildID); err != nil {
+		if err := RegisterCommands(client, cfg.GuildID, clearAll); err != nil {
 			LogError(MsgBotRegisterFail, err)
 		}
 	} else {

@@ -405,7 +405,7 @@ const (
 	MsgDatabasePragmaError = "Failed to set pragma %s: %w"
 	MsgDaemonStarting      = "Starting..."
 	MsgBotStarting         = "Starting %s..."
-	MsgBotReady            = "%s is ready! (ID: %s) (PID: %d)"
+	MsgBotReady            = "%s is ready! (ID: %s) (PID: %d) (Took: %dms)"
 	MsgBotShutdown         = "Shutting down %s..."
 	MsgBotKillingOld       = "Killing running instance... (PID: %d)"
 	MsgBotKillFail         = "Failed to kill old instance: %v"
@@ -427,6 +427,8 @@ const (
 	MsgLoaderProdStarting       = "[PROD] Registering commands globally..."
 	MsgLoaderProdRegistered     = "[PROD] Registered: %s"
 	MsgLoaderProdFail           = "[PROD] Global registration failed: %w"
+	MsgLoaderScanStarting       = "[SCAN] Checking all guilds for ghost commands..."
+	MsgLoaderScanCleared        = "[SCAN] Cleared ghost commands from: %s (%s)"
 	MsgLoaderPanicRecovered     = "Panic recovered in handler: %v"
 
 	// --- Cat System ---

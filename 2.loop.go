@@ -227,6 +227,7 @@ func InitLoopManager(ctx context.Context, client *bot.Client) (bool, func(), fun
 
 	// Register rate limit failsafe
 	OnRateLimitExceeded(func() {
+		LogLoopManager("🛑 Loop system fail-safe triggered. Stopping all active operations.")
 		StopAllLoops(ctx, client)
 	})
 
@@ -234,29 +235,25 @@ func InitLoopManager(ctx context.Context, client *bot.Client) (bool, func(), fun
 		LogLoopManager("⚠️ Failed to reset loop states: %v", err)
 	}
 
-	configs, err := GetAllLoopConfigs(ctx)
-	if err != nil {
-		LogLoopManager(MsgLoopFailedToLoadConfigs, err)
-		return false, nil, nil
-	}
-
-	if len(configs) == 0 {
-		return false, nil, nil
-	}
-
-	for _, config := range configs {
-		data := &ChannelData{
-			Config: config,
-			Hooks:  nil,
+	return true, func() {
+		configs, err := GetAllLoopConfigs(ctx)
+		if err != nil {
+			LogLoopManager(MsgLoopFailedToLoadConfigs, err)
+			return
 		}
-		configuredChannels.Store(config.ChannelID, data)
-	}
 
-	if len(configs) > 0 {
-		LogLoopManager(MsgLoopLoadedChannels, len(configs))
-	}
+		for _, config := range configs {
+			data := &ChannelData{
+				Config: config,
+				Hooks:  nil,
+			}
+			configuredChannels.Store(config.ChannelID, data)
+		}
 
-	return true, nil, func() { ShutdownLoopManager(ctx, client) }
+		if len(configs) > 0 {
+			LogLoopManager(MsgLoopLoadedChannels, len(configs))
+		}
+	}, func() { ShutdownLoopManager(ctx, client) }
 }
 
 // ShutdownLoopManager gracefully stops all active loops
@@ -946,7 +943,6 @@ func StopAllLoops(ctx context.Context, client *bot.Client) {
 	if !atomic.CompareAndSwapInt32(&isEmergencyStop, 0, 1) {
 		return
 	}
-	LogLoopManager("🛑 Loop system fail-safe triggered. Stopping all active operations.")
 	activeLoops.Range(func(key, value any) bool {
 		StopLoopInternal(ctx, key.(snowflake.ID), client)
 		return true

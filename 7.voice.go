@@ -50,7 +50,7 @@ func init() {
 		RegisterDaemon(LogVoice, func(ctx context.Context) (bool, func(), func()) {
 			return true, func() {}, func() {
 				if VoiceManager != nil {
-					LogVoice("Shutting down voice manager...")
+					LogVoice("Shutting down Voice Manager...")
 					VoiceManager.Shutdown(context.Background())
 				}
 			}
@@ -253,10 +253,13 @@ func (vs *VoiceSystem) Prepare(client *bot.Client, guildID, channelID snowflake.
 		downloadSem: make(chan struct{}, 3),
 		client:      client,
 		statusChan:  make(chan string, 10),
+		queueUpdate: make(chan struct{}, 1),
+		joinedChan:  make(chan struct{}),
+		pauseChan:   make(chan struct{}), // Start paused/blocking? No, start running.
 	}
-	sess.queueCond = sync.NewCond(&sess.queueMu)
-	sess.joinedCond = sync.NewCond(&sess.joinedMu)
-	sess.pausedCond = sync.NewCond(&sess.pausedMu)
+	// Start unpaused (closed channel = running)
+	close(sess.pauseChan)
+
 	// Track goroutines for cleanup
 	sess.goroutineWg.Add(1)
 	go func() {
@@ -293,8 +296,9 @@ func (vs *VoiceSystem) Join(ctx context.Context, client *bot.Client, guildID, ch
 	}
 	sess.joinedMu.Lock()
 	sess.joined = true
-
-	sess.joinedCond.Broadcast()
+	sess.joinedOnce.Do(func() {
+		close(sess.joinedChan)
+	})
 	sess.joinedMu.Unlock()
 	// Track processQueue goroutine
 	sess.goroutineWg.Add(1)
@@ -393,7 +397,11 @@ func (vs *VoiceSystem) Play(ctx context.Context, guildID snowflake.ID, url, mode
 	} else {
 		s.queue = append(s.queue, t)
 	}
-	s.queueCond.Signal()
+	// Signal queue update
+	select {
+	case s.queueUpdate <- struct{}{}:
+	default:
+	}
 	s.queueMu.Unlock()
 	go s.downloadTrack(t)
 	s.addToHistory(url, "", "")
@@ -468,15 +476,34 @@ func (vs *VoiceSystem) onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 			}
 		}
 	}
-	s.pausedMu.Lock()
-	paused := s.paused
-	s.pausedMu.Unlock()
+	s.pauseMu.RLock()
+	paused := false
+	select {
+	case <-s.pauseChan:
+		// Closed = running, Open = paused
+		// Wait, if closed it returns immediately.
+		// If I want to know if "paused", I check if I CANNOT read immediately?
+		// No, if closed, I can read. If open (paused) and empty, I cannot read.
+		// So IsClosed() -> true if running.
+		// So paused = !IsClosed()
+	default:
+		paused = true
+	}
+	s.pauseMu.RUnlock()
 	if humanCount == 0 && !paused {
 		LogVoice("Pausing playback in guild %s (No humans)", event.VoiceState.GuildID)
-		s.pausedMu.Lock()
-		s.paused = true
-		s.pausedCond.Broadcast()
-		s.pausedMu.Unlock()
+		s.pauseMu.Lock()
+		// Recheck
+		isClosed := false
+		select {
+		case <-s.pauseChan:
+			isClosed = true
+		default:
+		}
+		if isClosed {
+			s.pauseChan = make(chan struct{})
+		}
+		s.pauseMu.Unlock()
 		s.statusMu.Lock()
 		status := s.lastStatus
 		s.statusMu.Unlock()
@@ -494,10 +521,18 @@ func (vs *VoiceSystem) onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 		}
 	} else if humanCount > 0 && paused {
 		LogVoice("Resuming playback in guild %s", event.VoiceState.GuildID)
-		s.pausedMu.Lock()
-		s.paused = false
-		s.pausedCond.Broadcast()
-		s.pausedMu.Unlock()
+		s.pauseMu.Lock()
+		// Recheck
+		isClosed := false
+		select {
+		case <-s.pauseChan:
+			isClosed = true
+		default:
+		}
+		if !isClosed {
+			close(s.pauseChan)
+		}
+		s.pauseMu.Unlock()
 		s.statusMu.Lock()
 		status := s.lastStatus
 		if status == "" {
@@ -520,10 +555,11 @@ type VoiceSession struct {
 	Conn                   voice.Conn
 	queue                  []*Track
 	queueMu                sync.Mutex
-	queueCond              *sync.Cond
+	queueUpdate            chan struct{}
 	joined                 bool
 	joinedMu               sync.Mutex
-	joinedCond             *sync.Cond
+	joinedChan             chan struct{}
+	joinedOnce             sync.Once
 	downloadSem            chan struct{}
 	cancelCtx              context.Context
 	cancelFunc             context.CancelFunc
@@ -534,9 +570,8 @@ type VoiceSession struct {
 	client                 *bot.Client
 	currentTrack           *Track
 	lastStatus             string
-	paused                 bool
-	pausedMu               sync.Mutex
-	pausedCond             *sync.Cond
+	pauseChan              chan struct{} // Closed = Playing, Open = Paused
+	pauseMu                sync.RWMutex
 	skipLoop               bool
 	autoplayTrack          *Track
 	statusMu               sync.Mutex
@@ -585,42 +620,14 @@ func (s *VoiceSession) Seek(duration time.Duration) error {
 
 // WaitJoined waits for the bot to join the voice channel
 func (s *VoiceSession) WaitJoined(ctx context.Context) error {
-	// Start a goroutine to broadcast when context is canceled
-	// This prevents deadlock when Wait() is blocking and context gets canceled
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			s.joinedCond.Broadcast()
-		case <-s.cancelCtx.Done():
-			s.joinedCond.Broadcast()
-		case <-done:
-		}
-	}()
-
-	s.joinedMu.Lock()
-	defer s.joinedMu.Unlock()
-	for !s.joined {
-		// Check context before waiting
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-s.cancelCtx.Done():
-			return errors.New("session closed")
-		default:
-		}
-		s.joinedCond.Wait()
-		// Check context after waking up
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-s.cancelCtx.Done():
-			return errors.New("session closed")
-		default:
-		}
+	select {
+	case <-s.joinedChan:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.cancelCtx.Done():
+		return errors.New("session closed")
 	}
-	return nil
 }
 
 // Stop stops playback and clears the queue
@@ -651,9 +658,10 @@ func (s *VoiceSession) Stop() {
 	s.autoplayTrack = nil
 
 	// Wake up any waiting goroutines
-	s.queueCond.Broadcast()
-	s.joinedCond.Broadcast()
-	s.pausedCond.Broadcast()
+	select {
+	case s.queueUpdate <- struct{}{}:
+	default:
+	}
 	s.queueMu.Unlock()
 
 	s.setVoiceStatus("")
@@ -775,34 +783,17 @@ func (s *VoiceSession) setOpusFrameProviderSafe(provider voice.OpusFrameProvider
 
 // processQueue processes tracks from the queue and handles playback
 func (s *VoiceSession) processQueue() {
-	// Start a goroutine to broadcast when context is canceled
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-s.cancelCtx.Done():
-			s.queueCond.Broadcast()
-		case <-done:
-		}
-	}()
+	// Channels handle cancellation automatically via select.
 
 	for {
 		s.queueMu.Lock()
-		for len(s.queue) == 0 {
-			// Check if canceled before waiting
+		if len(s.queue) == 0 {
+			s.queueMu.Unlock()
 			select {
+			case <-s.queueUpdate:
+				continue
 			case <-s.cancelCtx.Done():
-				s.queueMu.Unlock()
 				return
-			default:
-			}
-			s.queueCond.Wait()
-			// Check if canceled after waking up
-			select {
-			case <-s.cancelCtx.Done():
-				s.queueMu.Unlock()
-				return
-			default:
 			}
 		}
 		t := s.queue[0]
@@ -887,8 +878,11 @@ func (s *VoiceSession) processQueue() {
 				next := s.autoplayTrack
 				s.autoplayTrack = nil
 				s.queue = append(s.queue, next)
+				select {
+				case s.queueUpdate <- struct{}{}:
+				default:
+				}
 				s.queueMu.Unlock()
-				s.queueCond.Signal()
 				continue
 			} else {
 				s.queueMu.Unlock()
@@ -1184,36 +1178,19 @@ func (p *StreamProvider) PushFrame(f []byte) {
 }
 
 func (p *StreamProvider) ProvideOpusFrame() ([]byte, error) {
-	// Start a goroutine to broadcast when context is canceled
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-p.sess.cancelCtx.Done():
-			p.sess.pausedCond.Broadcast()
-		case <-done:
-		}
-	}()
+	// Wait for pause or cancel
+	// With channels, we handle this in the flow below.
+	// But we still need to respect cancel.
 
-	p.sess.pausedMu.Lock()
-	for p.sess.paused {
-		// Check if canceled before waiting
-		select {
-		case <-p.sess.cancelCtx.Done():
-			p.sess.pausedMu.Unlock()
-			return nil, io.EOF
-		default:
-		}
-		p.sess.pausedCond.Wait()
-		// Check if canceled after waking up
-		select {
-		case <-p.sess.cancelCtx.Done():
-			p.sess.pausedMu.Unlock()
-			return nil, io.EOF
-		default:
-		}
+	p.sess.pauseMu.RLock()
+	pauseChan := p.sess.pauseChan
+	p.sess.pauseMu.RUnlock()
+
+	select {
+	case <-pauseChan: // Returns if closed (running)
+	case <-p.sess.cancelCtx.Done():
+		return nil, io.EOF
 	}
-	p.sess.pausedMu.Unlock()
 	select {
 	case f := <-p.frames:
 		if f == nil {
@@ -1290,12 +1267,23 @@ func (t *AstiavTranscoder) OpenInput(in string, r io.Reader) error {
 		t.inputCtx.SetPb(ioCtx)
 		t.inputCtx.SetFlags(t.inputCtx.Flags().Add(astiav.FormatContextFlagCustomIo))
 
+		// Dynamic optimization:
+		// Use file extension hints to adjust probe size.
+		// MP4/M4A containers can have large headers (moov atoms), so we allow more probing.
+		// Streamable formats (WebM/Opus/MP3) work fine with small buffers for fast start.
+		ps, ad := "128000", "2000000" // Default: 128KB, 2s
+		if strings.HasSuffix(strings.ToLower(in), ".mp4") || strings.HasSuffix(strings.ToLower(in), ".m4a") {
+			ps, ad = "1000000", "5000000" // 1MB, 5s
+		}
+
 		opts := astiav.NewDictionary()
 		defer opts.Free()
-		opts.Set("probesize", "10000000", 0)
-		opts.Set("analyzeduration", "10000000", 0)
+		opts.Set("probesize", ps, 0)
+		opts.Set("analyzeduration", ad, 0)
 
-		if err := t.inputCtx.OpenInput("", nil, opts); err != nil {
+		// Pass 'in' as filename hint even when using custom IO.
+		// This helps FFmpeg guess the format faster without reading as much data.
+		if err := t.inputCtx.OpenInput(in, nil, opts); err != nil {
 			return err
 		}
 	} else {
@@ -2280,8 +2268,17 @@ type ytdlpSearchResult struct {
 	Duration             time.Duration
 }
 
+// newYtdlp returns a new yt-dlp command with a modern user agent and reliable player client
+func newYtdlp() *ytdlp.Command {
+	cmd := ytdlp.New()
+	// Set a modern user agent to reduce bot detection
+	cmd.AddHeaders("User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	return cmd.Quiet().NoWarnings()
+}
+
 func ytdlpSearch(ctx context.Context, q string, m int) ([]ytdlpSearchResult, error) {
-	res, err := ytdlp.New().
+	res, err := newYtdlp().
 		FlatPlaylist().
 		Print("%(url)s\t%(title)s\t%(uploader)s\t%(duration)s").
 		PlaylistItems(fmt.Sprintf("1-%d", m)).
@@ -2306,7 +2303,7 @@ func ytdlpSearch(ctx context.Context, q string, m int) ([]ytdlpSearchResult, err
 	return rs, nil
 }
 func ytdlpSearchYTM(ctx context.Context, q string, m int) ([]ytdlpSearchResult, error) {
-	res, err := ytdlp.New().
+	res, err := newYtdlp().
 		FlatPlaylist().
 		Print("%(url)s\t%(title)s\t%(uploader)s\t%(duration)s").
 		PlaylistItems(fmt.Sprintf("1-%d", m)).
@@ -2336,9 +2333,9 @@ type ytdlpMetadata struct {
 }
 
 func ytdlpExtractMetadata(ctx context.Context, u string) (*ytdlpMetadata, error) {
-	res, err := ytdlp.New().
+	res, err := newYtdlp().
 		Print("%(url)s\t%(title)s\t%(uploader)s\t%(duration)s\t%(id)s\t%(filename)s").
-		Format("bestaudio[ext=webm]/bestaudio").
+		Format("bestaudio/best").
 		Output(filepath.Join(AudioCacheDir, "%(id)s.%(ext)s")).
 		NoCheckFormats().
 		NoWarnings().
@@ -2395,8 +2392,8 @@ func isLikelyMusicStreamingSite(url string) bool {
 }
 
 func ytdlpStream(ctx context.Context, u string, out io.Writer) (*ytdlpMetadata, error) {
-	cmd := ytdlp.New().
-		Format("bestaudio[ext=webm]/bestaudio").
+	cmd := newYtdlp().
+		Format("bestaudio/best").
 		Output("-").
 		NoSimulate().
 		NoPart().
@@ -2431,7 +2428,7 @@ func ytdlpStream(ctx context.Context, u string, out io.Writer) (*ytdlpMetadata, 
 }
 
 func ytdlpResolveMetadata(ctx context.Context, u string) (string, string, string, time.Duration, error) {
-	res, err := ytdlp.New().
+	res, err := newYtdlp().
 		Print("%(title)s\t%(uploader)s\t%(duration)s\t%(id)s").
 		NoSimulate().
 		IgnoreConfig().
@@ -2461,7 +2458,7 @@ func ytdlpResolveMetadata(ctx context.Context, u string) (string, string, string
 type ytdlpPlaylistEntry struct{ URL, Title, Uploader string }
 
 func ytdlpExtractPlaylist(ctx context.Context, u string, m int) ([]ytdlpPlaylistEntry, error) {
-	res, err := ytdlp.New().
+	res, err := newYtdlp().
 		FlatPlaylist().
 		Print("%(url)s\t%(title)s\t%(uploader)s").
 		PlaylistItems(fmt.Sprintf("1-%d", m)).

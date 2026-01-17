@@ -302,19 +302,17 @@ func GetRemindersForUser(ctx context.Context, userID snowflake.ID) ([]*Reminder,
 		}
 		r.UserID, err = snowflake.Parse(uid)
 		if err != nil {
-			LogError("Failed to parse user ID '%s' for reminder %d: %v", uid, r.ID, err)
-			continue
+			return nil, fmt.Errorf("failed to parse user ID '%s' for reminder %d: %w", uid, r.ID, err)
 		}
 		r.ChannelID, err = snowflake.Parse(cid)
 		if err != nil {
-			LogError("Failed to parse channel ID '%s' for reminder %d: %v", cid, r.ID, err)
-			continue
+			return nil, fmt.Errorf("failed to parse channel ID '%s' for reminder %d: %w", cid, r.ID, err)
 		}
 		r.GuildID, err = snowflake.Parse(gid)
 		if err != nil {
 			// Guild ID can be empty for DMs, but if it's there it should be valid
 			if gid != "" {
-				LogError("Failed to parse guild ID '%s' for reminder %d: %v", gid, r.ID, err)
+				return nil, fmt.Errorf("failed to parse guild ID '%s' for reminder %d: %w", gid, r.ID, err)
 			}
 		}
 		reminders = append(reminders, r)
@@ -343,18 +341,16 @@ func ClaimDueReminders(ctx context.Context) ([]*Reminder, error) {
 		}
 		r.UserID, err = snowflake.Parse(uid)
 		if err != nil {
-			LogError("Failed to parse user ID '%s' for claimed reminder %d: %v", uid, r.ID, err)
-			continue
+			return nil, fmt.Errorf("failed to parse user ID '%s' for claimed reminder %d: %w", uid, r.ID, err)
 		}
 		r.ChannelID, err = snowflake.Parse(cid)
 		if err != nil {
-			LogError("Failed to parse channel ID '%s' for claimed reminder %d: %v", cid, r.ID, err)
-			continue
+			return nil, fmt.Errorf("failed to parse channel ID '%s' for claimed reminder %d: %w", cid, r.ID, err)
 		}
 		r.GuildID, err = snowflake.Parse(gid)
 		if err != nil {
 			if gid != "" {
-				LogError("Failed to parse guild ID '%s' for claimed reminder %d: %v", gid, r.ID, err)
+				return nil, fmt.Errorf("failed to parse guild ID '%s' for claimed reminder %d: %w", gid, r.ID, err)
 			}
 		}
 		reminders = append(reminders, r)
@@ -382,18 +378,16 @@ func GetDueReminders(ctx context.Context) ([]*Reminder, error) {
 		}
 		r.UserID, err = snowflake.Parse(uid)
 		if err != nil {
-			LogError("Failed to parse user ID '%s' for due reminder %d: %v", uid, r.ID, err)
-			continue
+			return nil, fmt.Errorf("failed to parse user ID '%s' for due reminder %d: %w", uid, r.ID, err)
 		}
 		r.ChannelID, err = snowflake.Parse(cid)
 		if err != nil {
-			LogError("Failed to parse channel ID '%s' for due reminder %d: %v", cid, r.ID, err)
-			continue
+			return nil, fmt.Errorf("failed to parse channel ID '%s' for due reminder %d: %w", cid, r.ID, err)
 		}
 		r.GuildID, err = snowflake.Parse(gid)
 		if err != nil {
 			if gid != "" {
-				LogError("Failed to parse guild ID '%s' for due reminder %d: %v", gid, r.ID, err)
+				return nil, fmt.Errorf("failed to parse guild ID '%s' for due reminder %d: %w", gid, r.ID, err)
 			}
 		}
 		reminders = append(reminders, r)
@@ -572,13 +566,12 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 			&votePanel, &voteRole, &voteMessage, &config.VoteThreshold,
 		)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan loop config: %w", err)
 		}
 
 		config.ChannelID, err = snowflake.Parse(idStr)
 		if err != nil {
-			LogError("Failed to parse channel ID '%s' for loop config: %v", idStr, err)
-			continue
+			return nil, fmt.Errorf("failed to parse channel ID '%s' for loop config: %w", idStr, err)
 		}
 		config.Message = message.String
 		if config.Message == "" {
@@ -664,17 +657,15 @@ func GetAllGuildRandomColorConfigs(ctx context.Context) (map[snowflake.ID]snowfl
 	for rows.Next() {
 		var gStr, rStr string
 		if err := rows.Scan(&gStr, &rStr); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan guild config: %w", err)
 		}
 		gID, err := snowflake.Parse(gStr)
 		if err != nil {
-			LogError("Failed to parse guild ID '%s' in random colors: %v", gStr, err)
-			continue
+			return nil, fmt.Errorf("failed to parse guild ID '%s' in random colors: %w", gStr, err)
 		}
 		rID, err := snowflake.Parse(rStr)
 		if err != nil {
-			LogError("Failed to parse role ID '%s' in random colors: %v", rStr, err)
-			continue
+			return nil, fmt.Errorf("failed to parse role ID '%s' in random colors: %w", rStr, err)
 		}
 		configs[gID] = rID
 	}

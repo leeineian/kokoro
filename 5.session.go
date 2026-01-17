@@ -96,6 +96,10 @@ func init() {
 					},
 				},
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "cleanup",
+				Description: "Clear all guild commands from the current server",
+			},
 		},
 	}, handleSession)
 
@@ -328,6 +332,8 @@ func handleSession(event *events.ApplicationCommandInteractionCreate) {
 		handleSessionStatus(event, data)
 	case "console":
 		handleSessionConsole(event, data)
+	case "cleanup":
+		handleSessionCleanup(event)
 	default:
 		log.Printf("Unknown session subcommand: %s", subCmd)
 	}
@@ -474,6 +480,22 @@ func handleSessionStats(event *events.ApplicationCommandInteractionCreate, data 
 			}
 		}
 	}()
+}
+
+func handleSessionCleanup(event *events.ApplicationCommandInteractionCreate) {
+	guildID := event.GuildID()
+	if guildID == nil {
+		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("This command can only be used in a server.").SetEphemeral(true).Build())
+		return
+	}
+
+	_, err := event.Client().Rest.SetGuildCommands(event.ApplicationID(), *guildID, []discord.ApplicationCommandCreate{})
+	if err != nil {
+		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("Failed to clear commands: %v", err)).SetEphemeral(true).Build())
+		return
+	}
+
+	_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("Successfully cleared all guild commands from this server.").SetEphemeral(true).Build())
 }
 
 func handleSessionConsole(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
