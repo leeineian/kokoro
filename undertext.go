@@ -284,18 +284,3 @@ func processUndertextColors(input string) string {
 		return fmt.Sprintf("color=%s %s text=join color=white ", color, text)
 	})
 }
-
-// ContainsIgnoreCase checks if a string contains a substring (case-insensitive).
-func ContainsIgnoreCase(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		len(substr) == 0 ||
-		(len(s) > 0 && ContainsLower(s, substr)))
-}
-
-// ContainsLower checks if a string contains a substring (case-insensitive).
-// Both strings are converted to lowercase before comparison.
-func ContainsLower(s, substr string) bool {
-	s = strings.ToLower(s)
-	substr = strings.ToLower(substr)
-	return strings.Contains(s, substr)
-}

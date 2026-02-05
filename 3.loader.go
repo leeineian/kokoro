@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -62,7 +64,7 @@ func SetAppContext(ctx context.Context) {
 // --- Bot Initialization ---
 
 // CreateClient creates and configures a disgo client
-func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
+func CreateClient(ctx context.Context, cfg *Config, _ snowflake.ID) (*bot.Client, error) {
 	client, err := disgo.New(cfg.Token,
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
@@ -88,6 +90,16 @@ func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
 		bot.WithEventListenerFunc(onVoiceStateUpdate),
 		bot.WithEventListenerFunc(onReady),
 		bot.WithLogger(slog.Default()),
+		bot.WithRestClientConfigOpts(
+			rest.WithHTTPClient(&http.Client{
+				Timeout: 60 * time.Second,
+				Transport: &http.Transport{
+					MaxIdleConns:        1000,
+					MaxIdleConnsPerHost: 500,
+					IdleConnTimeout:     90 * time.Second,
+				},
+			}),
+		),
 	)
 	if err != nil {
 		return nil, err
@@ -96,31 +108,68 @@ func CreateClient(ctx context.Context, cfg *Config) (*bot.Client, error) {
 	return client, nil
 }
 
-// GetBotUsername fetches the bot's username using the provided token
-func GetBotUsername(token string) (string, error) {
+// GetBotUsername fetches the bot's username and ID using the provided token, with caching
+func GetBotUsername(ctx context.Context, token string) (string, snowflake.ID, error) {
+	// 1. Check Cache First
+	cachedName, _ := GetBotConfig(ctx, "cached_bot_name")
+	cachedIDStr, _ := GetBotConfig(ctx, "cached_bot_id")
+
+	var cachedID snowflake.ID
+	if cachedIDStr != "" {
+		if id, err := snowflake.Parse(cachedIDStr); err == nil {
+			cachedID = id
+		}
+	}
+
+	if cachedName != "" && cachedID != 0 {
+		return cachedName, cachedID, nil
+	}
+
+	// 2. API Call
 	req, err := http.NewRequest("GET", "https://discord.com/api/v10/users/@me", nil)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.Header.Set("Authorization", "Bot "+token)
 
 	resp, err := HttpClient.Do(req)
 	if err != nil {
-		return "", err
+		if cachedName != "" {
+			return cachedName, cachedID, nil
+		}
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf(MsgBotAPIStatusError, resp.StatusCode)
+		if resp.StatusCode == 429 {
+			if cachedName != "" {
+				return cachedName, cachedID, nil
+			}
+			return GetProjectName(), 0, nil
+		}
+		if cachedName != "" {
+			return cachedName, cachedID, nil
+		}
+		return "", 0, fmt.Errorf(MsgBotAPIStatusError, resp.StatusCode)
 	}
 
 	var user struct {
-		Username string `json:"username"`
+		ID       snowflake.ID `json:"id"`
+		Username string       `json:"username"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
-		return "", err
+		if cachedName != "" {
+			return cachedName, cachedID, nil
+		}
+		return "", 0, err
 	}
-	return user.Username, nil
+
+	// 3. Update Cache
+	_ = SetBotConfig(ctx, "cached_bot_name", user.Username)
+	_ = SetBotConfig(ctx, "cached_bot_id", user.ID.String())
+
+	return user.Username, user.ID, nil
 }
 
 // --- Command & Handler Registration ---
@@ -202,16 +251,11 @@ func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) err
 			}
 		}
 
-		// Automatic Scan: Find and clear any guild commands that might be "ghosting"
-		// This replaces the need for shared databases or manual environment variables
-		// Optimized: Now checks conditions and attempts to parallelize or skip if possible
-		// (We still scan if we just switched modes to be safe, or if forced)
 		shouldScan := forceScan || (lastMode != currentMode)
 		if shouldScan {
 			LogInfo(MsgLoaderScanStarting)
 			if guilds, err := client.Rest.GetCurrentUserGuilds("", 0, 0, 100, false); err == nil {
 				var wg sync.WaitGroup
-				// Limit concurrency to avoid rate limits
 				sem := make(chan struct{}, 5)
 
 				for _, g := range guilds {
@@ -231,11 +275,8 @@ func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) err
 			}
 		}
 
-		// Cleanup: If we transitioned from a Guild or have a stale Guild in history, check it
 		if lastGuildID != "" {
 			if id, err := snowflake.Parse(lastGuildID); err == nil {
-				// Only check if we didn't just scan it above (simple check: if we scanned everything, we covered it)
-				// But since we optimizing, let's just do it sequentially as a fallback for the specific dev guild
 				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, id, false); err == nil && len(cmds) > 0 {
 					LogInfo(MsgLoaderCleanup, lastGuildID)
 					_, _ = client.Rest.SetGuildCommands(client.ApplicationID, id, []discord.ApplicationCommandCreate{})
@@ -261,8 +302,6 @@ func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) err
 			}
 		}
 
-		// Reconcile Global: Ensure no global commands compete with our dev guild
-		// Only check if we switched modes or force scan
 		if lastMode != currentMode || forceScan {
 			if cmds, err := client.Rest.GetGlobalCommands(client.ApplicationID, false); err == nil && len(cmds) > 0 {
 				LogInfo(MsgLoaderDevGlobalClear)
@@ -273,7 +312,6 @@ func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) err
 			}
 		}
 
-		// Reconcile Transitions: Clear previous dev guild if it changed
 		if lastGuildID != "" && lastGuildID != guildIDStr {
 			if oldID, err := snowflake.Parse(lastGuildID); err == nil {
 				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, oldID, false); err == nil && len(cmds) > 0 {
@@ -283,7 +321,6 @@ func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) err
 			}
 		}
 
-		// Optional: Force Scan in guild mode if requested
 		if forceScan {
 			LogInfo(MsgLoaderScanStarting)
 			if guilds, err := client.Rest.GetCurrentUserGuilds("", 0, 0, 100, false); err == nil {
@@ -292,7 +329,7 @@ func RegisterCommands(client *bot.Client, guildIDStr string, forceScan bool) err
 
 				for _, g := range guilds {
 					if g.ID == guildID {
-						continue // Skip current dev guild
+						continue
 					}
 					wg.Add(1)
 					go func(guild discord.OAuth2Guild) {
@@ -395,7 +432,6 @@ var activeShutdownHooks []func()
 var activeShutdownMu sync.Mutex
 
 // RegisterDaemon registers a background daemon with a logger and start function
-// The starter function returns: (shouldStart, runFunc, shutdownFunc)
 func RegisterDaemon(logger func(format string, v ...any), starter func(ctx context.Context) (bool, func(), func())) {
 	registeredDaemons = append(registeredDaemons, daemonEntry{starter: starter, logger: logger})
 }

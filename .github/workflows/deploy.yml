@@ -25,7 +25,7 @@ jobs:
 
       - name: Build Binary
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -o minder .
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -o kokoro .
 
       - name: Prepare VPS for Upload
         uses: appleboy/ssh-action@v1.2.4
@@ -34,8 +34,8 @@ jobs:
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            mkdir -p ~/minder
-            [ -f ~/minder/minder ] && mv ~/minder/minder ~/minder/minder.old || true
+            mkdir -p ~/kokoro
+            [ -f ~/kokoro/kokoro ] && mv ~/kokoro/kokoro ~/kokoro/kokoro.old || true
 
       - name: Upload Binary to VPS
         uses: appleboy/scp-action@v1.0.0
@@ -43,8 +43,8 @@ jobs:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
-          source: "minder"
-          target: "~/minder/"
+          source: "kokoro"
+          target: "~/kokoro/"
           overwrite: true
 
       - name: Restart Bot on VPS
@@ -54,7 +54,7 @@ jobs:
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
-            cd ~/minder
-            chmod +x minder
-            nohup ./minder >> minder.log 2>&1 &
+            cd ~/kokoro
+            chmod +x kokoro
+            nohup ./kokoro >> kokoro.log 2>&1 &
             sleep 1

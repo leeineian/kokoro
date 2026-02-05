@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
@@ -23,13 +24,13 @@ import (
 
 var (
 	// Level colors
-	infoColor  = color.New(color.FgBlack)
+	infoColor  = color.New()
 	warnColor  = color.New(color.FgYellow)
 	errorColor = color.New(color.FgRed)
 	fatalColor = color.New(color.FgRed, color.Bold)
 
 	// Component colors
-	databaseColor      = color.New(color.FgBlack)
+	databaseColor      = color.New()
 	reminderColor      = color.New(color.FgMagenta)
 	statusRotatorColor = color.New(color.FgMagenta)
 	roleRotatorColor   = color.New(color.FgMagenta)
@@ -55,7 +56,6 @@ var (
 // --- Initialization ---
 
 func init() {
-	// Initialize with a default handler immediately (Stdout only)
 	InitLogger(false, false)
 }
 
@@ -125,7 +125,7 @@ func LogError(format string, v ...any) {
 func LogFatal(format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
 	slog.Log(context.Background(), slog.LevelError+4, msg)
-	panic(msg) // Panic ensures defers run (cleaning up PID file, DB connections, etc)
+	panic(msg)
 }
 
 func LogDebug(format string, v ...any) {
@@ -231,6 +231,10 @@ func (h *BotLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	if r.Level >= slog.LevelWarn && strings.Contains(strings.ToLower(r.Message), "rate limit exceeded") {
 		if onRateLimitExceeded != nil {
 			go onRateLimitExceeded()
+		}
+
+		if atomic.LoadInt32(&isCleaningThreads) > 0 {
+			return nil
 		}
 	}
 
@@ -378,7 +382,6 @@ type StripANSIWriter struct {
 }
 
 func NewStripANSIWriter(w io.Writer) *StripANSIWriter {
-	// Standard ANSI escape code regex
 	return &StripANSIWriter{
 		w:  w,
 		re: regexp.MustCompile(`\x1b\[[0-9;]*m`),
@@ -386,11 +389,8 @@ func NewStripANSIWriter(w io.Writer) *StripANSIWriter {
 }
 
 func (s *StripANSIWriter) Write(p []byte) (n int, err error) {
-	// Remove ANSI codes
 	clean := s.re.ReplaceAll(p, []byte(""))
 	_, err = s.w.Write(clean)
-	// Return the original length to satisfy io.Writer contract
-	// (otherwise callers might think it's a partial write)
 	return len(p), err
 }
 
@@ -443,11 +443,11 @@ const (
 	MsgCatFailedToSendErrorResponse = "Failed to send error response: %v"
 	MsgCatFactAPIUnreachable        = "**API Unreachable**: The cat fact service is currently offline or timing out.\n> _%v_"
 	MsgCatImageAPIUnreachable       = "**API Unreachable**: The cat image service is currently offline or timing out.\n> _%v_"
-	MsgCatSystemStatus              = "**Minder Cat System Status**\n\n" +
+	MsgCatSystemStatus              = "**Cat System Status**\n\n" +
 		"**External APIs:**\n" +
 		"> • Cat Facts: `https://catfact.ninja/fact`\n" +
 		"> • Cat Images: `https://api.thecatapi.com/v1`\n" +
-		"> • ASCII Engine: `Minder Internal ANSI v1`\n\n" +
+		"> • ASCII Engine: `Kokoro Internal ANSI v1`\n\n" +
 		"**Usage Tip:** Use `/cat say` with `catcolor` and `expression` for custom ASCII art!"
 	MsgCatAPIStatusErrorDisp      = "**Service Error**: The API returned an unexpected status code: **%d %s**"
 	MsgCatDataError               = "**Data Error**: Failed to read the response body from the API."
@@ -562,6 +562,7 @@ const (
 	MsgLoopStatsVoteReaction     = "> • Vote Reaction: %s\n"
 	MsgLoopStatsVoteThreshold    = "> • Vote Threshold: `%d%%`\n"
 	MsgLoopStatsVoteMsg          = "> • Vote Message: `%s`\n"
+	MsgLoopStatsQueue            = "> • Queue: `%s`\n"
 	MsgLoopStatusStopped         = "🔴"
 	MsgLoopStatusRunning         = "🟢"
 	MsgLoopStatusRound           = " (Round %d)"

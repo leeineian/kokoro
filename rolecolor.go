@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	mrand "math/rand"
 	"sync"
 	"time"
 
@@ -558,25 +557,4 @@ func roleColorRespond(event *events.ApplicationCommandInteractionCreate, content
 		).
 		SetEphemeral(true).
 		Build())
-}
-
-// ===========================
-// Utilities
-// ===========================
-
-// RandomIntRange returns a random integer in the range [min, max] inclusive.
-func RandomIntRange(min, max int) int {
-	if min > max {
-		min, max = max, min
-	}
-	return mrand.Intn(max-min+1) + min
-}
-
-// ColorizeHex returns a colored hex string with a colored circle indicator.
-func ColorizeHex(colorInt int) string {
-	hex := fmt.Sprintf("#%06X", colorInt)
-	r := (colorInt >> 16) & 0xFF
-	g := (colorInt >> 8) & 0xFF
-	b := colorInt & 0xFF
-	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm⬤ %s\x1b[0m", r, g, b, hex)
 }

@@ -73,10 +73,11 @@ func init() {
 				Name:        "status",
 				Description: "Configure bot status visibility",
 				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionBool{
-						Name:        "visible",
-						Description: "Enable or disable status rotation",
-						Required:    true,
+					discord.ApplicationCommandOptionString{
+						Name:         "select",
+						Description:  "Select a specific status to pin or enable/disable rotation",
+						Required:     true,
+						Autocomplete: true,
 					},
 				},
 			},
@@ -103,6 +104,7 @@ func init() {
 		},
 	}, handleSession)
 
+	RegisterAutocompleteHandler("session", handleSessionAutocomplete)
 	RegisterComponentHandler("console:", handleConsolePagination)
 }
 
@@ -145,15 +147,20 @@ const (
 	StatsAnsiPink     = "\u001b[35m"
 	StatsAnsiPinkBold = "\u001b[35;1m"
 	StatsCacheTTL     = 5 * time.Second
+
+	StatusDisableAll = "Disable All Status"
+	StatusEnableAll  = "Enable All Status"
 )
 
 var (
 	// Status Rotator State
 	StartTime       = time.Now().UTC()
-	statusList      []func(context.Context, *bot.Client) string
+	statusMap       map[string]func(context.Context, *bot.Client) string
+	statusKeys      []string
 	lastStatusText  string
 	statusMu        sync.RWMutex
 	configKeyStatus = "status_visible"
+	configKeyPin    = "status_pinned"
 
 	// Stats State
 	statsStartTime = time.Now().UTC()
@@ -173,12 +180,17 @@ func GetRotationInterval() time.Duration {
 // StartStatusRotator starts the status rotation daemon
 func StartStatusRotator(ctx context.Context, client *bot.Client) (bool, func(), func()) {
 	// Always start the daemon even if currently disabled, so it can be re-enabled at runtime
-	statusList = []func(context.Context, *bot.Client) string{
-		GetRemindersStatus,
-		GetColorStatus,
-		GetUptimeStatus,
-		GetLatencyStatus,
-		GetTimeStatus,
+	statusMap = map[string]func(context.Context, *bot.Client) string{
+		"Reminders": GetRemindersStatus,
+		"Color":     GetColorStatus,
+		"Uptime":    GetUptimeStatus,
+		"Latency":   GetLatencyStatus,
+		"Time":      GetTimeStatus,
+	}
+
+	statusKeys = []string{StatusDisableAll, StatusEnableAll}
+	for k := range statusMap {
+		statusKeys = append(statusKeys, k)
 	}
 
 	return true, func() {
@@ -198,7 +210,7 @@ func StartStatusRotator(ctx context.Context, client *bot.Client) (bool, func(), 
 		}
 }
 
-// updateStatus updates the bot's status with the next status in rotation
+// updateStatus sections selects the next status to display
 func updateStatus(ctx context.Context, client *bot.Client, nextInterval time.Duration) {
 	if client == nil {
 		return
@@ -206,12 +218,30 @@ func updateStatus(ctx context.Context, client *bot.Client, nextInterval time.Dur
 
 	visibleStr, err := GetBotConfig(ctx, configKeyStatus)
 	if err != nil || visibleStr == "false" {
-		client.SetPresence(ctx, gateway.WithOnlineStatus(discord.OnlineStatusOnline))
+		err := client.SetPresence(ctx, gateway.WithOnlineStatus(discord.OnlineStatusOnline), gateway.WithPlayingActivity(""))
+		if err != nil {
+			LogStatusRotator("Failed to clear status: %v", err)
+		}
 		return
 	}
 
+	// Check for Pinned Status
+	pinnedStatus, _ := GetBotConfig(ctx, configKeyPin)
+	if pinnedStatus != "" {
+		if gen, ok := statusMap[pinnedStatus]; ok {
+			text := gen(ctx, client)
+			if text != "" {
+				client.SetPresence(ctx,
+					gateway.WithOnlineStatus(discord.OnlineStatusOnline),
+					gateway.WithStreamingActivity(text, GlobalConfig.StreamingURL),
+				)
+				return
+			}
+		}
+	}
+
 	var availableStatuses []string
-	for _, gen := range statusList {
+	for _, gen := range statusMap {
 		if text := gen(ctx, client); text != "" {
 			availableStatuses = append(availableStatuses, text)
 		}
@@ -371,8 +401,9 @@ func handleSessionReboot(event *events.ApplicationCommandInteractionCreate, data
 	}
 
 	RestartRequested = true
-	time.Sleep(1500 * time.Millisecond)
-	_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	time.AfterFunc(1500*time.Millisecond, func() {
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	})
 }
 
 func handleSessionShutdown(event *events.ApplicationCommandInteractionCreate) {
@@ -382,33 +413,76 @@ func handleSessionShutdown(event *events.ApplicationCommandInteractionCreate) {
 		AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionShuttingDown))).
 		SetEphemeral(true).
 		Build())
-	time.Sleep(1 * time.Second)
-	_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	time.AfterFunc(1*time.Second, func() {
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	})
 }
 
 func handleSessionStatus(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
-	visible := data.Bool("visible")
-	if visible {
-		SetBotConfig(AppContext, "status_visible", "true")
-	} else {
-		SetBotConfig(AppContext, "status_visible", "false")
+	selection := data.String("select")
+	var msg string
+
+	switch selection {
+	case StatusDisableAll:
+		SetBotConfig(AppContext, configKeyStatus, "false")
+		SetBotConfig(AppContext, configKeyPin, "")
+		msg = MsgSessionStatusDisabled
+	case StatusEnableAll:
+		SetBotConfig(AppContext, configKeyStatus, "true")
+		SetBotConfig(AppContext, configKeyPin, "")
+		msg = MsgSessionStatusEnabled
+	default:
+		if _, ok := statusMap[selection]; ok {
+			SetBotConfig(AppContext, configKeyStatus, "true")
+			SetBotConfig(AppContext, configKeyPin, selection)
+			msg = fmt.Sprintf("Status has been pinned to **%s**.", selection)
+		} else {
+			msg = "Invalid status selection."
+		}
 	}
 
-	content := MsgSessionStatusUpdated
-	if visible {
-		content = MsgSessionStatusEnabled
-	} else {
-		content = MsgSessionStatusDisabled
-	}
+	// Trigger immediate update
+	go func() {
+		updateStatus(AppContext, event.Client(), 0)
+	}()
 
 	err := event.CreateMessage(discord.NewMessageCreateBuilder().
 		SetIsComponentsV2(true).
-		AddComponents(discord.NewContainer(discord.NewTextDisplay(content))).
+		AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
 		SetEphemeral(true).
 		Build())
 	if err != nil {
 		LogDebug(MsgDebugStatusCmdFail, err)
 	}
+}
+
+func handleSessionAutocomplete(event *events.AutocompleteInteractionCreate) {
+	data := event.Data
+	input := data.String("select")
+
+	var choices []discord.AutocompleteChoice
+	for _, key := range statusKeys {
+		name := key
+		// If this key maps to a generator, try to get the dynamic string
+		if gen, ok := statusMap[key]; ok {
+			dynamicVal := gen(AppContext, event.Client())
+			if dynamicVal != "" {
+				name = dynamicVal
+			}
+		}
+
+		if input == "" || strings.Contains(strings.ToLower(name), strings.ToLower(input)) || strings.Contains(strings.ToLower(key), strings.ToLower(input)) {
+			choices = append(choices, discord.AutocompleteChoiceString{
+				Name:  name,
+				Value: key,
+			})
+		}
+		if len(choices) >= 25 {
+			break
+		}
+	}
+
+	_ = event.AutocompleteResult(choices)
 }
 
 func handleSessionStats(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
@@ -728,30 +802,4 @@ func readLogLines(path string, count, offset int) (string, bool, int, error) {
 		}
 	}
 	return logs, actual+count < found, actual, nil
-}
-
-// ===========================
-// Utilities
-// ===========================
-
-// Min returns the minimum of two integers.
-func Min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// Max returns the maximum of two integers.
-func Max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// Atoi converts a string to an integer, returning 0 on error.
-func Atoi(s string) int {
-	i, _ := strconv.Atoi(s)
-	return i
 }

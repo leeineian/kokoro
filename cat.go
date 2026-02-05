@@ -282,7 +282,7 @@ func generateCatSay(message, msgColor, bubColor, catColor, expression string) st
 		calcWidth = 40
 	}
 
-	lines := catWrapText(message, calcWidth)
+	lines := WrapText(message, calcWidth)
 	maxLen := 0
 	for _, l := range lines {
 		if len(l) > maxLen {
@@ -366,37 +366,6 @@ func generateCatSay(message, msgColor, bubColor, catColor, expression string) st
 	sb.WriteString(fmt.Sprintf("%s      %s> ^ <%s", catIndent, catColorCode, catReset))
 
 	return sb.String()
-}
-
-// catWrapText wraps text to fit within the specified width, breaking on word boundaries
-func catWrapText(text string, width int) []string {
-	var lines []string
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return lines
-	}
-
-	var sb strings.Builder
-	currentLen := 0
-
-	sb.WriteString(words[0])
-	currentLen = len(words[0])
-
-	for _, word := range words[1:] {
-		wordLen := len(word)
-		if currentLen+1+wordLen > width {
-			lines = append(lines, sb.String())
-			sb.Reset()
-			sb.WriteString(word)
-			currentLen = wordLen
-		} else {
-			sb.WriteString(" ")
-			sb.WriteString(word)
-			currentLen += 1 + wordLen
-		}
-	}
-	lines = append(lines, sb.String())
-	return lines
 }
 
 // getCatAnsiCode converts a color name to its ANSI escape code

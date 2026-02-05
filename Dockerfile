@@ -16,7 +16,7 @@ COPY . .
 # Build the application
 # CGO_ENABLED=1 is required for github.com/mattn/go-sqlite3
 # Using -ldflags="-s -w" to reduce binary size
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -a -installsuffix cgo -o minder main.go
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -a -installsuffix cgo -o kokoro main.go
 
 # Run Stage
 FROM alpine:latest
@@ -29,10 +29,10 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/minder .
+COPY --from=builder /app/kokoro .
 
 # Create directory for persistent data (SQLite)
 RUN mkdir -p /app/data
 
 # Run the bot
-ENTRYPOINT ["./minder"]
+ENTRYPOINT ["./kokoro"]

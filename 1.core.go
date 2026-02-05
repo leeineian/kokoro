@@ -6,20 +6,21 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
+
+	"github.com/disgoorg/snowflake/v2"
 )
 
 func main() {
 	// 0. Recover from panics (LogFatal uses panic to ensure defers run)
 	defer func() {
 		if r := recover(); r != nil {
-			// If it's a string, it's likely from LogFatal
 			if msg, ok := r.(string); ok {
 				fmt.Fprintf(os.Stderr, "\n[FATAL] %s\n", msg)
 				os.Exit(1)
 			}
-			// Otherwise re-panic
 			panic(r)
 		}
 	}()
@@ -38,11 +39,19 @@ func main() {
 	// 2. Initialize Logger (handle flags)
 	InitLogger(*silent, true)
 
-	// 3. Try to detect bot name
+	// 3. Initialize Database
+	if err := InitDatabase(context.Background(), cfg.DatabasePath); err != nil {
+		LogFatal("Failed to initialize database: %v", err)
+	}
+	defer CloseDatabase()
+
+	// 4. Try to detect bot name
 	botName := GetProjectName()
+	var botID snowflake.ID
 	if cfg != nil && cfg.Token != "" {
-		if name, err := GetBotUsername(cfg.Token); err == nil {
+		if name, id, err := GetBotUsername(context.Background(), cfg.Token); err == nil {
 			botName = name
+			botID = id
 		} else {
 			LogError("Failed to get bot username: %v", err)
 		}
@@ -58,58 +67,79 @@ func main() {
 	defer f.Close()
 
 	// 5. Try to acquire an exclusive lock
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
-			break // Lock acquired!
+			break
 		}
 
 		if err != syscall.EWOULDBLOCK {
 			LogFatal("Failed to lock PID file: %v", err)
 		}
 
-		// Lock is held by another process. Read the PID and kill it.
 		var oldPid int
 		_, _ = f.Seek(0, 0)
 		if _, scanErr := fmt.Fscanf(f, "%d", &oldPid); scanErr != nil {
-			// File is empty or corrupt but locked? Wait a moment and retry.
-			time.Sleep(100 * time.Millisecond)
 			_ = f.Close()
+			<-ticker.C
 			f, _ = os.OpenFile(".bot.pid", os.O_RDWR|os.O_CREATE, 0644)
 			continue
 		}
 
 		if oldPid == os.Getpid() {
-			break // Should not happen with LOCK_EX, but safety first
+			break
 		}
 
 		process, procErr := os.FindProcess(oldPid)
 		if procErr != nil {
-			time.Sleep(100 * time.Millisecond)
+			<-ticker.C
 			continue
 		}
 
 		LogInfo(MsgBotKillingOld, oldPid)
 		_ = process.Signal(syscall.SIGTERM)
 
-		// Wait up to 5 seconds for it to exit
 		terminated := false
-		for i := 0; i < 50; i++ {
-			if err := process.Signal(syscall.Signal(0)); err != nil {
-				terminated = true
-				break
+		timeout := time.After(5 * time.Second)
+	waitLoop:
+		for {
+			select {
+			case <-ticker.C:
+				if err := process.Signal(syscall.Signal(0)); err != nil {
+					terminated = true
+					break waitLoop
+				}
+			case <-timeout:
+				break waitLoop
 			}
-			time.Sleep(100 * time.Millisecond)
 		}
 
 		if !terminated {
 			LogWarn("Old process %d is stubborn. Sending SIGKILL...", oldPid)
 			_ = process.Signal(syscall.SIGKILL)
-			time.Sleep(200 * time.Millisecond) // Give OS time to clean up
+
+			killTimeout := time.After(2 * time.Second)
+			killTicker := time.NewTicker(50 * time.Millisecond)
+			defer killTicker.Stop()
+
+		killWait:
+			for {
+				select {
+				case <-killTicker.C:
+					if err := process.Signal(syscall.Signal(0)); err != nil {
+						break killWait
+					}
+				case <-killTimeout:
+					LogWarn("Process %d still exists after SIGKILL", oldPid)
+					break killWait
+				}
+			}
 		}
 
 		LogInfo(MsgBotOldTerminated)
-		// Loop will retry Flock on next iteration
 	}
 
 	// 6. We have the lock. Write our PID.
@@ -118,35 +148,25 @@ func main() {
 	_, _ = fmt.Fprintf(f, "%d", os.Getpid())
 	_ = f.Sync()
 
-	// Ensure the lock is held for the duration and the file is cleaned up on exit
 	defer func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = os.Remove(".bot.pid")
 	}()
 
 	// 7. Run bot (blocks until shutdown signal)
-	if err := run(cfg, *silent, *skipReg, *clearAll); err != nil {
+	if err := run(cfg, *silent, *skipReg, *clearAll, botID); err != nil {
 		LogFatal(MsgGenericError, err)
 	}
 
 	// 8. Handle Reboot
 	if RestartRequested {
 		LogInfo("Self-restarting process...")
-		// Manually trigger cleanup since syscall.Exec won't run defers
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 		_ = os.Remove(".bot.pid")
 
-		// Re-execute the binary with the same arguments and environment
-		// Add -skip-reg to avoid hitting rate limits on every reboot
 		args := os.Args
-		hasSkipReg := false
-		for _, arg := range args {
-			if arg == "-skip-reg" {
-				hasSkipReg = true
-				break
-			}
-		}
+		hasSkipReg := slices.Contains(args, "-skip-reg")
 		if !hasSkipReg {
 			args = append(args, "-skip-reg")
 		}
@@ -163,7 +183,7 @@ func main() {
 	}
 }
 
-func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
+func run(cfg *Config, silent bool, skipReg bool, clearAll bool, botID snowflake.ID) error {
 	// 1. Setup global context that responds to shutdown signals
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -180,17 +200,11 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 	}
 
 	// 3. Create disgo client
-	client, err := CreateClient(ctx, cfg)
+	client, err := CreateClient(ctx, cfg, botID)
 	if err != nil {
 		return fmt.Errorf("failed to create Discord client: %w", err)
 	}
 	defer client.Close(ctx)
-
-	// 4. Initialize database
-	if err := InitDatabase(ctx, cfg.DatabasePath); err != nil {
-		return fmt.Errorf("failed to initialize database: %w", err)
-	}
-	defer CloseDatabase()
 
 	// 5. Command Registration
 	if !skipReg {

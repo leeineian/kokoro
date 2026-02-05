@@ -196,6 +196,7 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 			thread_count INTEGER DEFAULT 0,
 			threads TEXT,
 			is_running INTEGER DEFAULT 0,
+			is_serial INTEGER DEFAULT 0,
 			vote_panel TEXT,
 			vote_role TEXT,
 			vote_reaction TEXT,
@@ -221,6 +222,7 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		"ALTER TABLE loop_channels ADD COLUMN vote_reaction TEXT",
 		"ALTER TABLE loop_channels ADD COLUMN vote_message TEXT",
 		"ALTER TABLE loop_channels ADD COLUMN vote_threshold INTEGER DEFAULT 0",
+		"ALTER TABLE loop_channels ADD COLUMN is_serial INTEGER DEFAULT 0",
 	}
 
 	for _, m := range migrations {
@@ -449,6 +451,7 @@ type LoopConfig struct {
 	VoteRole      string
 	VoteMessage   string
 	VoteThreshold int
+	IsSerial      bool
 }
 
 func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConfig) error {
@@ -463,8 +466,8 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 			message, webhook_author, webhook_avatar,
 			use_thread, thread_message, thread_count, threads,
 			vote_panel, vote_role, vote_message, vote_threshold,
-			is_running
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT is_running FROM loop_channels WHERE channel_id = ?), 0))
+			is_running, is_serial
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT is_running FROM loop_channels WHERE channel_id = ?), 0), ?)
 		ON CONFLICT(channel_id) DO UPDATE SET
 			channel_name = excluded.channel_name,
 			channel_type = excluded.channel_type,
@@ -480,12 +483,13 @@ func AddLoopConfig(ctx context.Context, channelID snowflake.ID, config *LoopConf
 			vote_panel = excluded.vote_panel,
 			vote_role = excluded.vote_role,
 			vote_message = excluded.vote_message,
-			vote_threshold = excluded.vote_threshold
+			vote_threshold = excluded.vote_threshold,
+			is_serial = excluded.is_serial
 	`, channelID.String(), config.ChannelName, config.ChannelType, config.Rounds, config.Interval,
 		config.Message, config.WebhookAuthor, config.WebhookAvatar,
 		useThread, config.ThreadMessage, config.ThreadCount, config.Threads,
 		config.VoteChannelID, config.VoteRole, config.VoteMessage, config.VoteThreshold,
-		channelID.String())
+		channelID.String(), boolToInt(config.IsSerial))
 	return err
 }
 
@@ -494,7 +498,7 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
 			message, webhook_author, webhook_avatar,
 			use_thread, thread_message, thread_count, threads, is_running,
-			vote_panel, vote_role, vote_message, vote_threshold
+			vote_panel, vote_role, vote_message, vote_threshold, is_serial
 		FROM loop_channels WHERE channel_id = ?
 	`, channelID.String())
 
@@ -502,13 +506,13 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 	var idStr string
 	var message, author, avatar, threadMsg, threads sql.NullString
 	var votePanel, voteRole, voteMessage sql.NullString
-	var useThread, isRunning int
+	var useThread, isRunning, isSerial int
 
 	err := row.Scan(
 		&idStr, &config.ChannelName, &config.ChannelType, &config.Rounds, &config.Interval,
 		&message, &author, &avatar,
 		&useThread, &threadMsg, &config.ThreadCount, &threads, &isRunning,
-		&votePanel, &voteRole, &voteMessage, &config.VoteThreshold,
+		&votePanel, &voteRole, &voteMessage, &config.VoteThreshold, &isSerial,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -534,6 +538,7 @@ func GetLoopConfig(ctx context.Context, channelID snowflake.ID) (*LoopConfig, er
 	config.VoteChannelID = votePanel.String
 	config.VoteRole = voteRole.String
 	config.VoteMessage = voteMessage.String
+	config.IsSerial = isSerial == 1
 
 	return config, nil
 }
@@ -543,7 +548,7 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 		SELECT channel_id, channel_name, channel_type, rounds, interval,
 			message, webhook_author, webhook_avatar,
 			use_thread, thread_message, thread_count, threads, is_running,
-			vote_panel, vote_role, vote_message, vote_threshold
+			vote_panel, vote_role, vote_message, vote_threshold, is_serial
 		FROM loop_channels
 	`)
 	if err != nil {
@@ -557,13 +562,13 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 		var idStr string
 		var message, author, avatar, threadMsg, threads sql.NullString
 		var votePanel, voteRole, voteMessage sql.NullString
-		var useThread, isRunning int
+		var useThread, isRunning, isSerial int
 
 		err := rows.Scan(
 			&idStr, &config.ChannelName, &config.ChannelType, &config.Rounds, &config.Interval,
 			&message, &author, &avatar,
 			&useThread, &threadMsg, &config.ThreadCount, &threads, &isRunning,
-			&votePanel, &voteRole, &voteMessage, &config.VoteThreshold,
+			&votePanel, &voteRole, &voteMessage, &config.VoteThreshold, &isSerial,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan loop config: %w", err)
@@ -586,6 +591,7 @@ func GetAllLoopConfigs(ctx context.Context) ([]*LoopConfig, error) {
 		config.VoteChannelID = votePanel.String
 		config.VoteRole = voteRole.String
 		config.VoteMessage = voteMessage.String
+		config.IsSerial = isSerial == 1
 
 		configs = append(configs, config)
 	}

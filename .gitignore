@@ -38,7 +38,7 @@ tmp/
 .backups/
 .bck/
 .air.toml
-minder
+kokoro
 backup
 *.sh
 *.txt

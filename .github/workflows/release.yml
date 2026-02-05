@@ -32,7 +32,7 @@ jobs:
       - name: Create Date Tag
         id: tag
         run: |
-          VERSION="v1.1.0-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::12}"
+          VERSION="v0.0.0-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::12}"
           
           echo "Creating tag: $VERSION"
           
@@ -50,4 +50,4 @@ jobs:
         env:
           GOPROXY: https://proxy.golang.org
         run: |
-          go list -m github.com/leeineian/minder@${{ steps.tag.outputs.tag_name }}
+          go list -m github.com/leeineian/kokoro@${{ steps.tag.outputs.tag_name }}

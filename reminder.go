@@ -473,18 +473,3 @@ func sendReminder(parentCtx context.Context, client *bot.Client, r *Reminder) {
 
 	LogReminder(MsgReminderSentAndDeleted, r.ID, userID)
 }
-
-// ===========================
-// Utilities
-// ===========================
-
-// Truncate truncates a string to the specified length with ellipsis at the end.
-func Truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}
