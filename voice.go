@@ -219,7 +219,7 @@ type VoiceSession struct {
 	joined                 bool
 	joinedMu               sync.Mutex
 	joinedChan             chan struct{}
-	joinedOnce             sync.Once
+	joinedChanMu           sync.Mutex
 	downloadMu             sync.Mutex
 	downloadCond           *sync.Cond
 	pendingDownloads       *PriorityQueue
@@ -522,17 +522,25 @@ func (vs *VoiceSystem) Prepare(client *bot.Client, guildID, channelID snowflake.
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	if sess, ok := vs.sessions[guildID]; ok {
-		sess.channelMu.Lock()
-		oldChannelID := sess.ChannelID
-		if oldChannelID != channelID {
-			sess.ChannelID = channelID
-			sess.channelMu.Unlock()
-			route := rest.NewEndpoint(http.MethodPut, "/channels/"+oldChannelID.String()+"/voice-status")
-			_ = client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
+		// If session is dead (canceled), discard it and create a new one
+		if sess.cancelCtx.Err() != nil {
+			delete(vs.sessions, guildID)
 		} else {
-			sess.channelMu.Unlock()
+			sess.channelMu.Lock()
+			oldChannelID := sess.ChannelID
+			if oldChannelID != channelID {
+				sess.ChannelID = channelID
+				sess.channelMu.Unlock()
+				// Move Discord API call to goroutine to avoid holding vs.mu
+				go func(cid snowflake.ID) {
+					route := rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status")
+					_ = client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
+				}(oldChannelID)
+			} else {
+				sess.channelMu.Unlock()
+			}
+			return sess
 		}
-		return sess
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &VoiceSession{
@@ -605,9 +613,13 @@ func (vs *VoiceSystem) Join(ctx context.Context, client *bot.Client, guildID, ch
 	sess.joinedMu.Lock()
 	if !sess.joined {
 		sess.joined = true
-		sess.joinedOnce.Do(func() {
+		sess.joinedChanMu.Lock()
+		select {
+		case <-sess.joinedChan:
+		default:
 			close(sess.joinedChan)
-		})
+		}
+		sess.joinedChanMu.Unlock()
 		sess.goroutineWg.Add(2)
 		go func() {
 			defer sess.goroutineWg.Done()
@@ -627,6 +639,11 @@ func (s *VoiceSession) Reconnect(ctx context.Context) error {
 }
 
 func (s *VoiceSession) monitorConnection() {
+	defer func() {
+		if r := recover(); r != nil {
+			LogVoice("CRITICAL: monitorConnection panic recovered: %v", r)
+		}
+	}()
 	defer s.goroutineWg.Done()
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
@@ -677,10 +694,15 @@ func (vs *VoiceSystem) Leave(ctx context.Context, guildID snowflake.ID) {
 // Shutdown gracefully stops all voice sessions and clears their status
 func (vs *VoiceSystem) Shutdown(ctx context.Context) {
 	vs.mu.Lock()
-	defer vs.mu.Unlock()
+	sessions := make([]*VoiceSession, 0, len(vs.sessions))
+	for id, sess := range vs.sessions {
+		sessions = append(sessions, sess)
+		delete(vs.sessions, id)
+	}
+	vs.mu.Unlock()
 
 	var wg sync.WaitGroup
-	for id, sess := range vs.sessions {
+	for _, sess := range sessions {
 		wg.Add(1)
 		go func(s *VoiceSession) {
 			defer wg.Done()
@@ -692,7 +714,6 @@ func (vs *VoiceSystem) Shutdown(ctx context.Context) {
 			_ = s.client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
 			s.Stop()
 		}(sess)
-		delete(vs.sessions, id)
 	}
 	wg.Wait()
 }
@@ -1095,6 +1116,11 @@ func (s *VoiceSession) setVoiceStatus(status string) {
 
 // statusManager manages the voice channel status updates
 func (s *VoiceSession) statusManager() {
+	defer func() {
+		if r := recover(); r != nil {
+			LogVoice("CRITICAL: statusManager panic recovered: %v", r)
+		}
+	}()
 	var cur string
 	for {
 		select {
@@ -1254,6 +1280,11 @@ func (s *VoiceSession) trySetSpeaking(flags voice.SpeakingFlags) (ok bool) {
 
 // processQueue processes tracks from the queue and handles playback
 func (s *VoiceSession) processQueue() {
+	defer func() {
+		if r := recover(); r != nil {
+			LogVoice("CRITICAL: processQueue panic recovered: %v", r)
+		}
+	}()
 	for {
 		s.queueMu.Lock()
 		if len(s.queue) == 0 {
@@ -3717,8 +3748,12 @@ func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, 
 	if err := <-je; err != nil {
 		return err
 	}
-	if err := t.Wait(context.Background()); err != nil {
-		return err
+	// Wait for the track to be ready (with a timeout to prevent deadlocking the interaction)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer waitCancel()
+
+	if err := t.Wait(waitCtx); err != nil {
+		return fmt.Errorf("failed to wait for track to be ready: %w", err)
 	}
 
 	select {
@@ -4103,6 +4138,11 @@ func (s *VoiceSession) scheduleDownload(t *Track) {
 }
 
 func (s *VoiceSession) downloadLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			LogVoice("CRITICAL: downloadLoop panic recovered: %v", r)
+		}
+	}()
 	maxConcurrent := 3
 	for {
 		s.downloadMu.Lock()
