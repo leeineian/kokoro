@@ -40,7 +40,6 @@ tmp/
 .air.toml
 kokoro
 backup
-*.sh
 *.txt
 .BACKUP.go
 *.bak
