@@ -12,6 +12,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v6.0.2
 
+      - name: Pull Arch Linux Image
+        run: docker pull archlinux:latest
+
       - name: Build in Arch Linux Container
         run: |
           docker run --rm \

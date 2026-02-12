@@ -153,7 +153,10 @@ func init() {
 // Constants & Variables
 // ===========================
 
-const AudioCacheDir = ".tracks"
+const (
+	AudioCacheDir = ".tracks"
+	MinTrackSize  = 50_000 // 50KB
+)
 
 var (
 	VoiceManager          *VoiceSystem
@@ -2810,7 +2813,7 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		ss := t.SeekOffset
 		t.mu.Unlock()
 
-		thresh := int64(1)
+		thresh := int64(64 * 1024) // 64KB initial buffer for transcoding
 		cacheFile, err := os.Create(partFilename)
 
 		t.mu.Lock()
@@ -2858,6 +2861,17 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		}
 
 		onceReady.Do(func() { close(readySig) })
+
+		t.mu.Lock()
+		finalWb := t.WrittenBytes
+		t.mu.Unlock()
+
+		if finalWb < MinTrackSize {
+			onceError.Do(func() { errorSig <- fmt.Errorf("download too small: %d bytes (min %d)", finalWb, MinTrackSize) })
+			LogVoice("Download too small for %s: %d bytes. Deleting.", url, finalWb)
+			os.Remove(partFilename)
+			return
+		}
 
 		if err := os.Rename(partFilename, filename); err != nil {
 			LogVoice("Failed to rename cache file for %s: %v", url, err)
@@ -3487,7 +3501,7 @@ func ytdlpStream(ctx context.Context, u string, ss time.Duration, out io.Writer)
 		if strings.Contains(msg, "broken pipe") || strings.Contains(msg, "signal: killed") {
 			return &ytdlpMetadata{}, nil
 		}
-		LogVoice("yt-dlp stream failed: %v, stderr: %s", err, stderr.String())
+		LogVoice("yt-dlp stream failed for %s: %v, stderr: %s", u, err, stderr.String())
 		LogVoice("yt-dlp exited with error: %v", err)
 		return nil, err
 	}
