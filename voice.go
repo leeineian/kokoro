@@ -156,33 +156,22 @@ func init() {
 const AudioCacheDir = ".tracks"
 
 var (
-	// System
 	VoiceManager          *VoiceSystem
 	OnceVoice             sync.Once
 	audioCacheInitialized atomic.Bool
 	audioCacheMu          sync.Mutex
 	voiceShuttingDown     atomic.Bool
-
-	// Strings
-	cachedJSArgs []string
-	jsOnce       sync.Once
-
-	// Regex
-	camelCaseRegex     = regexp.MustCompile(`([a-z])([A-Z])`)
-	metadataBlockRegex = regexp.MustCompile(`[\(\[\{].*?[\)\]\}]`)
-
-	// Audio
-	OpusSilence     = []byte{0xf8, 0xff, 0xfe}
-	SilenceDuration = 1 * time.Second
-
-	// Panels
-	VoicePanels   = make(map[snowflake.ID]*VoicePanel)
-	VoicePanelsMu sync.Mutex
-
-	// Download Configuration
-	maxConnWait = 20 * time.Second
-	maxStall    = 5 * time.Second
-	maxTotal    = 60 * time.Second
+	cachedJSArgs          []string
+	jsOnce                sync.Once
+	camelCaseRegex        = regexp.MustCompile(`([a-z])([A-Z])`)
+	metadataBlockRegex    = regexp.MustCompile(`[\(\[\{].*?[\)\]\}]`)
+	OpusSilence           = []byte{0xf8, 0xff, 0xfe}
+	SilenceDuration       = 1 * time.Second
+	VoicePanels           = make(map[snowflake.ID]*VoicePanel)
+	VoicePanelsMu         sync.Mutex
+	maxConnWait           = 20 * time.Second
+	maxStall              = 5 * time.Second
+	maxTotal              = 60 * time.Second
 )
 
 func ensureAudioCacheDir() {
@@ -224,7 +213,6 @@ func cleanupAudioCache() {
 // Structs
 // ===========================
 
-// VoiceSystem manages all voice sessions across guilds
 type VoiceSystem struct {
 	mu       sync.Mutex
 	sessions map[snowflake.ID]*VoiceSession
@@ -241,7 +229,6 @@ type cachedItem struct {
 	expiresAt time.Time
 }
 
-// VoiceSession represents an active voice connection for a guild
 type VoiceSession struct {
 	GuildID                snowflake.ID
 	ChannelID              snowflake.ID
@@ -284,7 +271,6 @@ type VoiceSession struct {
 	Volume                 atomic.Int32
 }
 
-// VoicePanel represents an active live panel for a user
 type VoicePanel struct {
 	UserID    snowflake.ID
 	GuildID   snowflake.ID
@@ -293,7 +279,6 @@ type VoicePanel struct {
 	ExpiresAt time.Time
 }
 
-// Track represents a music track in the queue
 type Track struct {
 	URL, Path, Title, Channel string
 	ArtworkURL                string
@@ -321,19 +306,15 @@ type Track struct {
 	metadataOnce              sync.Once
 }
 
-// SignalWriter wraps an io.Writer and signals a channel on every successful write
 type SignalWriter struct {
 	w   io.Writer
 	sig chan struct{}
 }
 
-// TrackSignalWriter wraps an io.Writer and signals a channel on every successful write
 type TrackSignalWriter struct {
 	w       io.Writer
 	onWrite func(int)
 }
-
-// TailingReader reads from a file that is being written to effectively decoupling download speed from playback speed
 type TailingReader struct {
 	f       *os.File
 	mu      sync.Mutex
@@ -351,7 +332,6 @@ func (s *VoiceSession) unlockQueue() {
 	s.queueMuRaw.Unlock()
 }
 
-// StreamProvider provides a stream of audio frames to the voice session
 type StreamProvider struct {
 	frames        chan []byte
 	OnFinish      func()
@@ -363,7 +343,6 @@ type StreamProvider struct {
 	silenceFrames int
 }
 
-// AstiavTranscoder transcodes audio frames to Opus format
 type AstiavTranscoder struct {
 	inputCtx               *astiav.FormatContext
 	decoderCtx, encoderCtx *astiav.CodecContext
@@ -383,43 +362,33 @@ type AstiavTranscoder struct {
 	frameCount             int64
 }
 
-// SearchResult represents a search result
 type SearchResult struct{ Title, ChannelName, URL string }
 
-// CachedMetadata represents cached metadata for a track
 type CachedMetadata struct {
 	Title, Channel string
 	Duration       time.Duration
 }
 
-// ytdlpSearchResult represents a search result from ytdlp
 type ytdlpSearchResult struct {
 	URL, Title, Uploader string
 	Duration             time.Duration
 }
-
-// ytdlpMetadata represents metadata for a track from ytdlp
 type ytdlpMetadata struct {
 	URL, Title, Uploader, Filename, ID string
 	Duration                           time.Duration
 }
 
-// ytdlpPlaylistEntry represents an entry in a playlist from ytdlp
 type ytdlpPlaylistEntry struct{ URL, Title, Uploader string }
 
-// recResult represents a prioritized search result from ytdlp
 type recResult struct {
 	es   []ytdlpPlaylistEntry
 	prio int
 }
 
-// prioritizedSearchResult represents a prioritized search result from ytdlp
 type prioritizedSearchResult struct {
 	res  []ytdlpSearchResult
 	prio int
 }
-
-// metadataResult represents metadata for a track
 type metadataResult struct {
 	title    string
 	artist   string
@@ -432,7 +401,6 @@ type metadataResult struct {
 // Voice System Initialization
 // ===========================
 
-// handleVoice routes voice subcommands to their respective handlers
 func handleVoice(event *events.ApplicationCommandInteractionCreate) {
 	data := event.SlashCommandInteractionData()
 	if data.SubCommandName == nil {
@@ -539,7 +507,6 @@ func strPtr(s string) *string {
 // Voice Manager
 // ===========================
 
-// GetVoiceManager returns the singleton VoiceSystem instance
 func GetVoiceManager() *VoiceSystem {
 	OnceVoice.Do(func() {
 		voiceShuttingDown.Store(false)
@@ -570,14 +537,12 @@ func (vs *VoiceSystem) startCacheGC() {
 	}
 }
 
-// GetSession retrieves the voice session for a guild
 func (vs *VoiceSystem) GetSession(guildID snowflake.ID) *VoiceSession {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	return vs.sessions[guildID]
 }
 
-// Prepare creates or retrieves a voice session for a guild
 func (vs *VoiceSystem) Prepare(client bot.Client, guildID, channelID snowflake.ID) *VoiceSession {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
@@ -634,7 +599,6 @@ func (vs *VoiceSystem) Prepare(client bot.Client, guildID, channelID snowflake.I
 	return sess
 }
 
-// Join connects the bot to a voice channel
 func (vs *VoiceSystem) Join(ctx context.Context, client bot.Client, guildID, channelID snowflake.ID) error {
 	sess := vs.Prepare(client, guildID, channelID)
 
@@ -744,7 +708,6 @@ func (s *VoiceSession) monitorConnection() {
 	}
 }
 
-// Leave disconnects the bot from a voice channel instantly and cleans up
 func (vs *VoiceSystem) Leave(ctx context.Context, guildID snowflake.ID) {
 	vs.mu.Lock()
 	sess, ok := vs.sessions[guildID]
@@ -758,7 +721,6 @@ func (vs *VoiceSystem) Leave(ctx context.Context, guildID snowflake.ID) {
 	vs.cleanupSession(sess)
 }
 
-// cleanupSession performs the teardown of a voice session outside of the vs.mu lock
 func (vs *VoiceSystem) cleanupSession(sess *VoiceSession) {
 	if sess == nil {
 		return
@@ -796,7 +758,6 @@ func (vs *VoiceSystem) cleanupSession(sess *VoiceSession) {
 	})
 }
 
-// Shutdown gracefully stops all voice sessions and clears their status
 func (vs *VoiceSystem) Shutdown(ctx context.Context) {
 	voiceShuttingDown.Store(true)
 	vs.mu.Lock()
@@ -828,7 +789,6 @@ func (vs *VoiceSystem) Shutdown(ctx context.Context) {
 	cleanupAudioCache()
 }
 
-// Play adds a track to the queue and starts playback
 func (vs *VoiceSystem) Play(ctx context.Context, guildID snowflake.ID, url, mode string, pos int) (*Track, int, error) {
 	s := vs.GetSession(guildID)
 	if s == nil {
@@ -912,7 +872,6 @@ func (s *VoiceSession) queueTracks(tracks []*Track, mode string, pos int) {
 	}
 }
 
-// onVoiceStateUpdate handles voice state changes and auto-disconnect
 func (vs *VoiceSystem) onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 	vs.mu.Lock()
 	s, ok := vs.sessions[event.VoiceState.GuildID]
@@ -1045,7 +1004,6 @@ func (vs *VoiceSystem) updateAutoPauseState(event *events.GuildVoiceStateUpdate,
 // Voice Session
 // ===========================
 
-// Seek seeks the current track to a relative offset
 func (s *VoiceSession) Seek(duration time.Duration) error {
 	s.lockQueue()
 	if s.currentTrack == nil {
@@ -1134,7 +1092,6 @@ func (s *VoiceSession) Seek(duration time.Duration) error {
 	return err
 }
 
-// Skip skips the currently playing track
 func (s *VoiceSession) Skip() (string, error) {
 	s.lockQueue()
 	if s.currentTrack == nil && len(s.queue) == 0 {
@@ -1161,7 +1118,6 @@ func (s *VoiceSession) Skip() (string, error) {
 	return title, nil
 }
 
-// WaitJoined waits for the bot to join the voice channel
 func (s *VoiceSession) WaitJoined(ctx context.Context) error {
 	select {
 	case <-s.joinedChan:
@@ -1173,7 +1129,6 @@ func (s *VoiceSession) WaitJoined(ctx context.Context) error {
 	}
 }
 
-// Stop stops playback and clears the queue
 func (s *VoiceSession) Stop() {
 	s.skipLoop = true
 	if s.cancelFunc != nil {
@@ -1212,12 +1167,9 @@ func (s *VoiceSession) Stop() {
 	s.setVoiceStatus("")
 }
 
-// WaitForCleanup waits for all session goroutines to exit
 func (s *VoiceSession) WaitForCleanup() {
 	s.goroutineWg.Wait()
 }
-
-// RefreshStatus recalculates the voice status based on current session state
 func (s *VoiceSession) RefreshStatus() {
 	s.lockQueue()
 	track := s.currentTrack
@@ -1276,7 +1228,6 @@ func (s *VoiceSession) setVoiceStatus(status string) {
 	}
 }
 
-// statusManager manages the voice channel status updates
 func (s *VoiceSession) statusManager() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1374,7 +1325,6 @@ func (s *VoiceSession) updateNextTrackStatusIfNeeded(next *Track) {
 	}
 }
 
-// setOpusFrameProviderSafe sets the opus frame provider safely, recovering from any potential panics
 func (s *VoiceSession) setOpusFrameProviderSafe(provider voice.OpusFrameProvider) {
 	if s.cancelCtx.Err() != nil {
 		return
@@ -1411,7 +1361,6 @@ func (s *VoiceSession) trySetOpusFrameProvider(provider voice.OpusFrameProvider)
 	return true
 }
 
-// setSpeakingSafe sets the speaking state safely
 func (s *VoiceSession) setSpeakingSafe(flags voice.SpeakingFlags) {
 	if s.cancelCtx.Err() != nil {
 		return
@@ -1448,7 +1397,6 @@ func (s *VoiceSession) trySetSpeaking(flags voice.SpeakingFlags) (ok bool) {
 	return true
 }
 
-// processQueue processes tracks from the queue and handles playback
 func (s *VoiceSession) processQueue() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1763,7 +1711,6 @@ func (r *TailingReader) Seek(offset int64, whence int) (int64, error) {
 	return r.f.Seek(offset, whence)
 }
 
-// NewTrack creates a new track with the given URL
 func NewTrack(url string) *Track {
 	t := &Track{
 		URL:             url,
@@ -1778,7 +1725,6 @@ func NewTrack(url string) *Track {
 	return t
 }
 
-// Wait waits for the track to be ready or error
 func (t *Track) Wait(ctx context.Context) error {
 	select {
 	case <-t.done:
@@ -1788,7 +1734,6 @@ func (t *Track) Wait(ctx context.Context) error {
 	}
 }
 
-// MarkReady marks the track as ready for playback
 func (t *Track) MarkReady(path, title, channel string, d time.Duration, s io.Reader) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1800,7 +1745,6 @@ func (t *Track) MarkReady(path, title, channel string, d time.Duration, s io.Rea
 	close(t.done)
 }
 
-// MarkError marks the track as failed with an error
 func (t *Track) MarkError(err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -3055,7 +2999,6 @@ func (s *VoiceSession) updateIDF(tokens []string, add bool) {
 	}
 }
 
-// checkSimilarity checks if the candidate tokens are similar to any history item using cached IDF stats
 func (s *VoiceSession) checkSimilarity(candidateTokens []string) bool {
 	if len(s.HistoryTokens) == 0 {
 		return false
@@ -3271,7 +3214,6 @@ func checkSimilarityAgainst(candidateTokens []string, historyTokens [][]string, 
 // yt-dlp
 // ===========================
 
-// newYtdlp returns a new yt-dlp command with a modern user agent and reliable player client
 func newYtdlp() (*ytdlp.Command, func()) {
 	cmd := ytdlp.New().
 		Quiet().
@@ -3284,7 +3226,6 @@ func newYtdlp() (*ytdlp.Command, func()) {
 	return cmd, func() {}
 }
 
-// buildYtdlpArgs returns common args for yt-dlp commands
 func buildYtdlpArgs() []string {
 	jsOnce.Do(func() {
 		for _, rt := range []string{"node", "deno", "quickjs"} {
@@ -3474,7 +3415,6 @@ func ytdlpExtractMetadata(ctx context.Context, u string) (*ytdlpMetadata, error)
 	return nil, errors.New("failed to parse metadata")
 }
 
-// isLikelyMusicStreamingSite detects music streaming sites abstractly without hardcoding specific domains
 func isLikelyMusicStreamingSite(url string) bool {
 	lowerURL := strings.ToLower(url)
 
@@ -3668,7 +3608,6 @@ func ytdlpExtractPlaylist(ctx context.Context, u string, m int) ([]ytdlpPlaylist
 	return es, nil
 }
 
-// extractMetadataFromDRMSite attempts to scrape metadata from DRM-protected sites
 func extractMetadataFromDRMSite(ctx context.Context, url string) (title, artist string, err error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -3735,7 +3674,6 @@ func extractMetadataFromDRMSite(ctx context.Context, url string) (title, artist 
 // Command Handlers
 // ===========================
 
-// handleMusicPlay handles play interactions for music commands.
 func handleMusicPlay(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	q, m, p, a, l := parsePlayArguments(data)
 
@@ -3755,7 +3693,6 @@ func handleMusicPlay(event *events.ApplicationCommandInteractionCreate, data dis
 	}
 }
 
-// parsePlayArguments parses the arguments for the play command.
 func parsePlayArguments(data discord.SlashCommandInteractionData) (q, m string, p int, a, l bool) {
 	q, _ = data.OptString("query")
 	qv, _ := data.OptString("queue")
@@ -3772,14 +3709,12 @@ func parsePlayArguments(data discord.SlashCommandInteractionData) (q, m string, 
 	return
 }
 
-// handleMusicStop handles stop interactions for music commands.
 func handleMusicStop(event *events.ApplicationCommandInteractionCreate, _ discord.SlashCommandInteractionData) {
 	LogVoice("User %s (%s) stopped playback in guild %s", event.User().Username, event.User().ID, *event.GuildID())
 	GetVoiceManager().Leave(context.Background(), *event.GuildID())
 	_ = RespondInteractionV2(*event.Client(), event, "🛑 Stopped and disconnected.", false)
 }
 
-// handleMusicQueue handles queue interactions for music commands.
 func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ discord.SlashCommandInteractionData) {
 	_ = event.DeferCreateMessage(true)
 
@@ -3848,7 +3783,6 @@ func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ disco
 	}
 }
 
-// handleVoicePanel handles the /voice panel command
 func handleVoicePanel(event *events.ApplicationCommandInteractionCreate) {
 	userID := event.User().ID
 	guildID := event.GuildID()
@@ -4142,7 +4076,6 @@ func handleMusicAutocomplete(event *events.AutocompleteInteractionCreate) {
 	_ = event.AutocompleteResult(cs)
 }
 
-// getRandomRecommendation gets a random recommendation from the guild's history.
 func getRandomRecommendation(guildID *snowflake.ID) string {
 	if guildID != nil {
 		if s := GetVoiceManager().GetSession(*guildID); s != nil {
@@ -4174,7 +4107,6 @@ func getRandomRecommendation(guildID *snowflake.ID) string {
 	return "Trending Music"
 }
 
-// startPlayback initiates voice playback for a user's query
 func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, a, l bool, p int) error {
 	LogVoice("User %s (%s) requested playback: %s", ev.User().Username, ev.User().ID, q)
 	vs, ok := ev.Client().Caches.VoiceState(*ev.GuildID(), ev.User().ID)
@@ -4201,7 +4133,6 @@ func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, 
 	return err
 }
 
-// finishPlaybackResponse sends the final response message after playback starts
 func finishPlaybackResponse(ev *events.ApplicationCommandInteractionCreate, t *Track, m string, a, l bool, p int, count int) error {
 	t.mu.Lock()
 	title := t.Title
@@ -4264,7 +4195,6 @@ func finishPlaybackResponse(ev *events.ApplicationCommandInteractionCreate, t *T
 	return EditInteractionV2(*ev.Client(), ev, c)
 }
 
-// SelectBestTrack scoring system to pick official audios from search results
 func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle, targetChannel string, targetDuration time.Duration) ytdlpSearchResult {
 	if len(results) == 0 {
 		return ytdlpSearchResult{}
@@ -4311,7 +4241,6 @@ func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle,
 	return best
 }
 
-// extractVideoID extracts the video ID from a YouTube-related URL.
 func extractVideoID(u string) string {
 	u = strings.TrimSpace(u)
 	if strings.Contains(u, "youtu.be/") {
@@ -4350,12 +4279,9 @@ func extractVideoID(u string) string {
 	return ""
 }
 
-// isYouTubeURL checks if a URL is a YouTube URL.
 func isYouTubeURL(u string) bool {
 	return extractVideoID(u) != "" || strings.Contains(u, "youtube.com") || strings.Contains(u, "youtu.be") || strings.Contains(u, "google.com/url")
 }
-
-// normalizeTitle normalizes a title by removing metadata blocks and converting to lowercase.
 func normalizeTitle(ti, ch string) string {
 	if ti == "" {
 		return ""
@@ -4406,7 +4332,6 @@ func normalizeTitle(ti, ch string) string {
 	return strings.Join(strings.Fields(sb.String()), " ")
 }
 
-// calculateTFIDF calculates the TF-IDF weights for a corpus of strings.
 func calculateTFIDF(corpus []string) map[string]float64 {
 	df := make(map[string]int)
 	total := len(corpus)
@@ -4429,7 +4354,6 @@ func calculateTFIDF(corpus []string) map[string]float64 {
 	return weights
 }
 
-// weightedSimilarity checks if two strings are similar using TF-IDF weights.
 func weightedSimilarity(a, b string, weights map[string]float64) bool {
 	wa, wb := strings.Fields(strings.ToLower(a)), strings.Fields(strings.ToLower(b))
 	sa, sb := make(map[string]bool), make(map[string]bool)
