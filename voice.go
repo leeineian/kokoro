@@ -155,7 +155,7 @@ func init() {
 
 const (
 	AudioCacheDir = ".tracks"
-	MinTrackSize  = 50_000 // 50KB
+	MinTrackSize  = 32_000
 )
 
 var (
@@ -172,9 +172,8 @@ var (
 	SilenceDuration       = 1 * time.Second
 	VoicePanels           = make(map[snowflake.ID]*VoicePanel)
 	VoicePanelsMu         sync.Mutex
-	maxConnWait           = 20 * time.Second
-	maxStall              = 5 * time.Second
-	maxTotal              = 60 * time.Second
+	maxConnWait           = 45 * time.Second
+	maxStall              = 20 * time.Second
 )
 
 func ensureAudioCacheDir() {
@@ -1789,7 +1788,6 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 	}
 	s.unlockQueue()
 
-	defer cancel()
 	safeGo(func() {
 		defer func() {
 			p.Close()
@@ -2532,7 +2530,7 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 		resultChan := make(chan metadataResult, 2)
 
 		safeGo(func() {
-			timeout := 10 * time.Second
+			timeout := 30 * time.Second
 			if likelyDRMSite {
 				timeout = 3 * time.Second
 			}
@@ -2790,13 +2788,16 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 	errorSig := make(chan error, 1)
 	onceReady := sync.Once{}
 	onceError := sync.Once{}
+	LogVoice("DEBUG: downloadAndCache ENTER for %s", url)
 
 	t.mu.Lock()
 	t.FileCreated = make(chan struct{})
 	t.mu.Unlock()
 
 	ctx, dcancel := context.WithCancel(ctx)
-	defer dcancel()
+	t.mu.Lock()
+	t.downloadCancel = dcancel
+	t.mu.Unlock()
 
 	safeGo(func() {
 		defer close(downloadDone)
@@ -2813,7 +2814,7 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		ss := t.SeekOffset
 		t.mu.Unlock()
 
-		thresh := int64(64 * 1024) // 64KB initial buffer for transcoding
+		thresh := int64(16 * 1024) // 16KB initial buffer for transcoding
 		cacheFile, err := os.Create(partFilename)
 
 		t.mu.Lock()
@@ -2884,10 +2885,10 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		}
 	})
 
-	totalTimer := time.NewTimer(maxTotal)
+	totalTimer := time.NewTimer(60 * time.Second)
 	defer totalTimer.Stop()
 
-	stallTimer := time.NewTimer(maxConnWait)
+	stallTimer := time.NewTimer(45 * time.Second)
 	defer stallTimer.Stop()
 
 loop:
@@ -2896,18 +2897,24 @@ loop:
 		case <-readySig:
 			break loop
 		case <-ctx.Done():
+			dcancel()
 			t.MarkError(ctx.Err())
 			return
 		case <-totalTimer.C:
+			dcancel()
 			t.MarkError(errors.New("timeout: download too slow (max total time exceeded)"))
 			return
 		case <-stallTimer.C:
+			dcancel()
+			LogVoice("DEBUG: downloadAndCache stallTimer fired for %s after %v (Written: %d bytes)", url, maxConnWait, t.WrittenBytes)
 			t.MarkError(errors.New("timeout: download stalled or failed to start"))
 			return
 		case err := <-errorSig:
+			dcancel()
 			t.MarkError(err)
 			return
 		case <-downloadDone:
+			dcancel()
 			t.MarkError(errors.New("timeout: download process exited unexpectedly without data"))
 			return
 		case <-writeSig:
@@ -3255,7 +3262,7 @@ func buildYtdlpArgs() []string {
 		"--no-playlist",
 		"--no-check-certificates",
 		"--no-warnings",
-		"--extractor-args", "youtube:player_client=ios,android,web",
+		"--extractor-args", "youtube:player_client=android,web",
 		"--prefer-free-formats",
 		"--socket-timeout", "30",
 		"--retries", "20",
