@@ -22,7 +22,12 @@ jobs:
               pacman-key --init
               pacman-key --populate archlinux
               pacman -Syu --noconfirm
-              pacman -S --noconfirm base-devel go pkg-config ffmpeg opus libpulse
+              pacman -S --noconfirm base-devel go pkg-config ffmpeg opus libpulse cmake ninja git unzip
+              git clone https://github.com/disgoorg/godave.git /tmp/godave
+              cd /tmp/godave/scripts && ./libdave_install.sh v1.1.0 && cd /app
+              export PKG_CONFIG_PATH=\"\$HOME/.local/lib/pkgconfig:\$PKG_CONFIG_PATH\"
+              export LD_LIBRARY_PATH=\"\$HOME/.local/lib:\$LD_LIBRARY_PATH\"
+              export CGO_CFLAGS=\"-Wno-discarded-qualifiers\"
               CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -ldflags='-s -w' -o kokoro .
               chown $(id -u):$(id -g) kokoro
             "
