@@ -11,6 +11,61 @@ import (
 	"github.com/disgoorg/disgo/events"
 )
 
+// ============================================================================
+// Cat System Constants
+// ============================================================================
+
+const (
+	MsgCatFailedToFetchFact         = "Failed to fetch cat fact: %v"
+	MsgCatFactAPIStatusError        = "Cat fact API returned status %d"
+	MsgCatFailedToDecodeFact        = "Failed to decode cat fact: %v"
+	MsgCatFailedToFetchImage        = "Failed to fetch cat image: %v"
+	MsgCatImageAPIStatusError       = "Cat image API returned status %d"
+	MsgCatFailedToDecodeImage       = "Failed to decode cat image response: %v"
+	MsgCatImageAPIEmptyArray        = "Cat image API returned empty array"
+	MsgCatCannotSendErrorResponse   = "Cannot send error response: nil session or interaction"
+	MsgCatFailedToSendErrorResponse = "Failed to send error response: %v"
+	MsgCatFactAPIUnreachable        = "**API Unreachable**: The cat fact service is currently offline or timing out.\n> _%v_"
+	MsgCatImageAPIUnreachable       = "**API Unreachable**: The cat image service is currently offline or timing out.\n> _%v_"
+	MsgCatSystemStatus              = "**Cat Fact API:** `https://catfact.ninja/fact`\n**Cat Image API:** `https://api.thecatapi.com/v1`"
+	MsgCatAPIStatusErrorDisp        = "**Service Error**: The API returned an unexpected status code: **%d %s**"
+	MsgCatDataError                 = "**Data Error**: Failed to read the response body from the API."
+	MsgCatFormatError               = "**Format Error**: The API returned data in an invalid format."
+	MsgCatFormatErrorExt            = "**Format Error**: The API returned data in an invalid format.\n> _%v_"
+	MsgCatImageEmptyResult          = "**Empty Result**: The API returned an empty list of images."
+	ErrCatFailedToFetchFact         = "Failed to fetch cat fact"
+	ErrCatFactServiceUnavailable    = "Cat fact service is unavailable"
+	ErrCatFailedToDecodeFact        = "Failed to decode cat fact"
+	ErrCatFailedToFetchImage        = "Failed to fetch cat image"
+	ErrCatImageServiceUnavailable   = "Cat image service is unavailable"
+	ErrCatFailedToDecodeImage       = "Failed to decode cat image"
+	ErrCatNoImagesAvailable         = "No cat images available"
+
+	// ASCII Art Constants
+	CatArtExpressionDefault = "o.o"
+	CatArtColorGray         = "gray"
+	CatArtColorRed          = "red"
+	CatArtColorGreen        = "green"
+	CatArtColorYellow       = "yellow"
+	CatArtColorBlue         = "blue"
+	CatArtColorPink         = "pink"
+	CatArtColorCyan         = "cyan"
+	CatArtColorWhite        = "white"
+
+	CatArtExpressionShocked  = "O.O"
+	CatArtExpressionHappy    = "^.^"
+	CatArtExpressionSleeping = "-.-"
+	CatArtExpressionConfused = "o.O"
+	CatArtExpressionSilly    = ">.<"
+	CatArtExpressionWink     = "o.~"
+	CatArtExpressionDizzy    = "@.@"
+	CatArtExpressionCrying   = "T.T"
+	CatArtExpressionAngry    = "ò.ó"
+	CatArtExpressionStarEyes = "*.*"
+	CatArtExpressionMoney    = "$.$"
+	CatArtExpressionNone     = "   "
+)
+
 // ===========================
 // Command Registration
 // ===========================
@@ -121,14 +176,14 @@ const (
 
 // catAnsiColors maps color names to ANSI color codes
 var catAnsiColors = map[string]string{
-	"gray":   "30",
-	"red":    "31",
-	"green":  "32",
-	"yellow": "33",
-	"blue":   "34",
-	"pink":   "35",
-	"cyan":   "36",
-	"white":  "37",
+	CatArtColorGray:   "30",
+	CatArtColorRed:    "31",
+	CatArtColorGreen:  "32",
+	CatArtColorYellow: "33",
+	CatArtColorBlue:   "34",
+	CatArtColorPink:   "35",
+	CatArtColorCyan:   "36",
+	CatArtColorWhite:  "37",
 }
 
 // ===========================
@@ -197,20 +252,7 @@ func handleCatImage(event *events.ApplicationCommandInteractionCreate) {
 	}
 
 	// Display image using MediaGallery V2 component
-	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewMediaGallery(
-					discord.MediaGalleryItem{
-						Media: discord.UnfurledMediaItem{
-							URL: data[0].URL,
-						},
-					},
-				),
-			),
-		).
-		Build())
+	_ = RespondInteractionContainerV2(*event.Client(), event, NewV2Container(NewMediaGallery(data[0].URL)), false)
 }
 
 // handleCatSay generates a cowsay-style cat ASCII art with a custom message
@@ -232,7 +274,7 @@ func handleCatSay(event *events.ApplicationCommandInteractionCreate, data discor
 		catColor = c
 	}
 
-	expression := "o.o"
+	expression := CatArtExpressionDefault
 	if e, ok := data.OptString("expression"); ok {
 		expression = e
 	}
@@ -257,22 +299,14 @@ func handleCatStats(event *events.ApplicationCommandInteractionCreate) {
 
 // catRespond sends a response message using Discord V2 components
 func catRespond(event *events.ApplicationCommandInteractionCreate, content string, ephemeral bool) {
-	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewTextDisplay(content),
-			),
-		).
-		SetEphemeral(ephemeral).
-		Build())
+	_ = RespondInteractionV2(*event.Client(), event, content, ephemeral)
 }
 
 // generateCatSay creates a cowsay-style ASCII art with a cat and speech bubble
 // Supports custom colors for message, bubble, and cat, plus custom expressions
 func generateCatSay(message, msgColor, bubColor, catColor, expression string) string {
 	if expression == "" {
-		expression = "o.o"
+		expression = CatArtExpressionDefault
 	}
 	calcWidth := len(message)
 	if calcWidth < 20 {
@@ -379,32 +413,31 @@ func getCatAnsiCode(color string) string {
 // getCatColorChoices returns the available color choices for the cat command
 func getCatColorChoices() []discord.ApplicationCommandOptionChoiceString {
 	return []discord.ApplicationCommandOptionChoiceString{
-		{Name: "Gray", Value: "gray"},
-		{Name: "Red", Value: "red"},
-		{Name: "Green", Value: "green"},
-		{Name: "Yellow", Value: "yellow"},
-		{Name: "Blue", Value: "blue"},
-		{Name: "Pink", Value: "pink"},
-		{Name: "Cyan", Value: "cyan"},
-		{Name: "White", Value: "white"},
+		{Name: "Gray", Value: CatArtColorGray},
+		{Name: "Red", Value: CatArtColorRed},
+		{Name: "Green", Value: CatArtColorGreen},
+		{Name: "Yellow", Value: CatArtColorYellow},
+		{Name: "Blue", Value: CatArtColorBlue},
+		{Name: "Pink", Value: CatArtColorPink},
+		{Name: "Cyan", Value: CatArtColorCyan},
+		{Name: "White", Value: CatArtColorWhite},
 	}
 }
 
-// getCatExpressionChoices returns the available expression choices for the cat
 func getCatExpressionChoices() []discord.ApplicationCommandOptionChoiceString {
 	return []discord.ApplicationCommandOptionChoiceString{
-		{Name: "Neutral", Value: "o.o"},
-		{Name: "Shocked", Value: "O.O"},
-		{Name: "Happy", Value: "^.^"},
-		{Name: "Sleeping", Value: "-.-"},
-		{Name: "Confused", Value: "o.O"},
-		{Name: "Silly", Value: ">.<"},
-		{Name: "Wink", Value: "o.~"},
-		{Name: "Dizzy", Value: "@.@"},
-		{Name: "Crying", Value: "T.T"},
-		{Name: "Angry", Value: "ò.ó"},
-		{Name: "Star Eyes", Value: "*.*"},
-		{Name: "Money", Value: "$.$"},
-		{Name: "None", Value: "   "},
+		{Name: "Neutral", Value: CatArtExpressionDefault},
+		{Name: "Shocked", Value: CatArtExpressionShocked},
+		{Name: "Happy", Value: CatArtExpressionHappy},
+		{Name: "Sleeping", Value: CatArtExpressionSleeping},
+		{Name: "Confused", Value: CatArtExpressionConfused},
+		{Name: "Silly", Value: CatArtExpressionSilly},
+		{Name: "Wink", Value: CatArtExpressionWink},
+		{Name: "Dizzy", Value: CatArtExpressionDizzy},
+		{Name: "Crying", Value: CatArtExpressionCrying},
+		{Name: "Angry", Value: CatArtExpressionAngry},
+		{Name: "Star Eyes", Value: CatArtExpressionStarEyes},
+		{Name: "Money", Value: CatArtExpressionMoney},
+		{Name: "None", Value: CatArtExpressionNone},
 	}
 }

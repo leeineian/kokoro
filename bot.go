@@ -24,6 +24,69 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+// ============================================================================
+// Bot System Constants
+// ============================================================================
+
+const (
+	MsgBotRebootCommanded      = "Reboot commanded by user %s (%s)"
+	MsgBotShutdownCommanded    = "Shutdown commanded by user %s (%s)"
+	MsgBotLogReadFail          = "Failed to read log file: %v"
+	MsgBotRebooting            = "**Rebooting...**"
+	MsgBotShuttingDown         = "**Shutting down...**"
+	MsgBotStatsLoading         = "Loading stats..."
+	MsgBotStatusUpdated        = "Status visibility updated!"
+	MsgBotStatusEnabled        = "Status rotation enabled!"
+	MsgBotStatusDisabled       = "Status rotation disabled!"
+	MsgBotConsoleDisabled      = "Logging to file is disabled."
+	MsgBotConsoleEmpty         = "No logs available."
+	MsgBotStatsSendFail        = "Failed to send initial stats: %v"
+	MsgBotConsoleBtnOldest     = "[Oldest]"
+	MsgBotConsoleBtnOlder      = "[Older]"
+	MsgBotConsoleBtnRefresh    = "[Refresh]"
+	MsgBotConsoleBtnNewer      = "[Newer]"
+	MsgBotConsoleBtnLatest     = "[Latest]"
+	MsgBotRebootBuilding       = "**Building...**"
+	MsgBotRebootBuildFail      = "❌ **Build Failed**\n```\n%s\n```"
+	MsgBotRebootBuildSuccess   = "✅ **Build Successful**"
+	MsgBotUnknownSubcommand    = "Unknown bot subcommand: %s"
+	MsgBotStatusPinned         = "Status has been pinned to **%s**."
+	MsgBotStatusInvalid        = "Invalid status selection."
+	MsgBotServerOnly           = "This command can only be used in a server."
+	MsgBotClearCommandsFail    = "Failed to clear commands: %v"
+	MsgBotClearCommandsSuccess = "Successfully cleared all guild commands from this server."
+	MsgBotLogTruncated         = "Log file truncated by user %s"
+	MsgConsoleNavLabel         = "Navigate Logs..."
+	MsgStatusRotatorShutdown   = "Shutting down Status Rotator..."
+	MsgStatusClearFail         = "Failed to clear status: %v"
+	MsgStatusTime              = "Time: %s (Local)"
+	MsgBotSendStickerFail      = "Failed to send sticker: %v\nNote: Bots can only send stickers from the same guild or official Discord stickers."
+	MsgBotSendStickerSuccess   = "Sticker sent successfully!"
+	MsgBotStickerIDInvalid     = "Invalid Sticker ID format."
+)
+
+// ============================================================================
+// Status & Activity Constants
+// ============================================================================
+
+const (
+	MsgStatusUpdateFail        = "Update failed: %v"
+	MsgStatusRotated           = "Status rotated to: \"%s\" (Next rotate in %v)"
+	MsgStatusRotatedNoInterval = "Status rotated to: \"%s\""
+)
+
+// ============================================================================
+// Debug & Miscellaneous Constants
+// ============================================================================
+
+const (
+	MsgDebugRoleColorUpdateFail  = "Failed to update guild config: %v"
+	MsgDebugRoleColorResetFail   = "Failed to reset guild config: %v"
+	MsgDebugRoleColorRefreshFail = "Failed to refresh role color: %v"
+	MsgDebugStatusCmdFail        = "Failed to respond to status command: %v"
+	MsgDebugTestErrorSendFail    = "Failed to send error preview: %v"
+)
+
 // ===========================
 // Command Registration
 // ===========================
@@ -31,13 +94,13 @@ import (
 func init() {
 	adminPerm := discord.PermissionAdministrator
 
-	OnClientReady(func(ctx context.Context, client *bot.Client) {
-		RegisterDaemon(LogStatusRotator, func(ctx context.Context) (bool, func(), func()) { return StartStatusRotator(ctx, client) })
+	OnClientReady(func(ctx context.Context, client bot.Client) {
+		RegisterDaemon(LogBot, func(ctx context.Context) (bool, func(), func()) { return StartStatusRotator(ctx, client) })
 	})
 
 	RegisterCommand(discord.SlashCommandCreate{
-		Name:                     "session",
-		Description:              "Session management utilities (Admin Only)",
+		Name:                     "bot",
+		Description:              "Bot management utilities (Admin Only)",
 		DefaultMemberPermissions: omit.New(&adminPerm),
 		Contexts: []discord.InteractionContextType{
 			discord.InteractionContextTypeGuild,
@@ -101,10 +164,21 @@ func init() {
 				Name:        "cleanup",
 				Description: "Clear all guild commands from the current server",
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "send",
+				Description: "Send a Discord sticker (Admin Only)",
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionString{
+						Name:        "sticker_id",
+						Description: "The ID of the sticker to send",
+						Required:    true,
+					},
+				},
+			},
 		},
-	}, handleSession)
+	}, handleBot)
 
-	RegisterAutocompleteHandler("session", handleSessionAutocomplete)
+	RegisterAutocompleteHandler("bot", handleBotAutocomplete)
 	RegisterComponentHandler("console:", handleConsolePagination)
 }
 
@@ -155,7 +229,7 @@ const (
 var (
 	// Status Rotator State
 	StartTime       = time.Now().UTC()
-	statusMap       map[string]func(context.Context, *bot.Client) string
+	statusMap       map[string]func(context.Context, bot.Client) string
 	statusKeys      []string
 	lastStatusText  string
 	statusMu        sync.RWMutex
@@ -178,9 +252,9 @@ func GetRotationInterval() time.Duration {
 }
 
 // StartStatusRotator starts the status rotation daemon
-func StartStatusRotator(ctx context.Context, client *bot.Client) (bool, func(), func()) {
+func StartStatusRotator(ctx context.Context, client bot.Client) (bool, func(), func()) {
 	// Always start the daemon even if currently disabled, so it can be re-enabled at runtime
-	statusMap = map[string]func(context.Context, *bot.Client) string{
+	statusMap = map[string]func(context.Context, bot.Client) string{
 		"Reminders": GetRemindersStatus,
 		"Color":     GetColorStatus,
 		"Uptime":    GetUptimeStatus,
@@ -206,26 +280,21 @@ func StartStatusRotator(ctx context.Context, client *bot.Client) (bool, func(), 
 				}
 			}
 		}, func() { // Shutdown hook
-			LogStatusRotator("Shutting down Status Rotator...")
+			LogBot(MsgStatusRotatorShutdown)
 		}
 }
 
 // updateStatus sections selects the next status to display
-func updateStatus(ctx context.Context, client *bot.Client, nextInterval time.Duration) {
-	if client == nil {
-		return
-	}
-
+func updateStatus(ctx context.Context, client bot.Client, nextInterval time.Duration) {
 	visibleStr, err := GetBotConfig(ctx, configKeyStatus)
 	if err != nil || visibleStr == "false" {
 		err := client.SetPresence(ctx, gateway.WithOnlineStatus(discord.OnlineStatusOnline), gateway.WithPlayingActivity(""))
 		if err != nil {
-			LogStatusRotator("Failed to clear status: %v", err)
+			LogBot(MsgStatusClearFail, err)
 		}
 		return
 	}
 
-	// Check for Pinned Status
 	pinnedStatus, _ := GetBotConfig(ctx, configKeyPin)
 	if pinnedStatus != "" {
 		if gen, ok := statusMap[pinnedStatus]; ok {
@@ -279,7 +348,7 @@ func updateStatus(ctx context.Context, client *bot.Client, nextInterval time.Dur
 	)
 
 	if err != nil {
-		LogStatusRotator(MsgStatusUpdateFail, err)
+		LogBot(MsgStatusUpdateFail, err)
 	} else {
 		logStatus := selectedStatus
 		re := regexp.MustCompile(`#([A-Fa-f0-9]{6})`)
@@ -289,15 +358,15 @@ func updateStatus(ctx context.Context, client *bot.Client, nextInterval time.Dur
 		})
 
 		if nextInterval > 0 {
-			LogStatusRotator(MsgStatusRotated, logStatus, nextInterval)
+			LogBot(MsgStatusRotated, logStatus, nextInterval)
 		} else {
-			LogStatusRotator(MsgStatusRotatedNoInterval, logStatus)
+			LogBot(MsgStatusRotatedNoInterval, logStatus)
 		}
 	}
 }
 
 // GetRemindersStatus returns a status string showing next reminder time
-func GetRemindersStatus(ctx context.Context, client *bot.Client) string {
+func GetRemindersStatus(ctx context.Context, client bot.Client) string {
 	count, _ := GetRemindersCount(ctx)
 	if count == 0 {
 		return ""
@@ -306,9 +375,12 @@ func GetRemindersStatus(ctx context.Context, client *bot.Client) string {
 }
 
 // GetColorStatus returns a status string showing next role color update
-func GetColorStatus(ctx context.Context, client *bot.Client) string {
+func GetColorStatus(ctx context.Context, client bot.Client) string {
 	nextUpdate, guildID, found := GetNextUpdate(ctx)
 	if !found {
+		return ""
+	}
+	if guildID == 0 { // Snowflake ID is uint64, check for 0 not nil
 		return ""
 	}
 	currentColor := GetCurrentColor(ctx, client, guildID)
@@ -320,13 +392,13 @@ func GetColorStatus(ctx context.Context, client *bot.Client) string {
 }
 
 // GetUptimeStatus returns a status string showing bot uptime
-func GetUptimeStatus(ctx context.Context, client *bot.Client) string {
+func GetUptimeStatus(ctx context.Context, client bot.Client) string {
 	uptime := time.Since(StartTime)
 	return fmt.Sprintf("Uptime: %dh %dm %ds", int(uptime.Hours()), int(uptime.Minutes())%60, int(uptime.Seconds())%60)
 }
 
 // GetLatencyStatus returns a status string showing gateway latency
-func GetLatencyStatus(ctx context.Context, client *bot.Client) string {
+func GetLatencyStatus(ctx context.Context, client bot.Client) string {
 	ping := client.Gateway.Latency()
 	if ping == 0 {
 		return ""
@@ -335,16 +407,16 @@ func GetLatencyStatus(ctx context.Context, client *bot.Client) string {
 }
 
 // GetTimeStatus returns a status string showing current UTC time
-func GetTimeStatus(ctx context.Context, client *bot.Client) string {
-	return "Time: " + time.Now().Local().Format("15:04:05") + " (Local)"
+func GetTimeStatus(ctx context.Context, client bot.Client) string {
+	return fmt.Sprintf(MsgStatusTime, time.Now().Local().Format("15:04:05"))
 }
 
 // ===========================
 // Command Handlers
 // ===========================
 
-// handleSession routes session subcommands to their respective handlers
-func handleSession(event *events.ApplicationCommandInteractionCreate) {
+// handleBot routes bot subcommands to their respective handlers
+func handleBot(event *events.ApplicationCommandInteractionCreate) {
 	data := event.SlashCommandInteractionData()
 	if data.SubCommandName == nil {
 		return
@@ -353,35 +425,32 @@ func handleSession(event *events.ApplicationCommandInteractionCreate) {
 	subCmd := *data.SubCommandName
 	switch subCmd {
 	case "reboot":
-		handleSessionReboot(event, data)
+		handleBotReboot(event, data)
 	case "shutdown":
-		handleSessionShutdown(event)
+		handleBotShutdown(event)
 	case "stats":
-		handleSessionStats(event, data)
+		handleBotStats(event, data)
 	case "status":
-		handleSessionStatus(event, data)
+		handleBotStatus(event, data)
 	case "console":
-		handleSessionConsole(event, data)
+		handleBotConsole(event, data)
 	case "cleanup":
-		handleSessionCleanup(event)
+		handleBotCleanup(event)
+	case "send":
+		handleBotSend(event, data)
 	default:
-		log.Printf("Unknown session subcommand: %s", subCmd)
+		log.Printf(MsgBotUnknownSubcommand, subCmd)
 	}
 }
 
-func handleSessionReboot(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+func handleBotReboot(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	build, _ := data.OptBool("build")
-	LogWarn(MsgSessionRebootCommanded, event.User().Username, event.User().ID)
+	LogWarn(MsgBotRebootCommanded, event.User().Username, event.User().ID)
 
-	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionRebooting))).
-		SetEphemeral(true).
-		Build())
+	_ = RespondInteractionV2(*event.Client(), event, MsgBotRebooting, true)
 
 	if build {
-		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(),
-			discord.NewMessageUpdateBuilder().AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionRebootBuilding))).Build())
+		_ = EditInteractionV2(*event.Client(), event, MsgBotRebootBuilding)
 
 		exePath, err := os.Executable()
 		if err != nil {
@@ -391,13 +460,11 @@ func handleSessionReboot(event *events.ApplicationCommandInteractionCreate, data
 		cmd := exec.Command("go", "build", "-o", exePath, ".")
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(),
-				discord.NewMessageUpdateBuilder().AddComponents(discord.NewContainer(discord.NewTextDisplay(fmt.Sprintf(MsgSessionRebootBuildFail, string(output))))).Build())
+			_ = EditInteractionV2(*event.Client(), event, fmt.Sprintf(MsgBotRebootBuildFail, string(output)))
 			return
 		}
 
-		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(),
-			discord.NewMessageUpdateBuilder().AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionRebootBuildSuccess+"\n"+MsgSessionRebooting))).Build())
+		_ = EditInteractionV2(*event.Client(), event, MsgBotRebootBuildSuccess+"\n"+MsgBotRebooting)
 	}
 
 	RestartRequested = true
@@ -406,19 +473,15 @@ func handleSessionReboot(event *events.ApplicationCommandInteractionCreate, data
 	})
 }
 
-func handleSessionShutdown(event *events.ApplicationCommandInteractionCreate) {
-	LogWarn(MsgSessionShutdownCommanded, event.User().Username, event.User().ID)
-	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionShuttingDown))).
-		SetEphemeral(true).
-		Build())
+func handleBotShutdown(event *events.ApplicationCommandInteractionCreate) {
+	LogWarn(MsgBotShutdownCommanded, event.User().Username, event.User().ID)
+	_ = RespondInteractionV2(*event.Client(), event, MsgBotShuttingDown, true)
 	time.AfterFunc(1*time.Second, func() {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
 	})
 }
 
-func handleSessionStatus(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+func handleBotStatus(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	selection := data.String("select")
 	var msg string
 
@@ -426,37 +489,33 @@ func handleSessionStatus(event *events.ApplicationCommandInteractionCreate, data
 	case StatusDisableAll:
 		SetBotConfig(AppContext, configKeyStatus, "false")
 		SetBotConfig(AppContext, configKeyPin, "")
-		msg = MsgSessionStatusDisabled
+		msg = MsgBotStatusDisabled
 	case StatusEnableAll:
 		SetBotConfig(AppContext, configKeyStatus, "true")
 		SetBotConfig(AppContext, configKeyPin, "")
-		msg = MsgSessionStatusEnabled
+		msg = MsgBotStatusEnabled
 	default:
 		if _, ok := statusMap[selection]; ok {
 			SetBotConfig(AppContext, configKeyStatus, "true")
 			SetBotConfig(AppContext, configKeyPin, selection)
-			msg = fmt.Sprintf("Status has been pinned to **%s**.", selection)
+			msg = fmt.Sprintf(MsgBotStatusPinned, selection)
 		} else {
-			msg = "Invalid status selection."
+			msg = MsgBotStatusInvalid
 		}
 	}
 
 	// Trigger immediate update
-	go func() {
-		updateStatus(AppContext, event.Client(), 0)
-	}()
+	safeGo(func() {
+		updateStatus(AppContext, *event.Client(), 0)
+	})
 
-	err := event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
-		SetEphemeral(true).
-		Build())
+	err := RespondInteractionV2(*event.Client(), event, msg, true)
 	if err != nil {
 		LogDebug(MsgDebugStatusCmdFail, err)
 	}
 }
 
-func handleSessionAutocomplete(event *events.AutocompleteInteractionCreate) {
+func handleBotAutocomplete(event *events.AutocompleteInteractionCreate) {
 	data := event.Data
 	input := data.String("select")
 
@@ -465,7 +524,7 @@ func handleSessionAutocomplete(event *events.AutocompleteInteractionCreate) {
 		name := key
 		// If this key maps to a generator, try to get the dynamic string
 		if gen, ok := statusMap[key]; ok {
-			dynamicVal := gen(AppContext, event.Client())
+			dynamicVal := gen(AppContext, *event.Client())
 			if dynamicVal != "" {
 				name = dynamicVal
 			}
@@ -485,23 +544,18 @@ func handleSessionAutocomplete(event *events.AutocompleteInteractionCreate) {
 	_ = event.AutocompleteResult(choices)
 }
 
-func handleSessionStats(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+func handleBotStats(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	ephemeral := true
 	if eph, ok := data.OptBool("ephemeral"); ok {
 		ephemeral = eph
 	}
 
-	builder := discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		SetEphemeral(ephemeral).
-		AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionStatsLoading)))
-
-	err := event.CreateMessage(builder.Build())
+	err := RespondInteractionV2(*event.Client(), event, MsgBotStatsLoading, ephemeral)
 	if err != nil {
 		return
 	}
 
-	go func() {
+	safeGo(func() {
 		interTime := snowflake.ID(event.ID()).Time()
 		roundTrip := time.Since(interTime).Milliseconds()
 
@@ -513,8 +567,7 @@ func handleSessionStats(event *events.ApplicationCommandInteractionCreate, data 
 		statsCacheMu.Unlock()
 
 		content := renderStatsContent(metrics)
-		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(),
-			discord.NewMessageUpdateBuilder().SetIsComponentsV2(true).AddComponents(discord.NewContainer(discord.NewTextDisplay(content))).Build())
+		_ = EditInteractionV2(*event.Client(), event, content)
 
 		if ephemeral {
 			ticker := time.NewTicker(10 * time.Second)
@@ -530,8 +583,7 @@ func handleSessionStats(event *events.ApplicationCommandInteractionCreate, data 
 					// Re-calculate round trip for the update call to keep it somewhat accurate
 					startUpdate := time.Now()
 					content := renderStatsContent(live)
-					_, err := event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(),
-						discord.NewMessageUpdateBuilder().SetIsComponentsV2(true).AddComponents(discord.NewContainer(discord.NewTextDisplay(content))).Build())
+					err := EditInteractionV2(*event.Client(), event, content)
 
 					if err != nil {
 						failCount++
@@ -553,26 +605,30 @@ func handleSessionStats(event *events.ApplicationCommandInteractionCreate, data 
 				}
 			}
 		}
-	}()
+	})
 }
 
-func handleSessionCleanup(event *events.ApplicationCommandInteractionCreate) {
+func handleBotCleanup(event *events.ApplicationCommandInteractionCreate) {
 	guildID := event.GuildID()
 	if guildID == nil {
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("This command can only be used in a server.").SetEphemeral(true).Build())
+		guildID := event.GuildID()
+		if guildID == nil {
+			_ = RespondInteractionV2(*event.Client(), event, MsgBotServerOnly, true)
+			return
+		}
 		return
 	}
 
 	_, err := event.Client().Rest.SetGuildCommands(event.ApplicationID(), *guildID, []discord.ApplicationCommandCreate{})
 	if err != nil {
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("Failed to clear commands: %v", err)).SetEphemeral(true).Build())
+		_ = RespondInteractionV2(*event.Client(), event, fmt.Sprintf(MsgBotClearCommandsFail, err), true)
 		return
 	}
 
-	_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("Successfully cleared all guild commands from this server.").SetEphemeral(true).Build())
+	_ = RespondInteractionV2(*event.Client(), event, MsgBotClearCommandsSuccess, true)
 }
 
-func handleSessionConsole(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+func handleBotConsole(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	ephemeral := true
 	if eph, ok := data.OptBool("ephemeral"); ok {
 		ephemeral = eph
@@ -581,7 +637,7 @@ func handleSessionConsole(event *events.ApplicationCommandInteractionCreate, dat
 		logPath := GetLogPath()
 		if logPath != "" {
 			_ = os.Truncate(logPath, 0)
-			LogInfo("Log file truncated by user %s", event.User().Username)
+			LogInfo(MsgBotLogTruncated, event.User().Username)
 		}
 	}
 	renderConsole(event, 20, 0, ephemeral)
@@ -699,9 +755,9 @@ func renderConsole(event any, count, offset int, ephemeral bool) {
 	path := GetLogPath()
 	if path == "" {
 		if ev, ok := event.(*events.ApplicationCommandInteractionCreate); ok {
-			_ = ev.CreateMessage(discord.NewMessageCreateBuilder().SetContent(MsgSessionConsoleDisabled).SetEphemeral(ephemeral).Build())
+			_ = RespondInteractionV2(*ev.Client(), ev, MsgBotConsoleDisabled, ephemeral)
 		} else if ev, ok := event.(*events.ComponentInteractionCreate); ok {
-			_ = ev.UpdateMessage(discord.NewMessageUpdateBuilder().AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgSessionConsoleDisabled))).Build())
+			_ = EditInteractionV2(*ev.Client(), ev, MsgBotConsoleDisabled)
 		}
 		return
 	}
@@ -711,20 +767,20 @@ func renderConsole(event any, count, offset int, ephemeral bool) {
 	}
 	var opts []discord.StringSelectMenuOption
 	if hasMore {
-		opts = append(opts, discord.NewStringSelectMenuOption(MsgSessionConsoleBtnOldest, fmt.Sprintf("top:%d:%d", count, actual)).WithDescription("Jump to oldest"))
-		opts = append(opts, discord.NewStringSelectMenuOption(MsgSessionConsoleBtnOlder, fmt.Sprintf("up:%d:%d", count, actual)).WithDescription("View older"))
+		opts = append(opts, discord.NewStringSelectMenuOption(MsgBotConsoleBtnOldest, fmt.Sprintf("top:%d:%d", count, actual)).WithDescription("Jump to oldest"))
+		opts = append(opts, discord.NewStringSelectMenuOption(MsgBotConsoleBtnOlder, fmt.Sprintf("up:%d:%d", count, actual)).WithDescription("View older"))
 	}
-	opts = append(opts, discord.NewStringSelectMenuOption(MsgSessionConsoleBtnRefresh, fmt.Sprintf("refresh:%d:%d", count, actual)).WithDescription("Reload current"))
+	opts = append(opts, discord.NewStringSelectMenuOption(MsgBotConsoleBtnRefresh, fmt.Sprintf("refresh:%d:%d", count, actual)).WithDescription("Reload current"))
 	if actual > 0 {
-		opts = append(opts, discord.NewStringSelectMenuOption(MsgSessionConsoleBtnNewer, fmt.Sprintf("down:%d:%d", count, actual)).WithDescription("View newer"))
-		opts = append(opts, discord.NewStringSelectMenuOption(MsgSessionConsoleBtnLatest, fmt.Sprintf("bottom:%d:%d", count, actual)).WithDescription("Jump to latest"))
+		opts = append(opts, discord.NewStringSelectMenuOption(MsgBotConsoleBtnNewer, fmt.Sprintf("down:%d:%d", count, actual)).WithDescription("View newer"))
+		opts = append(opts, discord.NewStringSelectMenuOption(MsgBotConsoleBtnLatest, fmt.Sprintf("bottom:%d:%d", count, actual)).WithDescription("Jump to latest"))
 	}
-	nav := discord.NewStringSelectMenu("console:nav", "Navigate Logs...", opts...)
+	nav := discord.NewStringSelectMenu("console:nav", MsgConsoleNavLabel, opts...)
 	container := discord.NewContainer(discord.NewTextDisplay(fmt.Sprintf("```ansi\n%s\n```", logs)), discord.NewActionRow(nav))
 	if ev, ok := event.(*events.ComponentInteractionCreate); ok {
-		_ = ev.UpdateMessage(discord.NewMessageUpdateBuilder().SetIsComponentsV2(true).SetComponents(container).Build())
+		_ = ev.UpdateMessage(discord.NewMessageUpdate().WithIsComponentsV2(true).WithComponents(container))
 	} else if ev, ok := event.(*events.ApplicationCommandInteractionCreate); ok {
-		_ = ev.CreateMessage(discord.NewMessageCreateBuilder().SetIsComponentsV2(true).SetEphemeral(ephemeral).AddComponents(container).Build())
+		_ = ev.CreateMessage(discord.NewMessageCreate().WithIsComponentsV2(true).WithEphemeral(ephemeral).WithComponents(container))
 	}
 }
 
@@ -788,7 +844,7 @@ func readLogLines(path string, count, offset int) (string, bool, int, error) {
 		length = maxR
 	}
 	if length <= 0 {
-		return MsgSessionConsoleEmpty, actual+count < found, actual, nil
+		return MsgBotConsoleEmpty, actual+count < found, actual, nil
 	}
 	res := make([]byte, length)
 	_, _ = f.ReadAt(res, st)
@@ -802,4 +858,43 @@ func readLogLines(path string, count, offset int) (string, bool, int, error) {
 		}
 	}
 	return logs, actual+count < found, actual, nil
+}
+
+func handleBotSend(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+	stickerIDStr := data.String("sticker_id")
+	stickerID, err := snowflake.Parse(stickerIDStr)
+	if err != nil {
+		_ = event.CreateMessage(discord.NewMessageCreate().
+			WithContent(MsgBotStickerIDInvalid).
+			WithEphemeral(true))
+		return
+	}
+
+	// 1. Defer response (ephemeral)
+	err = event.DeferCreateMessage(true)
+	if err != nil {
+		return
+	}
+
+	client := event.Client()
+	channelID := event.Channel().ID()
+
+	// 2. Send actual sticker using the Bot's CreateMessage endpoint
+	// Discord Webhooks do NOT support sticker_ids at all.
+	// To send an actual sticker, we must use the bot's own identity.
+	_, err = client.Rest.CreateMessage(channelID, discord.MessageCreate{
+		StickerIDs: []snowflake.ID{stickerID},
+	})
+
+	if err != nil {
+		_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.MessageUpdate{
+			Content: strPtr(fmt.Sprintf(MsgBotSendStickerFail, err)),
+		})
+		return
+	}
+
+	// 3. Final Success Message
+	_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.MessageUpdate{
+		Content: strPtr(MsgBotSendStickerSuccess),
+	})
 }

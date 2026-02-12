@@ -10,6 +10,14 @@ import (
 	"github.com/disgoorg/disgo/events"
 )
 
+// ============================================================================
+// Undertext System Constants
+// ============================================================================
+
+const (
+	MsgUndertextRespondError = "Failed to respond to interaction: %v"
+)
+
 // ===========================
 // Command Registration
 // ===========================
@@ -251,17 +259,7 @@ func handleUndertext(event *events.ApplicationCommandInteractionCreate) {
 	generatedURL := sb.String()
 
 	// Build response with V2 components and MediaGallery
-	builder := discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewMediaGallery(
-					discord.MediaGalleryItem{Media: discord.UnfurledMediaItem{URL: generatedURL}},
-				),
-			),
-		)
-
-	err := event.CreateMessage(builder.Build())
+	err := RespondInteractionContainerV2(*event.Client(), event, NewV2Container(NewMediaGallery(generatedURL)), false)
 	if err != nil {
 		LogUndertext(MsgUndertextRespondError, err)
 	}

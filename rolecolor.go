@@ -16,6 +16,30 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+// ============================================================================
+// Role Color System Constants
+// ============================================================================
+
+const (
+	MsgRoleColorFailedToFetchConfigs = "Failed to fetch configs: %v"
+	MsgRoleColorNextUpdate           = "Guild %s next update in %d minutes"
+	MsgRoleColorUpdateFail           = "Failed to update role %s in guild %s: %v"
+	MsgRoleColorUpdated              = "Updated role %s in guild %s to %s"
+	MsgRoleColorErrGuildOnly         = "This command can only be used in a server."
+	MsgRoleColorErrSetFail           = "Failed to set role color configuration."
+	MsgRoleColorErrResetFail         = "Failed to reset role color configuration."
+	MsgRoleColorErrNoRole            = "No role is configured for color rotation."
+	MsgRoleColorErrRefreshFail       = "Failed to refresh role color."
+	MsgRoleColorErrNoRoleStats       = "No random color role is currently configured for this server. Use `/rolecolor set` to start!"
+	MsgRoleColorSetSuccess           = "Role <@&%s> will now have random colors!"
+	MsgRoleColorResetSuccess         = "Role color rotation has been disabled."
+	MsgRoleColorRefreshSuccess       = "Role color has been refreshed!"
+	MsgRoleColorStatsHeader          = "**Random Role Color Status**"
+	MsgRoleColorStatsContent         = "**Current Role:** <@&%s>\n" +
+		"**Status:** `Active`\n\n" +
+		"The bot will periodically change the color of this role to a random vibrant hue."
+)
+
 // ===========================
 // Command Registration
 // ===========================
@@ -23,7 +47,7 @@ import (
 func init() {
 	adminPerm := discord.PermissionAdministrator
 
-	OnClientReady(func(ctx context.Context, client *bot.Client) {
+	OnClientReady(func(ctx context.Context, client bot.Client) {
 		RegisterDaemon(LogRoleColorRotator, func(ctx context.Context) (bool, func(), func()) { return StartRoleColorRotator(ctx, client) })
 	})
 
@@ -116,7 +140,7 @@ func handleRoleColor(event *events.ApplicationCommandInteractionCreate) {
 }
 
 // StartRoleColorRotator initializes the role color rotator daemon
-func StartRoleColorRotator(ctx context.Context, client *bot.Client) (bool, func(), func()) {
+func StartRoleColorRotator(ctx context.Context, client bot.Client) (bool, func(), func()) {
 	// Load all configured guilds
 	configs, err := GetAllGuildRandomColorConfigs(ctx)
 	if err != nil {
@@ -156,7 +180,7 @@ func ShutdownRoleColorRotator(ctx context.Context) {
 }
 
 // StartRotationForGuild starts or restarts the rotation for a specific guild
-func StartRotationForGuild(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) {
+func StartRotationForGuild(ctx context.Context, client bot.Client, guildID, roleID snowflake.ID) {
 	// Stop existing if any
 	StopRotationForGuild(guildID)
 
@@ -190,7 +214,7 @@ func StopRotationForGuild(guildID snowflake.ID) {
 }
 
 // ScheduleNextUpdate schedules the next color update
-func ScheduleNextUpdate(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) {
+func ScheduleNextUpdate(ctx context.Context, client bot.Client, guildID, roleID snowflake.ID) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -249,7 +273,7 @@ func ScheduleNextUpdate(ctx context.Context, client *bot.Client, guildID, roleID
 }
 
 // UpdateRoleColor performs the immediate color update
-func UpdateRoleColor(ctx context.Context, client *bot.Client, guildID, roleID snowflake.ID) error {
+func UpdateRoleColor(ctx context.Context, client bot.Client, guildID, roleID snowflake.ID) error {
 	var newColor int
 	var lastHex string
 
@@ -343,7 +367,7 @@ func GetNextUpdate(ctx context.Context) (time.Time, snowflake.ID, bool) {
 }
 
 // GetCurrentColor returns the current color for a guild, prioritizing cache
-func GetCurrentColor(ctx context.Context, client *bot.Client, guildID snowflake.ID) string {
+func GetCurrentColor(ctx context.Context, client bot.Client, guildID snowflake.ID) string {
 	val, ok, _ := GetCurrentColorInt(ctx, client, guildID)
 	if !ok {
 		return ""
@@ -352,7 +376,7 @@ func GetCurrentColor(ctx context.Context, client *bot.Client, guildID snowflake.
 }
 
 // GetCurrentColorInt returns the current color for a guild as an integer
-func GetCurrentColorInt(ctx context.Context, client *bot.Client, guildID snowflake.ID) (int, bool, bool) {
+func GetCurrentColorInt(ctx context.Context, client bot.Client, guildID snowflake.ID) (int, bool, bool) {
 	val, ok := roleStates.Load(guildID)
 	if !ok {
 		return 0, false, false
@@ -453,10 +477,10 @@ func handleRoleColorSet(event *events.ApplicationCommandInteractionCreate, data 
 	}
 
 	// Start rotation daemon for this guild
-	StartRotationForGuild(AppContext, event.Client(), *guildID, roleID)
+	StartRotationForGuild(AppContext, *event.Client(), *guildID, roleID)
 
 	// Trigger immediate color update and check result
-	err = UpdateRoleColor(AppContext, event.Client(), *guildID, roleID)
+	err = UpdateRoleColor(AppContext, *event.Client(), *guildID, roleID)
 	if err != nil {
 		// If immediate update fails, stop rotation and tell user
 		StopRotationForGuild(*guildID)
@@ -504,7 +528,7 @@ func handleRoleColorRefresh(event *events.ApplicationCommandInteractionCreate) {
 	}
 
 	// Actually update the role color
-	err = UpdateRoleColor(AppContext, event.Client(), *guildID, roleID)
+	err = UpdateRoleColor(AppContext, *event.Client(), *guildID, roleID)
 	if err != nil {
 		LogDebug(MsgDebugRoleColorRefreshFail, err)
 		roleColorRespond(event, MsgRoleColorErrRefreshFail)
@@ -529,7 +553,7 @@ func handleRoleColorStats(event *events.ApplicationCommandInteractionCreate) {
 	}
 
 	nextUpdate, _, found := GetNextUpdate(AppContext)
-	colorStr := GetCurrentColor(AppContext, event.Client(), *guildID)
+	colorStr := GetCurrentColor(AppContext, *event.Client(), *guildID)
 
 	content := MsgRoleColorStatsHeader + "\n\n" + fmt.Sprintf(MsgRoleColorStatsContent, roleID)
 	if colorStr != "" {
@@ -548,13 +572,5 @@ func handleRoleColorStats(event *events.ApplicationCommandInteractionCreate) {
 
 // roleColorRespond sends a response message for rolecolor commands
 func roleColorRespond(event *events.ApplicationCommandInteractionCreate, content string) {
-	_ = event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewTextDisplay(content),
-			),
-		).
-		SetEphemeral(true).
-		Build())
+	_ = RespondInteractionV2(*event.Client(), event, content, true)
 }

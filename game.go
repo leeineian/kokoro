@@ -21,90 +21,178 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+// ============================================================================
+// Game System Constants
+// ============================================================================
+
+const (
+	// Commands & Options
+	CmdGame         = "game"
+	CmdGameDesc     = "Good games."
+	CmdConnect4     = "connect4"
+	CmdConnect4Desc = "Play Connect Four against another player or AI"
+	CmdCheckers     = "checkers"
+	CmdCheckersDesc = "Play Checkers (Draughts) against another player or AI"
+	CmdChess        = "chess"
+	CmdChessDesc    = "Play Chess against another player or AI"
+
+	OptOpponent       = "opponent"
+	OptOpponentDesc   = "Challenge another user (leave empty to play against AI)"
+	OptDifficulty     = "difficulty"
+	OptDifficultyDesc = "AI difficulty level (only for AI games)"
+	OptTimer          = "timer"
+	OptTimerDesc      = "Turn timer in seconds (leave empty or 0 to disable)"
+	OptSize           = "size"
+	OptSizeDesc       = "Board size"
+
+	ChoiceEasy    = "easy"
+	ChoiceNormal  = "normal"
+	ChoiceHard    = "hard"
+	ChoiceSmall   = "small"
+	ChoiceClassic = "classic"
+	ChoiceLarge   = "large"
+	ChoiceMaster  = "master"
+
+	// General Messages
+	MsgGamePanic           = "Panic in %s: %v"
+	MsgGameNotFound        = "Game not found or expired."
+	MsgGameNotPlayer       = "You're not a player in this game!"
+	MsgGameNotTurn         = "It's not your turn!"
+	MsgGameAlreadyActive   = "You are already in a game! (ID: %s)"
+	MsgGameOpponentActive  = "<@%d> is already in a game! (ID: %s)"
+	MsgGameChallengeSelf   = "You cannot challenge yourself!"
+	MsgGameForfeitSuccess  = "**<@%d> Forfeited 🛑 - <@%d> Won! 🎉**"
+	MsgGameClaimWinSuccess = "**<@%d> Claimed Victory! 🏆**"
+	MsgGameDraw            = "**<@%d> and <@%d> ended with a Draw!**"
+	MsgGameWin             = "**<@%d> Lost 💩 - <@%d> Won! 🎉**"
+	MsgGameTurn            = "**<@%d>'s Turn** %s"
+	MsgGameAIHardFallback  = "⚠️ *Hard AI service unavailable, using Normal AI.*"
+	MsgGameAINoMoves       = "AI has no moves!"
+	MsgGameHopelessFail    = "The AI is not in a hopeless position yet!"
+	MsgGameRestarted       = "🔄 Game Restarted!"
+
+	// Interaction Labels
+	LabelForfeit         = "Forfeit"
+	LabelClaimWin        = "Claim Win"
+	LabelPlayAgain       = "Play Again?"
+	LabelYes             = "Yes!"
+	LabelNo              = "No."
+	LabelSelectPiece     = "Select Piece..."
+	LabelSelectDest      = "Select Destination..."
+	LabelSelectPieceMove = "Select a piece to move..."
+
+	// Interaction Custom IDs
+	CIDConnect4Prefix   = "connect4"
+	CIDConnect4Yes      = "connect4:%s:yes"
+	CIDConnect4No       = "connect4:%s:no"
+	CIDConnect4Forfeit  = "connect4:%s:forfeit"
+	CIDConnect4Move     = "connect4:%s:%d"
+	CIDConnect4Disabled = "connect4:disabled:info"
+
+	CIDCheckersPrefix   = "checkers"
+	CIDCheckersGameID   = "checkers_%d_%d"
+	CIDCheckersClaimWin = "checkers:%s:claim_win"
+	CIDCheckersForfeit  = "checkers:%s:forfeit"
+	CIDCheckersYes      = "checkers:%s:yes"
+	CIDCheckersNo       = "checkers:%s:no"
+
+	CIDChessPrefix       = "chess"
+	CIDChessMoveTo       = "chess:%s:move_to"
+	CIDChessSelectPiece  = "chess:%s:select_piece"
+	CIDChessCancelSelect = "chess:%s:cancel_select"
+	CIDChessForfeit      = "chess:%s:forfeit"
+)
+
+var (
+	BoardCorner       = "⏺️"
+	BoardColumnEmojis = []string{"🇦\u200b", "🇧\u200b", "🇨\u200b", "🇩\u200b", "🇪\u200b", "🇫\u200b", "🇬\u200b", "🇭\u200b"}
+	BoardRowEmojis    = []string{"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"}
+)
+
 // ===========================
 // Command Registration
 // ===========================
 
 func init() {
 	RegisterCommand(discord.SlashCommandCreate{
-		Name:        "game",
-		Description: "Good games.",
+		Name:        CmdGame,
+		Description: CmdGameDesc,
 		Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionSubCommand{
-				Name:        "connect4",
-				Description: "Play Connect Four against another player or AI",
+				Name:        CmdConnect4,
+				Description: CmdConnect4Desc,
 				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionUser{
-						Name:        "opponent",
-						Description: "Challenge another user (leave empty to play against AI)",
+						Name:        OptOpponent,
+						Description: OptOpponentDesc,
 						Required:    false,
 					},
 					discord.ApplicationCommandOptionString{
-						Name:        "difficulty",
-						Description: "AI difficulty level (only for AI games)",
+						Name:        OptDifficulty,
+						Description: OptDifficultyDesc,
 						Required:    false,
 						Choices: []discord.ApplicationCommandOptionChoiceString{
-							{Name: "Easy", Value: "easy"},
-							{Name: "Normal", Value: "normal"},
-							{Name: "Hard", Value: "hard"},
+							{Name: "Easy", Value: ChoiceEasy},
+							{Name: "Normal", Value: ChoiceNormal},
+							{Name: "Hard", Value: ChoiceHard},
 						},
 					},
 					discord.ApplicationCommandOptionInt{
-						Name:        "timer",
-						Description: "Turn timer in seconds (leave empty or 0 to disable)",
+						Name:        OptTimer,
+						Description: OptTimerDesc,
 						Required:    false,
 					},
 					discord.ApplicationCommandOptionString{
-						Name:        "size",
-						Description: "Board size",
+						Name:        OptSize,
+						Description: OptSizeDesc,
 						Required:    false,
 						Choices: []discord.ApplicationCommandOptionChoiceString{
-							{Name: "Small (5x4)", Value: "small"},
-							{Name: "Classic (7x6)", Value: "classic"},
-							{Name: "Large (9x8)", Value: "large"},
-							{Name: "Master (10x10)", Value: "master"},
+							{Name: "Small (5x4)", Value: ChoiceSmall},
+							{Name: "Classic (7x6)", Value: ChoiceClassic},
+							{Name: "Large (9x8)", Value: ChoiceLarge},
+							{Name: "Master (10x10)", Value: ChoiceMaster},
 						},
 					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommand{
-				Name:        "checkers",
-				Description: "Play Checkers (Draughts) against another player or AI",
+				Name:        CmdCheckers,
+				Description: CmdCheckersDesc,
 				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionUser{
-						Name:        "opponent",
-						Description: "Challenge another user (leave empty to play against AI)",
+						Name:        OptOpponent,
+						Description: OptOpponentDesc,
 						Required:    false,
 					},
 					discord.ApplicationCommandOptionString{
-						Name:        "difficulty",
-						Description: "AI difficulty level (only for AI games)",
+						Name:        OptDifficulty,
+						Description: OptDifficultyDesc,
 						Required:    false,
 						Choices: []discord.ApplicationCommandOptionChoiceString{
-							{Name: "Easy", Value: "easy"},
-							{Name: "Normal", Value: "normal"},
-							{Name: "Hard", Value: "hard"},
+							{Name: "Easy", Value: ChoiceEasy},
+							{Name: "Normal", Value: ChoiceNormal},
+							{Name: "Hard", Value: ChoiceHard},
 						},
 					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommand{
-				Name:        "chess",
-				Description: "Play Chess against another player or AI",
+				Name:        CmdChess,
+				Description: CmdChessDesc,
 				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionUser{
-						Name:        "opponent",
-						Description: "Challenge another user (leave empty to play against AI)",
+						Name:        OptOpponent,
+						Description: OptOpponentDesc,
 						Required:    false,
 					},
 					discord.ApplicationCommandOptionString{
-						Name:        "difficulty",
-						Description: "AI difficulty level (only for AI games)",
+						Name:        OptDifficulty,
+						Description: OptDifficultyDesc,
 						Required:    false,
 						Choices: []discord.ApplicationCommandOptionChoiceString{
-							{Name: "Easy", Value: "easy"},
-							{Name: "Normal", Value: "normal"},
-							{Name: "Hard", Value: "hard"},
+							{Name: "Easy", Value: ChoiceEasy},
+							{Name: "Normal", Value: ChoiceNormal},
+							{Name: "Hard", Value: ChoiceHard},
 						},
 					},
 				},
@@ -118,18 +206,18 @@ func init() {
 		}
 
 		switch *subCmd {
-		case "connect4":
+		case CmdConnect4:
 			handlePlayConnect4(event, data)
-		case "checkers":
+		case CmdCheckers:
 			HandlePlayCheckers(event, data)
-		case "chess":
+		case CmdChess:
 			HandlePlayChess(event, data)
 		}
 	})
 
-	RegisterComponentHandler("connect4:", connect4HandleMove)
-	RegisterComponentHandler("checkers:", HandleCheckersInteraction)
-	RegisterComponentHandler("chess:", HandleChessInteraction)
+	RegisterComponentHandler(CmdConnect4+":", connect4HandleMove)
+	RegisterComponentHandler(CmdCheckers+":", HandleCheckersInteraction)
+	RegisterComponentHandler(CmdChess+":", HandleChessInteraction)
 }
 
 // ===========================
@@ -162,18 +250,17 @@ const (
 // ===========================
 
 const (
-	connect4ToWin   = 4
-	connect4P1      = "🔵"
-	connect4P2      = "🔴"
-	connect4Empty   = "⚫"
-	connect4Forfeit = "Forfeit"
-	connect4P1Win   = "🟦"
-	connect4P2Win   = "🟥"
+	connect4ToWin = 4
+	connect4P1    = "🔵"
+	connect4P2    = "🔴"
+	connect4Empty = "⚫"
+	connect4P1Win = "🟦"
+	connect4P2Win = "🟥"
 
-	connect4StatusTurn     = "**<@%d>'s Turn** %s"
-	connect4StatusDraw     = "**<@%d> and <@%d> ended with a Draw!**"
-	connect4StatusWin      = "**<@%d> Lost 💩 - <@%d> Won! 🎉**"
-	connect4StatusForfeit  = "**<@%d> Forfeited 🛑 - <@%d> Won! 🎉**"
+	connect4StatusTurn     = MsgGameTurn
+	connect4StatusDraw     = MsgGameDraw
+	connect4StatusWin      = MsgGameWin
+	connect4StatusForfeit  = MsgGameForfeitSuccess
 	connect4StatusTimeout  = "**<@%d> Took Too Long ⏱️ - <@%d> Won! 🎉**"
 	connect4StatusInactive = "**❌ `This game is no longer active.`**"
 	connect4StatusFull     = "**❌ `Column is full.`**"
@@ -235,37 +322,37 @@ func handlePlayConnect4(event *events.ApplicationCommandInteractionCreate, data 
 	difficulty := connect4Normal
 
 	var isOpponentBot bool
-	if opponent, ok := data.OptUser("opponent"); ok {
+	if opponent, ok := data.OptUser(OptOpponent); ok {
 		opponentID = &opponent.ID
 		isOpponentBot = opponent.Bot
 	}
 
-	if diff, ok := data.OptString("difficulty"); ok {
+	if diff, ok := data.OptString(OptDifficulty); ok {
 		switch diff {
-		case "easy":
+		case ChoiceEasy:
 			difficulty = connect4Easy
-		case "normal":
+		case ChoiceNormal:
 			difficulty = connect4Normal
-		case "hard":
+		case ChoiceHard:
 			difficulty = connect4Hard
 		}
 	}
 
 	timerSeconds := 0
-	if timer, ok := data.OptInt("timer"); ok {
+	if timer, ok := data.OptInt(OptTimer); ok {
 		timerSeconds = timer
 	}
 
 	rows, cols := 6, 7
-	if size, ok := data.OptString("size"); ok {
+	if size, ok := data.OptString(OptSize); ok {
 		switch size {
-		case "small":
+		case ChoiceSmall:
 			rows, cols = 4, 5
-		case "classic":
+		case ChoiceClassic:
 			rows, cols = 6, 7
-		case "large":
+		case ChoiceLarge:
 			rows, cols = 8, 9
-		case "master":
+		case ChoiceMaster:
 			rows, cols = 10, 10
 		}
 	}
@@ -279,13 +366,13 @@ func handlePlayConnect4(event *events.ApplicationCommandInteractionCreate, data 
 	userActiveGameMu.Lock()
 	if gid, ok := userActiveGame[p1]; ok {
 		userActiveGameMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("You are already in a game! (ID: %s)", gid)).SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(fmt.Sprintf(MsgGameAlreadyActive, gid)).WithEphemeral(true))
 		return
 	}
 	if opponentID != nil && *opponentID != appID {
 		if gid, ok := userActiveGame[*opponentID]; ok {
 			userActiveGameMu.Unlock()
-			event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("<@%d> is already in a game! (ID: %s)", *opponentID, gid)).SetEphemeral(true).Build())
+			event.CreateMessage(discord.NewMessageCreate().WithContent(fmt.Sprintf(MsgGameOpponentActive, *opponentID, gid)).WithEphemeral(true))
 			return
 		}
 	}
@@ -359,7 +446,7 @@ func handlePlayConnect4(event *events.ApplicationCommandInteractionCreate, data 
 	activeConnect4GamesMu.Unlock()
 
 	builder := connect4BuildMessage(game, gameID, "")
-	if err := event.CreateMessage(builder); err != nil {
+	if err := RespondInteractionContainerV2(*event.Client(), event, builder, false); err != nil {
 		activeConnect4GamesMu.Lock()
 		delete(activeConnect4Games, gameID)
 		activeConnect4GamesMu.Unlock()
@@ -377,18 +464,18 @@ func handlePlayConnect4(event *events.ApplicationCommandInteractionCreate, data 
 	}
 
 	if game.timerEnabled {
-		connect4StartTimer(event.Client(), game, gameID, 0)
+		connect4StartTimer(*event.Client(), game, gameID, 0)
 	}
 
 	if game.isAI && game.aiPlayerNum == 1 {
 		time.AfterFunc(1*time.Second, func() {
-			connect4MakeAIMove(event.Client(), game, gameID)
+			connect4MakeAIMove(*event.Client(), game, gameID)
 		})
 	}
 }
 
 // connect4StartTimer watches for turn expiry and forfeits if time runs out
-func connect4StartTimer(client *bot.Client, game *connect4Game, gameID string, moveCount int) {
+func connect4StartTimer(client bot.Client, game *connect4Game, gameID string, moveCount int) {
 	activeConnect4GamesMu.Lock()
 	if game.turnTimer != nil {
 		game.turnTimer.Stop()
@@ -421,12 +508,7 @@ func connect4StartTimer(client *bot.Client, game *connect4Game, gameID string, m
 
 		status := fmt.Sprintf(connect4StatusTimeout, loserID, winnerID)
 		builder := connect4BuildMessage(game, gameID, status)
-		if client != nil {
-			_, _ = client.Rest.UpdateMessage(game.channelID, game.messageID, discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				SetComponents(builder.Components...).
-				Build())
-		}
+		_, _ = EditContainerV2(client, game.channelID, game.messageID, builder, nil, nil)
 
 		delete(activeConnect4Games, gameID)
 		userActiveGameMu.Lock()
@@ -456,23 +538,22 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 			return
 		}
 
-		var newComponents []discord.LayoutComponent
+		var newComponents []any
 		for i, comp := range event.Message.Components {
 			modified := connect4DisableInteractive(comp)
 			if i == 0 {
 				if td, ok := modified.(discord.TextDisplayComponent); ok {
-					modified = discord.NewTextDisplay(td.Content + "\n" + connect4StatusInactive)
+					newComponents = append(newComponents, NewTextDisplay(td.Content+"\n"+connect4StatusInactive))
+					continue
 				} else if td, ok := modified.(*discord.TextDisplayComponent); ok {
-					modified = discord.NewTextDisplay(td.Content + "\n" + connect4StatusInactive)
+					newComponents = append(newComponents, NewTextDisplay(td.Content+"\n"+connect4StatusInactive))
+					continue
 				}
 			}
 			newComponents = append(newComponents, modified)
 		}
 
-		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			SetComponents(newComponents...).
-			Build())
+		_ = UpdateInteractionContainerV2(*event.Client(), event, NewV2Container(newComponents...))
 		return
 	}
 
@@ -486,10 +567,9 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 	if action == "yes" || action == "no" {
 		userID := event.User().ID
 		if userID != game.originalP1ID && userID != game.originalP2ID {
-			event.CreateMessage(discord.NewMessageCreateBuilder().
-				SetContent("You're not a player in this game!").
-				SetEphemeral(true).
-				Build())
+			event.CreateMessage(discord.NewMessageCreate().
+				WithContent(MsgGameNotPlayer).
+				WithEphemeral(true))
 			return
 		}
 
@@ -508,7 +588,7 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 
 			fullMsg := connect4BuildMessage(game, gameID, "")
 
-			var newComponents []discord.LayoutComponent
+			var newComponents []any
 
 			if len(fullMsg.Components) > 3 {
 				newComponents = append(newComponents, fullMsg.Components[:3]...)
@@ -516,10 +596,7 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 				newComponents = append(newComponents, fullMsg.Components...)
 			}
 
-			_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				SetComponents(newComponents...).
-				Build())
+			_ = UpdateInteractionContainerV2(*event.Client(), event, NewV2Container(newComponents...))
 			return
 		}
 
@@ -551,17 +628,15 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 		}
 		activeConnect4GamesMu.Unlock()
 
-		builder := connect4BuildMessage(game, gameID, "🔄 Game Restarted!")
-		_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetComponents(builder.Components...).
-			Build())
+		builder := connect4BuildMessage(game, gameID, MsgGameRestarted)
+		_ = UpdateInteractionContainerV2(*event.Client(), event, builder)
 
 		if game.timerEnabled {
-			connect4StartTimer(event.Client(), game, gameID, 0)
+			connect4StartTimer(*event.Client(), game, gameID, 0)
 		}
 		if game.isAI && game.aiPlayerNum == 1 {
 			time.AfterFunc(1*time.Second, func() {
-				connect4MakeAIMove(event.Client(), game, gameID)
+				connect4MakeAIMove(*event.Client(), game, gameID)
 			})
 		}
 		return
@@ -570,10 +645,9 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 	if action == "forfeit" {
 		userID := event.User().ID
 		if userID != game.player1ID && userID != game.player2ID {
-			event.CreateMessage(discord.NewMessageCreateBuilder().
-				SetContent("You're not a player in this game!").
-				SetEphemeral(true).
-				Build())
+			event.CreateMessage(discord.NewMessageCreate().
+				WithContent(MsgGameNotPlayer).
+				WithEphemeral(true))
 			return
 		}
 
@@ -598,9 +672,7 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 		userActiveGameMu.Unlock()
 
 		builder := connect4BuildMessage(game, gameID, forfeitMsg)
-		event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetComponents(builder.Components...).
-			Build())
+		UpdateInteractionContainerV2(*event.Client(), event, builder)
 		return
 	}
 
@@ -618,10 +690,9 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 	}
 
 	if userID != expectedPlayerID {
-		event.CreateMessage(discord.NewMessageCreateBuilder().
-			SetContent("It's not your turn!").
-			SetEphemeral(true).
-			Build())
+		event.CreateMessage(discord.NewMessageCreate().
+			WithContent(MsgGameNotTurn).
+			WithEphemeral(true))
 		return
 	}
 
@@ -640,17 +711,15 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 	activeConnect4GamesMu.Unlock()
 
 	builder := connect4BuildMessage(game, gameID, statusMsg)
-	event.UpdateMessage(discord.NewMessageUpdateBuilder().
-		SetComponents(builder.Components...).
-		Build())
+	UpdateInteractionContainerV2(*event.Client(), event, builder)
 
 	if !game.gameOver {
 		if game.timerEnabled {
-			connect4StartTimer(event.Client(), game, gameID, game.moveCount)
+			connect4StartTimer(*event.Client(), game, gameID, game.moveCount)
 		}
 		if game.isAI && game.currentTurn == game.aiPlayerNum {
 			time.AfterFunc(1*time.Second, func() {
-				connect4MakeAIMove(event.Client(), game, gameID)
+				connect4MakeAIMove(*event.Client(), game, gameID)
 			})
 		}
 	}
@@ -661,7 +730,7 @@ func connect4HandleMove(event *events.ComponentInteractionCreate) {
 // ===========================
 
 // connect4BuildMessage constructs the Discord message for the current game state
-func connect4BuildMessage(game *connect4Game, gameID string, statusMsg string) discord.MessageCreate {
+func connect4BuildMessage(game *connect4Game, gameID string, statusMsg string) Container {
 	var sb strings.Builder
 	header := connect4GetHeader(game.cols)
 	sb.WriteString(header + "\n")
@@ -743,45 +812,42 @@ func connect4BuildMessage(game *connect4Game, gameID string, statusMsg string) d
 		}
 	}
 
-	var layoutComponents []discord.LayoutComponent
+	var components []any
 
-	layoutComponents = append(layoutComponents, discord.NewTextDisplay(statusSB.String()))
-	layoutComponents = append(layoutComponents, discord.NewTextDisplay(sb.String()))
+	components = append(components, NewTextDisplay(statusSB.String()))
+	components = append(components, NewTextDisplay(sb.String()))
 
 	if game.gameOver {
-		layoutComponents = append(layoutComponents, discord.NewSeparator(discord.SeparatorSpacingSizeSmall).WithDivider(true))
+		components = append(components, NewSeparator(true))
 
 		row := discord.NewActionRow(
-			discord.NewButton(discord.ButtonStyleSecondary, "Play Again?", "connect4:disabled:info", "", 0).WithDisabled(true),
-			discord.NewButton(discord.ButtonStyleSuccess, "Yes!", fmt.Sprintf("connect4:%s:yes", gameID), "", 0),
-			discord.NewButton(discord.ButtonStyleDanger, "No.", fmt.Sprintf("connect4:%s:no", gameID), "", 0),
+			discord.NewButton(discord.ButtonStyleSecondary, LabelPlayAgain, CIDConnect4Disabled, "", 0).WithDisabled(true),
+			discord.NewButton(discord.ButtonStyleSuccess, LabelYes, fmt.Sprintf(CIDConnect4Yes, gameID), "", 0),
+			discord.NewButton(discord.ButtonStyleDanger, LabelNo, fmt.Sprintf(CIDConnect4No, gameID), "", 0),
 		)
-		layoutComponents = append(layoutComponents, row)
+		components = append(components, row)
 	} else {
-		layoutComponents = append(layoutComponents, discord.NewSeparator(discord.SeparatorSpacingSizeSmall).WithDivider(true))
+		components = append(components, NewSeparator(true))
 
 		for i := 0; i < game.cols; i += 5 {
 			var rowButtons []discord.InteractiveComponent
 			end := min(i+5, game.cols)
 			for col := i + 1; col <= end; col++ {
-				customID := fmt.Sprintf("connect4:%s:%d", gameID, col)
+				customID := fmt.Sprintf(CIDConnect4Move, gameID, col)
 				btn := discord.NewButton(discord.ButtonStylePrimary, connect4ColumnEmojis[col-1], customID, "", 0)
 				if connect4IsColumnFull(game, col-1) {
 					btn = btn.WithDisabled(true)
 				}
 				rowButtons = append(rowButtons, btn)
 			}
-			layoutComponents = append(layoutComponents, discord.NewActionRow(rowButtons...))
+			components = append(components, discord.NewActionRow(rowButtons...))
 		}
 
-		forfeitBtn := discord.NewButton(discord.ButtonStyleDanger, connect4Forfeit, fmt.Sprintf("connect4:%s:forfeit", gameID), "", 0)
-		layoutComponents = append(layoutComponents, discord.NewActionRow(forfeitBtn))
+		forfeitBtn := discord.NewButton(discord.ButtonStyleDanger, LabelForfeit, fmt.Sprintf(CIDConnect4Forfeit, gameID), "", 0)
+		components = append(components, discord.NewActionRow(forfeitBtn))
 	}
 
-	return discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(layoutComponents...).
-		Build()
+	return NewV2Container(components...)
 }
 
 // ===========================
@@ -905,7 +971,7 @@ func connect4IsBoardFull(game *connect4Game) bool {
 // ===========================
 
 // connect4MakeAIMove executes an AI move based on the configured difficulty
-func connect4MakeAIMove(client *bot.Client, game *connect4Game, gameID string) {
+func connect4MakeAIMove(client bot.Client, game *connect4Game, gameID string) {
 	activeConnect4GamesMu.Lock()
 	defer activeConnect4GamesMu.Unlock()
 
@@ -926,15 +992,10 @@ func connect4MakeAIMove(client *bot.Client, game *connect4Game, gameID string) {
 	statusMsg := connect4MakeMove(game, col)
 
 	builder := connect4BuildMessage(game, gameID, statusMsg)
-	if client != nil {
-		_, _ = client.Rest.UpdateMessage(game.channelID, game.messageID, discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			SetComponents(builder.Components...).
-			Build())
+	_, _ = EditContainerV2(client, game.channelID, game.messageID, builder, nil, nil)
 
-		if !game.gameOver && game.timerEnabled {
-			connect4StartTimer(client, game, gameID, game.moveCount)
-		}
+	if !game.gameOver && game.timerEnabled {
+		connect4StartTimer(client, game, gameID, game.moveCount)
 	}
 }
 
@@ -1180,7 +1241,6 @@ const (
 
 	checkersEmpty         = "⬛"
 	checkersWhiteTile     = "⬜"
-	checkersCorner        = "⏺️"
 	checkersTarget        = "🔲"
 	checkersP1Piece       = "🔴"
 	checkersP2Piece       = "🔵"
@@ -1188,10 +1248,10 @@ const (
 	checkersP2King        = "💙"
 	checkersP1Highlight   = "🟥"
 	checkersP2Highlight   = "🟦"
-	checkersStatusTurn    = "**<@%d>'s Turn** %s"
-	checkersStatusWin     = "**<@%d> Lost 💩 - <@%d> Won! 🎉**"
-	checkersStatusDraw    = "**<@%d> and <@%d> ended with a Draw!**"
-	checkersStatusForfeit = "**<@%d> Forfeited 🛑 - <@%d> Won! 🎉**"
+	checkersStatusTurn    = MsgGameTurn
+	checkersStatusWin     = MsgGameWin
+	checkersStatusDraw    = MsgGameDraw
+	checkersStatusForfeit = MsgGameForfeitSuccess
 )
 
 type CheckersPieceType int
@@ -1222,11 +1282,6 @@ type CheckersGame struct {
 	selectedPiece *[2]int
 	lastMoveDest  *[2]int
 }
-
-var (
-	checkersColumnEmojis = []string{"🇦\u200b", "🇧\u200b", "🇨\u200b", "🇩\u200b", "🇪\u200b", "🇫\u200b", "🇬\u200b", "🇭\u200b"}
-	checkersRowEmojis    = []string{"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"}
-)
 
 // ===========================
 // Checkers Logic - Core
@@ -1301,19 +1356,19 @@ func HandlePlayCheckers(event *events.ApplicationCommandInteractionCreate, data 
 	userActiveGameMu.Lock()
 	if gid, ok := userActiveGame[p1]; ok {
 		userActiveGameMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("You are already in a game! (ID: %s)", gid)).SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(fmt.Sprintf(MsgGameAlreadyActive, gid)).WithEphemeral(true))
 		return
 	}
 	if opponentID != nil && *opponentID != appID {
 		if gid, ok := userActiveGame[*opponentID]; ok {
 			userActiveGameMu.Unlock()
-			event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("<@%d> is already in a game! (ID: %s)", *opponentID, gid)).SetEphemeral(true).Build())
+			event.CreateMessage(discord.NewMessageCreate().WithContent(fmt.Sprintf(MsgGameOpponentActive, *opponentID, gid)).WithEphemeral(true))
 			return
 		}
 	}
 
 	cid := event.Channel().ID()
-	gameID := fmt.Sprintf("checkers_%d_%d", cid, time.Now().UnixNano())
+	gameID := fmt.Sprintf(CIDCheckersGameID, cid, time.Now().UnixNano())
 
 	userActiveGame[p1] = gameID
 	if opponentID != nil && *opponentID != appID {
@@ -1358,7 +1413,7 @@ func HandlePlayCheckers(event *events.ApplicationCommandInteractionCreate, data 
 	activeCheckersGamesMu.Unlock()
 
 	msg := CheckersBuildMessage(game, gameID, "")
-	if err := event.CreateMessage(msg); err != nil {
+	if err := RespondInteractionContainerV2(*event.Client(), event, msg, false); err != nil {
 		LogError("Failed to send checkers message: %v", err)
 		activeCheckersGamesMu.Lock()
 		delete(activeCheckersGames, gameID)
@@ -1381,7 +1436,7 @@ func HandlePlayCheckers(event *events.ApplicationCommandInteractionCreate, data 
 
 	if game.isAI && game.aiPlayerNum == 1 {
 		time.AfterFunc(1*time.Second, func() {
-			CheckersMakeAIMove(event.Client(), game, gameID)
+			CheckersMakeAIMove(*event.Client(), game, gameID)
 		})
 	}
 }
@@ -1406,21 +1461,21 @@ func HandleCheckersInteraction(event *events.ComponentInteractionCreate) {
 	game, exists := activeCheckersGames[gameID]
 	if !exists {
 		activeCheckersGamesMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("Game not found or expired.").SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(MsgGameNotFound).WithEphemeral(true))
 		return
 	}
 
 	userID := event.User().ID
 	if userID != game.player1ID && userID != game.player2ID {
 		activeCheckersGamesMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("You are not part of this game.").SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent("You are not part of this game.").WithEphemeral(true))
 		return
 	}
 
 	isP1 := userID == game.player1ID
 	if (game.currentTurn == 1 && !isP1) || (game.currentTurn == 2 && isP1) && action != "forfeit" {
 		activeCheckersGamesMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("It's not your turn!").SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(MsgGameNotTurn).WithEphemeral(true))
 		return
 	}
 
@@ -1470,10 +1525,7 @@ func HandleCheckersInteraction(event *events.ComponentInteractionCreate) {
 		}
 
 		msg := CheckersBuildMessage(game, gameID, statusMsg)
-		event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			SetComponents(msg.Components...).
-			Build())
+		UpdateInteractionContainerV2(*event.Client(), event, msg)
 
 		userActiveGameMu.Lock()
 		delete(userActiveGame, game.player1ID)
@@ -1483,7 +1535,7 @@ func HandleCheckersInteraction(event *events.ComponentInteractionCreate) {
 
 	case "claim_win":
 		if !CheckersIsHopeless(game) {
-			event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("The AI is not in a hopeless position yet!").SetEphemeral(true).Build())
+			event.CreateMessage(discord.NewMessageCreate().WithContent(MsgGameHopelessFail).WithEphemeral(true))
 			return
 		}
 
@@ -1493,13 +1545,10 @@ func HandleCheckersInteraction(event *events.ComponentInteractionCreate) {
 			game.winner = 2
 		}
 
-		statusMsg := fmt.Sprintf("**<@%d> Claimed Victory! 🏆**", userID)
+		statusMsg := fmt.Sprintf(MsgGameClaimWinSuccess, userID)
 		msg := CheckersBuildMessage(game, gameID, statusMsg)
 
-		event.UpdateMessage(discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			SetComponents(msg.Components...).
-			Build())
+		UpdateInteractionContainerV2(*event.Client(), event, msg)
 
 		userActiveGameMu.Lock()
 		delete(userActiveGame, game.player1ID)
@@ -1512,14 +1561,11 @@ func HandleCheckersInteraction(event *events.ComponentInteractionCreate) {
 	msg := CheckersBuildMessage(game, gameID, "")
 	activeCheckersGamesMu.Unlock()
 
-	_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-		SetIsComponentsV2(true).
-		SetComponents(msg.Components...).
-		Build())
+	_ = UpdateInteractionContainerV2(*event.Client(), event, msg)
 
 	if !game.gameOver && game.isAI && game.currentTurn == game.aiPlayerNum {
 		time.AfterFunc(1*time.Second, func() {
-			CheckersMakeAIMove(event.Client(), game, gameID)
+			CheckersMakeAIMove(*event.Client(), game, gameID)
 		})
 	}
 }
@@ -1699,7 +1745,7 @@ func CheckersIsHopeless(game *CheckersGame) bool {
 // Checkers Rendering & Helpers
 // ===========================
 
-func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) discord.MessageCreate {
+func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) Container {
 	var sb strings.Builder
 
 	// Determine visual mapping based on randomization
@@ -1722,17 +1768,17 @@ func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) d
 		var hsb strings.Builder
 		if !rev {
 			for i := 0; i < checkersCols; i++ {
-				hsb.WriteString(checkersColumnEmojis[i])
+				hsb.WriteString(BoardColumnEmojis[i])
 			}
 		} else {
 			for i := checkersCols - 1; i >= 0; i-- {
-				hsb.WriteString(checkersColumnEmojis[i])
+				hsb.WriteString(BoardColumnEmojis[i])
 			}
 		}
 		return hsb.String()
 	}
 
-	headerStr := checkersCorner + getHeader(reverse) + checkersCorner + "\n"
+	headerStr := BoardCorner + getHeader(reverse) + BoardCorner + "\n"
 	sb.WriteString(headerStr)
 
 	rStart, rEnd, rStep := 0, checkersRows, 1
@@ -1744,7 +1790,7 @@ func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) d
 	}
 
 	for r := rStart; r != rEnd; r += rStep {
-		sb.WriteString(checkersRowEmojis[r])
+		sb.WriteString(BoardRowEmojis[r])
 		for c := cStart; c != cEnd; c += cStep {
 			p := game.board[r][c]
 
@@ -1799,7 +1845,7 @@ func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) d
 				}
 			}
 		}
-		sb.WriteString(checkersRowEmojis[r] + "\n")
+		sb.WriteString(BoardRowEmojis[r] + "\n")
 	}
 	sb.WriteString(headerStr)
 
@@ -1872,9 +1918,10 @@ func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) d
 		}
 	}
 
-	var layoutComponents []discord.LayoutComponent
-	layoutComponents = append(layoutComponents, discord.NewTextDisplay(sb.String()))
-	layoutComponents = append(layoutComponents, discord.NewTextDisplay(scoreStr))
+	var components []interface{}
+	components = append(components, NewTextDisplay(sb.String()))
+	components = append(components, NewTextDisplay(scoreStr))
+	components = append(components, NewTextDisplay(statusSB.String()))
 
 	if !game.gameOver {
 		validMoves := CheckersGetValidMoves(game, game.currentTurn)
@@ -1894,57 +1941,60 @@ func CheckersBuildMessage(game *CheckersGame, gameID string, statusMsg string) d
 				r, _ := strconv.Atoi(coords[0])
 				c, _ := strconv.Atoi(coords[1])
 				label := fmt.Sprintf("Row %d, Col %c", r+1, 'A'+c)
-				val := k
-				pieceOptions = append(pieceOptions, discord.NewStringSelectMenuOption(label, val))
+				pieceOptions = append(pieceOptions, discord.NewStringSelectMenuOption(label, k))
 			}
 		}
 		sort.Slice(pieceOptions, func(i, j int) bool { return pieceOptions[i].Label < pieceOptions[j].Label })
 
 		if game.selectedPiece != nil {
 			k := fmt.Sprintf("%d,%d", game.selectedPiece[0], game.selectedPiece[1])
-			targets := validMoves[k]
-			var destOptions []discord.StringSelectMenuOption
-			for _, t := range targets {
-				label := fmt.Sprintf("To Row %d, Col %c", t[0]+1, 'A'+t[1])
-				val := fmt.Sprintf("%d,%d", t[0], t[1])
-				destOptions = append(destOptions, discord.NewStringSelectMenuOption(label, val))
-			}
-			if len(destOptions) > 0 {
-				menu := discord.NewStringSelectMenu(fmt.Sprintf("checkers:%s:move_to", gameID), "Select destination...", destOptions...)
-				layoutComponents = append(layoutComponents, discord.NewActionRow(menu))
-			}
-		}
+			if targets, ok := validMoves[k]; ok {
+				var targetOptions []discord.StringSelectMenuOption
+				for _, t := range targets {
+					label := fmt.Sprintf("Row %d, Col %c", t[0]+1, 'A'+t[1])
+					val := fmt.Sprintf("%d,%d", t[0], t[1])
+					targetOptions = append(targetOptions, discord.NewStringSelectMenuOption(label, val))
+				}
+				if len(targetOptions) > 25 {
+					targetOptions = targetOptions[:25]
+				}
+				menu := discord.NewStringSelectMenu(fmt.Sprintf("checkers:%s:move_to", gameID), LabelSelectDest, targetOptions...)
+				components = append(components, discord.NewActionRow(menu))
 
-		if len(pieceOptions) > 0 {
+				cancelBtn := discord.NewButton(discord.ButtonStyleSecondary, "Cancel Selection", fmt.Sprintf("checkers:%s:cancel_select", gameID), "", 0)
+				components = append(components, discord.NewActionRow(cancelBtn))
+			}
+		} else {
 			if len(pieceOptions) > 25 {
 				pieceOptions = pieceOptions[:25]
 			}
-			placeholder := "Select a piece to move..."
+			placeholder := LabelSelectPieceMove
 			if game.selectedPiece != nil {
 				r, c := game.selectedPiece[0], game.selectedPiece[1]
 				placeholder = fmt.Sprintf("Selected: Row %d, Col %c", r+1, 'A'+c)
 			}
-			menu := discord.NewStringSelectMenu(fmt.Sprintf("checkers:%s:select_piece", gameID), placeholder, pieceOptions...)
-			layoutComponents = append(layoutComponents, discord.NewActionRow(menu))
+			if len(pieceOptions) > 0 {
+				menu := discord.NewStringSelectMenu(fmt.Sprintf("checkers:%s:select_piece", gameID), placeholder, pieceOptions...)
+				components = append(components, discord.NewActionRow(menu))
+			}
 		}
 
 		var utilityRow []discord.InteractiveComponent
-		utilityRow = append(utilityRow, discord.NewButton(discord.ButtonStyleDanger, "Forfeit", fmt.Sprintf("checkers:%s:forfeit", gameID), "", 0))
+		utilityRow = append(utilityRow, discord.NewButton(discord.ButtonStyleDanger, LabelForfeit, fmt.Sprintf(CIDCheckersForfeit, gameID), "", 0))
 
 		if CheckersIsHopeless(game) {
-			utilityRow = append(utilityRow, discord.NewButton(discord.ButtonStyleSuccess, "Claim Win", fmt.Sprintf("checkers:%s:claim_win", gameID), "", 0))
+			utilityRow = append(utilityRow, discord.NewButton(discord.ButtonStyleSuccess, LabelClaimWin, fmt.Sprintf(CIDCheckersClaimWin, gameID), "", 0))
 		}
 
-		layoutComponents = append(layoutComponents, discord.NewActionRow(utilityRow...))
+		components = append(components, discord.NewActionRow(utilityRow...))
+	} else {
+		components = append(components, NewSeparator(true))
+		components = append(components, discord.NewActionRow(
+			discord.NewButton(discord.ButtonStyleSecondary, LabelPlayAgain, "checkers:disabled", "", 0).WithDisabled(true),
+		))
 	}
 
-	return discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewTextDisplay(statusSB.String()),
-		).
-		AddComponents(layoutComponents...).
-		Build()
+	return NewV2Container(components...)
 }
 
 // ===========================
@@ -1956,7 +2006,7 @@ type CheckersAIMove struct {
 	isJump         bool
 }
 
-func CheckersMakeAIMove(client *bot.Client, game *CheckersGame, gameID string) {
+func CheckersMakeAIMove(client bot.Client, game *CheckersGame, gameID string) {
 	activeCheckersGamesMu.Lock()
 	defer activeCheckersGamesMu.Unlock()
 
@@ -1974,11 +2024,8 @@ func CheckersMakeAIMove(client *bot.Client, game *CheckersGame, gameID string) {
 		delete(userActiveGame, game.player2ID)
 		userActiveGameMu.Unlock()
 
-		msg := CheckersBuildMessage(game, gameID, "AI has no moves!")
-		client.Rest.UpdateMessage(game.channelID, game.messageID, discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			SetComponents(msg.Components...).
-			Build())
+		msg := CheckersBuildMessage(game, gameID, MsgGameAINoMoves)
+		_, _ = EditContainerV2(client, game.channelID, game.messageID, msg, nil, nil)
 		return
 	}
 
@@ -2038,10 +2085,7 @@ func CheckersMakeAIMove(client *bot.Client, game *CheckersGame, gameID string) {
 	}
 
 	msg := CheckersBuildMessage(game, gameID, "")
-	client.Rest.UpdateMessage(game.channelID, game.messageID, discord.NewMessageUpdateBuilder().
-		SetIsComponentsV2(true).
-		SetComponents(msg.Components...).
-		Build())
+	EditContainerV2(client, game.channelID, game.messageID, msg, nil, nil)
 }
 
 // checkersAINormalMove prioritizes promotion (Kings), then random
@@ -2145,9 +2189,6 @@ func checkersIsVulnerable(game *CheckersGame, r, c int) bool {
 // ===========================
 
 const (
-	chessRows = 8
-	chessCols = 8
-
 	chessWhiteSquare = "▫️"
 	chessBlackSquare = "▪️"
 	chessSelected    = "🟩"
@@ -2169,10 +2210,10 @@ const (
 	chessBlackKnight = "🤙🏿"
 	chessBlackPawn   = "☝🏿"
 
-	chessStatusTurn    = "**<@%d>'s Turn** %s"
-	chessStatusWin     = "**<@%d> Lost 💩 - <@%d> Won! 🎉**"
-	chessStatusDraw    = "**<@%d> and <@%d> ended with a Draw!**"
-	chessStatusForfeit = "**<@%d> Forfeited 🛑 - <@%d> Won! 🎉**"
+	chessStatusTurn    = MsgGameTurn
+	chessStatusWin     = MsgGameWin
+	chessStatusDraw    = MsgGameDraw
+	chessStatusForfeit = MsgGameForfeitSuccess
 )
 
 // ChessGame represents a Chess game session
@@ -2299,13 +2340,13 @@ func HandlePlayChess(event *events.ApplicationCommandInteractionCreate, data dis
 	userActiveGameMu.Lock()
 	if gid, ok := userActiveGame[p1]; ok {
 		userActiveGameMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("You are already in a game! (ID: %s)", gid)).SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(fmt.Sprintf(MsgGameAlreadyActive, gid)).WithEphemeral(true))
 		return
 	}
 	if opponentID != nil && *opponentID != appID {
 		if gid, ok := userActiveGame[*opponentID]; ok {
 			userActiveGameMu.Unlock()
-			event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprintf("<@%d> is already in a game! (ID: %s)", *opponentID, gid)).SetEphemeral(true).Build())
+			event.CreateMessage(discord.NewMessageCreate().WithContent(fmt.Sprintf(MsgGameOpponentActive, *opponentID, gid)).WithEphemeral(true))
 			return
 		}
 	}
@@ -2356,8 +2397,7 @@ func HandlePlayChess(event *events.ApplicationCommandInteractionCreate, data dis
 	activeChessGamesMu.Unlock()
 
 	msg := ChessBuildMessage(game, gameID, "")
-	if err := event.CreateMessage(msg); err != nil {
-		LogError("Failed to send chess message: %v", err)
+	if err := RespondInteractionContainerV2(*event.Client(), event, msg, false); err != nil {
 		activeChessGamesMu.Lock()
 		delete(activeChessGames, gameID)
 		activeChessGamesMu.Unlock()
@@ -2377,7 +2417,7 @@ func HandlePlayChess(event *events.ApplicationCommandInteractionCreate, data dis
 
 	if game.isAI && game.aiPlayerNum == 1 {
 		time.AfterFunc(1*time.Second, func() {
-			ChessMakeAIMove(event.Client(), game, gameID)
+			ChessMakeAIMove(*event.Client(), game, gameID)
 		})
 	}
 }
@@ -2403,14 +2443,14 @@ func HandleChessInteraction(event *events.ComponentInteractionCreate) {
 	game, exists := activeChessGames[gameID]
 	if !exists {
 		activeChessGamesMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("Game not found or expired.").SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(MsgGameNotFound).WithEphemeral(true))
 		return
 	}
 
 	userID := event.User().ID
 	if userID != game.player1ID && userID != game.player2ID {
 		activeChessGamesMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("You are not part of this game.").SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent("You are not part of this game.").WithEphemeral(true))
 		return
 	}
 
@@ -2419,7 +2459,7 @@ func HandleChessInteraction(event *events.ComponentInteractionCreate) {
 
 	if !isTurn && action != "forfeit" {
 		activeChessGamesMu.Unlock()
-		event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("It's not your turn!").SetEphemeral(true).Build())
+		event.CreateMessage(discord.NewMessageCreate().WithContent(MsgGameNotTurn).WithEphemeral(true))
 		return
 	}
 
@@ -2506,14 +2546,11 @@ func HandleChessInteraction(event *events.ComponentInteractionCreate) {
 	msg := ChessBuildMessage(game, gameID, statusMsg)
 	activeChessGamesMu.Unlock()
 
-	_ = event.UpdateMessage(discord.NewMessageUpdateBuilder().
-		SetIsComponentsV2(true).
-		SetComponents(msg.Components...).
-		Build())
+	_ = UpdateInteractionContainerV2(*event.Client(), event, msg)
 
 	if !game.gameOver && game.isAI && game.currentTurn == game.aiPlayerNum {
 		time.AfterFunc(1*time.Second, func() {
-			ChessMakeAIMove(event.Client(), game, gameID)
+			ChessMakeAIMove(*event.Client(), game, gameID)
 		})
 	}
 }
@@ -2522,77 +2559,79 @@ func HandleChessInteraction(event *events.ComponentInteractionCreate) {
 // Chess Rendering & Helpers
 // ===========================
 
-func ChessBuildMessage(game *ChessGame, gameID string, statusMsg string) discord.MessageCreate {
+func ChessBuildMessage(game *ChessGame, gameID string, statusMsg string) Container {
 	var sb strings.Builder
+
+	corner := BoardCorner
+	cols := BoardColumnEmojis
+	rows := BoardRowEmojis
 
 	reverse := false
 	if game.currentTurn == 2 {
 		reverse = true
 	}
 
-	getHeader := func(rev bool) string {
-		var hsb strings.Builder
-		if !rev {
-			for i := 0; i < chessCols; i++ {
-				hsb.WriteString(checkersColumnEmojis[i])
-			}
-		} else {
-			for i := chessCols - 1; i >= 0; i-- {
-				hsb.WriteString(checkersColumnEmojis[i])
-			}
+	sb.WriteString(corner)
+	if !reverse {
+		for _, c := range cols {
+			sb.WriteString(c)
 		}
-		return hsb.String()
+	} else {
+		for i := len(cols) - 1; i >= 0; i-- {
+			sb.WriteString(cols[i])
+		}
 	}
+	sb.WriteString(corner + "\n")
 
-	headerStr := checkersCorner + getHeader(reverse) + checkersCorner + "\n"
-	sb.WriteString(headerStr)
+	rStart, rEnd, rStep := 7, -1, -1
+	cStart, cEnd, cStep := 0, 8, 1
+
+	if reverse {
+		rStart, rEnd, rStep = 0, 8, 1
+		cStart, cEnd, cStep = 7, -1, -1
+	}
 
 	board := game.game.Position().Board()
-	validDestinations := make(map[chess.Square]bool)
+	validMoves := game.game.ValidMoves()
+	validTargets := make(map[chess.Square]bool)
+
 	if game.selectedPiece != nil {
-		for _, m := range game.game.ValidMoves() {
+		for _, m := range validMoves {
 			if m.S1() == *game.selectedPiece {
-				validDestinations[m.S2()] = true
+				validTargets[m.S2()] = true
 			}
 		}
-	}
-
-	rStart, rEnd, rStep := chessRows-1, -1, -1
-	cStart, cEnd, cStep := 0, chessCols, 1
-	if reverse {
-		rStart, rEnd, rStep = 0, chessRows, 1
-		cStart, cEnd, cStep = chessCols-1, -1, -1
 	}
 
 	for r := rStart; r != rEnd; r += rStep {
-		sb.WriteString(checkersRowEmojis[7-r])
+		sb.WriteString(rows[r])
 		for c := cStart; c != cEnd; c += cStep {
 			sq := chess.Square(r*8 + c)
+			p := board.Piece(sq)
 
 			bg := chessWhiteSquare
-			isWhiteSquare := (r+c)%2 != 0
-			if !isWhiteSquare {
+			if (r+c)%2 == 0 {
 				bg = chessBlackSquare
 			}
 
 			isSelected := game.selectedPiece != nil && *game.selectedPiece == sq
+
 			isLastMoveSrc := game.lastMove != nil && game.lastMove.S1() == sq
 			isLastMoveDst := game.lastMove != nil && game.lastMove.S2() == sq
-			isTarget := validDestinations[sq]
+			isTarget := validTargets[sq]
 
 			display := bg
 
 			if isSelected {
 				display = chessSelected
 			} else if isTarget || isLastMoveSrc || isLastMoveDst {
-				if isWhiteSquare {
+				if bg == chessWhiteSquare {
 					display = chessTargetWhite
 				} else {
 					display = chessTargetBlack
 				}
 			}
 
-			p := board.Piece(sq)
 			pieceIcon := game.GetPieceIcon(p)
 			if pieceIcon != "" {
 				display = pieceIcon
@@ -2600,41 +2639,44 @@ func ChessBuildMessage(game *ChessGame, gameID string, statusMsg string) discord
 
 			sb.WriteString(display)
 		}
-		sb.WriteString(checkersRowEmojis[7-r] + "\n")
+		sb.WriteString(rows[r] + "\n")
 	}
-	sb.WriteString(headerStr)
+	sb.WriteString(corner)
 
 	wCount, bCount := 0, 0
-	for sq := range 64 {
-		p := board.Piece(chess.Square(sq))
+	wMap := board.SquareMap()
+	for _, p := range wMap {
 		if p.Color() == chess.White {
 			wCount++
-		} else if p.Color() == chess.Black {
+		} else {
 			bCount++
 		}
 	}
 
 	p1Disp := fmt.Sprintf("%s <@%d>: **%d**", game.p1Icon, game.player1ID, wCount)
 	p2Disp := fmt.Sprintf("%s <@%d>: **%d**", game.p2Icon, game.player2ID, bCount)
-	if reverse {
-		p1Disp, p2Disp = p2Disp, p1Disp
-	}
-	scoreStr := fmt.Sprintf("-# %s | %s", p1Disp, p2Disp)
+
+	scoreStr := fmt.Sprintf("\n-# %s | %s", p1Disp, p2Disp)
+	sb.WriteString(scoreStr)
 
 	var statusSB strings.Builder
 	if game.gameOver {
 		if statusMsg != "" {
 			statusSB.WriteString(statusMsg)
-		} else if game.winner == 0 {
-			statusSB.WriteString(fmt.Sprintf(chessStatusDraw, game.player1ID, game.player2ID))
 		} else {
+			outcome := game.game.Outcome()
 			winnerID := game.player1ID
 			loserID := game.player2ID
 			if game.winner == 2 {
 				winnerID = game.player2ID
 				loserID = game.player1ID
 			}
-			statusSB.WriteString(fmt.Sprintf(chessStatusWin, loserID, winnerID))
+
+			if outcome == chess.WhiteWon || outcome == chess.BlackWon {
+				statusSB.WriteString(fmt.Sprintf(chessStatusWin, loserID, winnerID))
+			} else {
+				statusSB.WriteString(fmt.Sprintf(chessStatusDraw, game.player1ID, game.player2ID))
+			}
 		}
 	} else {
 		currentPlayer := game.player1ID
@@ -2655,91 +2697,83 @@ func ChessBuildMessage(game *ChessGame, gameID string, statusMsg string) discord
 		}
 	}
 
-	layoutComponents := []discord.LayoutComponent{
-		discord.NewTextDisplay(sb.String()),
-		discord.NewTextDisplay(scoreStr),
-	}
+	var components []interface{}
+	components = append(components, NewTextDisplay(sb.String()))
+	components = append(components, NewTextDisplay(statusSB.String()))
 
 	if !game.gameOver {
-		moves := game.game.ValidMoves()
 		seen := make(map[chess.Square]bool)
 		var pieceOpts []discord.StringSelectMenuOption
 
-		selectedSq := chess.NoSquare
-		if game.selectedPiece != nil {
-			selectedSq = *game.selectedPiece
-		}
-
-		for _, m := range moves {
+		for _, m := range validMoves {
 			s1 := m.S1()
 			if !seen[s1] {
 				seen[s1] = true
-				if s1 == selectedSq {
-					continue
-				}
+
+				label := fmt.Sprintf("%c%d", 'A'+s1.File(), int(s1.Rank())+1)
+				val := strconv.Itoa(int(s1))
 
 				p := board.Piece(s1)
-				pieceIcon := game.GetPieceIcon(p)
-				label := fmt.Sprintf("%s %c%d", pieceIcon, 'A'+s1.File(), 8-s1.Rank())
-				val := strconv.Itoa(int(s1))
-				pieceOpts = append(pieceOpts, discord.NewStringSelectMenuOption(label, val))
+				icon := game.GetPieceIcon(p)
+
+				pieceOpts = append(pieceOpts, discord.NewStringSelectMenuOption(icon+" "+label, val))
 			}
 		}
-
 		sort.Slice(pieceOpts, func(i, j int) bool { return pieceOpts[i].Label < pieceOpts[j].Label })
-		if len(pieceOpts) > 25 {
-			pieceOpts = pieceOpts[:25]
-		}
 
 		if game.selectedPiece != nil {
 			var destOpts []discord.StringSelectMenuOption
-			for _, m := range moves {
+			for _, m := range validMoves {
 				if m.S1() == *game.selectedPiece {
+					s2 := m.S2()
+					label := fmt.Sprintf("To %c%d", 'A'+s2.File(), int(s2.Rank())+1)
+					val := strconv.Itoa(int(s2))
+
 					if m.Promo() != chess.NoPieceType && m.Promo() != chess.Queen {
 						continue
 					}
-					s2 := m.S2()
-					label := fmt.Sprintf("To %c%d", 'A'+s2.File(), 8-s2.Rank())
-					if m.HasTag(chess.Capture) {
-						label += " (Capture)"
+					if m.Promo() == chess.Queen {
+						label += " (Queen)"
 					}
-					val := strconv.Itoa(int(s2))
+
 					destOpts = append(destOpts, discord.NewStringSelectMenuOption(label, val))
 				}
 			}
-			if len(destOpts) > 25 {
-				destOpts = destOpts[:25]
-			}
+
 			if len(destOpts) > 0 {
-				menu := discord.NewStringSelectMenu(fmt.Sprintf("chess:%s:move_to", gameID), "Select Destination...", destOpts...)
-				layoutComponents = append(layoutComponents, discord.NewActionRow(menu))
+				if len(destOpts) > 25 {
+					destOpts = destOpts[:25]
+				}
+				menu := discord.NewStringSelectMenu(fmt.Sprintf(CIDChessMoveTo, gameID), LabelSelectDest, destOpts...)
+				components = append(components, discord.NewActionRow(menu))
+
+				cancelBtn := discord.NewButton(discord.ButtonStyleSecondary, "Cancel Selection", fmt.Sprintf(CIDChessCancelSelect, gameID), "", 0)
+				components = append(components, discord.NewActionRow(cancelBtn))
 			}
 		}
 
 		if len(pieceOpts) > 0 {
-			placeholder := "Select Piece..."
+			if len(pieceOpts) > 25 {
+				pieceOpts = pieceOpts[:25]
+			}
+			placeholder := LabelSelectPiece
 			if game.selectedPiece != nil {
 				s := *game.selectedPiece
-				placeholder = fmt.Sprintf("Selected: %c%d", 'A'+s.File(), 8-s.Rank())
+				placeholder = fmt.Sprintf("Selected: %c%d", 'A'+s.File(), int(s.Rank())+1)
 			}
-			menu := discord.NewStringSelectMenu(fmt.Sprintf("chess:%s:select_piece", gameID), placeholder, pieceOpts...)
-			layoutComponents = append(layoutComponents, discord.NewActionRow(menu))
+			menu := discord.NewStringSelectMenu(fmt.Sprintf(CIDChessSelectPiece, gameID), placeholder, pieceOpts...)
+			components = append(components, discord.NewActionRow(menu))
 		}
 
 		row := discord.NewActionRow(
-			discord.NewButton(discord.ButtonStyleDanger, "Forfeit", fmt.Sprintf("chess:%s:forfeit", gameID), "", 0),
+			discord.NewButton(discord.ButtonStyleDanger, LabelForfeit, fmt.Sprintf(CIDChessForfeit, gameID), "", 0),
 		)
-		layoutComponents = append(layoutComponents, row)
+		components = append(components, row)
 	}
 
-	return discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(discord.NewTextDisplay(statusSB.String())).
-		AddComponents(layoutComponents...).
-		Build()
+	return NewV2Container(components...)
 }
-
-func ChessMakeAIMove(client *bot.Client, game *ChessGame, gameID string) {
+func ChessMakeAIMove(client bot.Client, game *ChessGame, gameID string) {
 	activeChessGamesMu.Lock()
 	if game.gameOver || game.currentTurn != game.aiPlayerNum {
 		activeChessGamesMu.Unlock()
@@ -2838,12 +2872,9 @@ func ChessMakeAIMove(client *bot.Client, game *ChessGame, gameID string) {
 
 	statusMsg := ""
 	if isHardFallback {
-		statusMsg = "⚠️ *Hard AI service unavailable, using Normal AI.*"
+		statusMsg = MsgGameAIHardFallback
 	}
 
 	msg := ChessBuildMessage(game, gameID, statusMsg)
-	client.Rest.UpdateMessage(game.channelID, game.messageID, discord.NewMessageUpdateBuilder().
-		SetIsComponentsV2(true).
-		SetComponents(msg.Components...).
-		Build())
+	_, _ = EditContainerV2(client, game.channelID, game.messageID, msg, nil, nil)
 }

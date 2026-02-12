@@ -16,6 +16,55 @@ import (
 	"github.com/sho0pi/naturaltime"
 )
 
+// ============================================================================
+// Reminder System Constants
+// ============================================================================
+
+const (
+	MsgReminderFailedToQueryDue      = "Failed to query due reminders: %v"
+	MsgReminderFailedToCreateDM      = "Failed to create DM channel for user %s: %v"
+	MsgReminderFailedToSend          = "Failed to send reminder %d: %v"
+	MsgReminderFailedToDelete        = "Failed to delete sent reminder %d: %v"
+	MsgReminderFailedToDeleteGeneral = "Failed to delete reminder: %v"
+	MsgReminderSentAndDeleted        = "Sent and deleted reminder %d for user %s"
+	MsgReminderFailedToSave          = "Failed to save reminder: %v"
+	MsgReminderFailedToDeleteAll     = "Failed to delete all reminders: %v"
+	MsgReminderFailedToQuery         = "Failed to query reminders: %v"
+	MsgReminderAutocompleteFailed    = "Failed to query reminders for autocomplete: %v"
+	MsgReminderRespondError          = "Failed to respond to interaction: %v"
+	MsgReminderNaturalTimeInitFail   = "Failed to initialize naturaltime parser: %v"
+	ErrReminderParseFailed           = "Failed to parse the date/time. Try formats like 'tomorrow', 'in 2 hours', 'next friday at 3pm'."
+	ErrReminderPastTime              = "The reminder time must be in the future!"
+	ErrReminderSaveFailed            = "Failed to save reminder. Please try again."
+	ErrReminderFetchFailed           = "Failed to retrieve your reminders."
+	ErrReminderDismissFailed         = "Failed to dismiss reminder."
+	ErrReminderDismissAllFail        = "Failed to dismiss all reminders."
+	MsgReminderSetSuccess            = "Reminder set for %s\n\n %s"
+	MsgReminderDismissedBatch        = "Dismissed **%d** reminder(s)!"
+	MsgReminderNoActive              = "You have no active reminders. Set one with `/reminder set`!"
+	MsgReminderDismissed             = "Reminder dismissed!"
+	MsgReminderListHeader            = "**Your Reminders** (%d active)\n\n"
+	MsgReminderListItem              = "%d. **%s** - %s\n"
+	MsgReminderChoiceAll             = "Dismiss All (%d reminders)"
+	MsgReminderStatsHeader           = "**Your Active Reminders (%d)**\n\n"
+	MsgReminderStatsMore             = "> ...and %d more."
+	MsgReminderStatsDue              = "> Due %s (`%s`)\n"
+	MsgReminderStatsDM               = "> Delivery: Direct Message\n"
+	MsgReminderRelLessMinute         = "in less than a minute"
+	MsgReminderRelMinute             = "in 1 minute"
+	MsgReminderRelMinutes            = "in %d minutes"
+	MsgReminderRelHour               = "in 1 hour"
+	MsgReminderRelHours              = "in %d hours"
+	MsgReminderRelDay                = "in 1 day"
+	MsgReminderRelDays               = "in %d days"
+	MsgReminderRelWeek               = "in 1 week"
+	MsgReminderRelWeeks              = "in %d weeks"
+	MsgReminderRelMonth              = "in 1 month"
+	MsgReminderRelMonths             = "in %d months"
+	MsgReminderRelYear               = "in 1 year"
+	MsgReminderRelYears              = "in %d years"
+)
+
 // ===========================
 // Command Registration
 // ===========================
@@ -23,7 +72,7 @@ import (
 func init() {
 	initReminderParser()
 
-	OnClientReady(func(ctx context.Context, client *bot.Client) {
+	OnClientReady(func(ctx context.Context, client bot.Client) {
 		RegisterDaemon(LogReminder, func(ctx context.Context) (bool, func(), func()) { return StartReminderScheduler(ctx, client) })
 	})
 
@@ -118,15 +167,7 @@ func handleReminder(event *events.ApplicationCommandInteractionCreate) {
 
 // reminderRespondImmediate sends an ephemeral response message
 func reminderRespondImmediate(event *events.ApplicationCommandInteractionCreate, content string) {
-	err := event.CreateMessage(discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewTextDisplay(content),
-			),
-		).
-		SetEphemeral(true).
-		Build())
+	err := RespondInteractionV2(*event.Client(), event, content, true)
 	if err != nil {
 		LogReminder(MsgReminderRespondError, err)
 	}
@@ -280,16 +321,7 @@ func handleReminderStats(event *events.ApplicationCommandInteractionCreate) {
 		sb.WriteString("\n")
 	}
 
-	builder := discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewTextDisplay(sb.String()),
-			),
-		).
-		SetEphemeral(true)
-
-	err = event.CreateMessage(builder.Build())
+	err = RespondInteractionV2(*event.Client(), event, sb.String(), true)
 	if err != nil {
 		LogReminder(MsgReminderRespondError, err)
 	}
@@ -394,7 +426,7 @@ func formatReminderRelativeTime(from, to time.Time) string {
 }
 
 // StartReminderScheduler starts the reminder scheduler daemon
-func StartReminderScheduler(ctx context.Context, client *bot.Client) (bool, func(), func()) {
+func StartReminderScheduler(ctx context.Context, client bot.Client) (bool, func(), func()) {
 	if !atomic.CompareAndSwapInt32(&reminderSchedulerRunning, 0, 1) {
 		return false, nil, nil
 	}
@@ -417,7 +449,7 @@ func StartReminderScheduler(ctx context.Context, client *bot.Client) (bool, func
 }
 
 // checkAndSendReminders checks for due reminders and sends them
-func checkAndSendReminders(parentCtx context.Context, client *bot.Client) {
+func checkAndSendReminders(parentCtx context.Context, client bot.Client) {
 	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 
@@ -435,7 +467,7 @@ func checkAndSendReminders(parentCtx context.Context, client *bot.Client) {
 }
 
 // sendReminder sends a reminder to the user via DM or channel
-func sendReminder(parentCtx context.Context, client *bot.Client, r *Reminder) {
+func sendReminder(parentCtx context.Context, client bot.Client, r *Reminder) {
 	channelID := r.ChannelID
 	userID := r.UserID
 
@@ -456,15 +488,7 @@ func sendReminder(parentCtx context.Context, client *bot.Client, r *Reminder) {
 		}
 	}
 
-	builder := discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(
-			discord.NewContainer(
-				discord.NewTextDisplay(reminderText),
-			),
-		)
-
-	_, err := client.Rest.CreateMessage(targetChannelID, builder.Build(), rest.WithCtx(parentCtx))
+	_, err := SendComponentsV2(client, targetChannelID, []any{NewV2Container(NewTextDisplay(reminderText))}, nil, nil, nil)
 
 	if err != nil {
 		LogReminder(MsgReminderFailedToSend, r.ID, err)

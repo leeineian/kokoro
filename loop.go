@@ -23,6 +23,86 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// ============================================================================
+// Loop System Constants
+// ============================================================================
+
+const (
+	MsgLoopFailedToLoadConfigs   = "Failed to load configs: %v"
+	MsgLoopLoadedChannels        = "Loaded configuration for %d categories."
+	MsgLoopFailedToResume        = "Failed to resume %s: %v"
+	MsgLoopResuming              = "Resuming %d active loops..."
+	MsgLoopWebhookLimitReached   = "Channel %s has 10 webhooks, skipping"
+	MsgLoopPreparedWebhook       = "Prepared webhook for channel: %s"
+	MsgLoopFailedToFetchWebhooks = "Failed to fetch webhooks for %s: %v"
+	MsgLoopFailedToCreateWebhook = "Failed to create webhook for %s: %v"
+	MsgLoopPreparedCategoryHooks = "Prepared %d webhooks for category: %s"
+	MsgLoopStartingTimed         = "Starting timed loop for %s"
+	MsgLoopTimeLimitReached      = "Time limit reached for %s"
+	MsgLoopStartingRandom        = "Starting infinite random mode for %s"
+	MsgLoopRandomStatus          = "[%s] Random: %d rounds (%d pings), next delay: %s"
+	MsgLoopRateLimited           = "[%s] Rate limited. Retrying in %v (Attempt %d/3)"
+	MsgLoopSendFail              = "Failed to send to %s: %v"
+	MsgLoopRenameFail            = "Failed to rename channel: %v"
+	MsgLoopStopped               = "Stopped loop for: %s"
+	MsgLoopConfigured            = "Configured channel: %s"
+	MsgLoopEraseNoConfigs        = "No configurations were found to erase."
+	MsgLoopErasedBatch           = "Erased **%d** configuration(s)."
+	MsgLoopErrInvalidSelection   = "Invalid selection."
+	MsgLoopErrConfigNotFound     = "Configuration not found."
+	MsgLoopDeleteFail            = "Failed to delete configuration for **%s**: %v"
+	MsgLoopDeleted               = "Deleted configuration for **%s**."
+	MsgLoopErrInvalidChannel     = "Invalid channel selection."
+	MsgLoopErrChannelFetchFail   = "Failed to fetch channel."
+	MsgLoopErrOnlyCategories     = "Only **categories** are supported. Please select a category channel."
+	MsgLoopSaveFail              = "Failed to save configuration: %v"
+	MsgLoopConfiguredDisp        = "**Category Configured**\n> **%s**\n> Duration: ∞\n> Run `/loop start` to begin."
+	MsgLoopErrInvalidDuration    = "Invalid duration: %v"
+	MsgLoopErrNoChannels         = "No channels configured!"
+	MsgLoopErrNoneStarted        = "No loops were started."
+	MsgLoopStartedBatch          = "Started **%d** loop(s) for: **%s**"
+	MsgLoopStarted               = "Started loop for: **%s**"
+	MsgLoopStartFail             = "Failed to start **%s**: %v"
+	MsgLoopNoRunning             = "No loops are currently running."
+	MsgLoopStoppedBatch          = "Stopped **%d** loop(s)."
+	MsgLoopStoppedDisp           = "Stopped the selected loop."
+	MsgLoopErrStopFail           = "Could not find or stop the loop."
+	MsgLoopErrGuildOnly          = "This command can only be used in a server."
+	MsgLoopErrRetrieveFail       = "Failed to retrieve loop configurations."
+	MsgLoopErrNoGuildConfigs     = "No loops are currently configured for this server."
+	MsgLoopStatsHeader           = "**Current Loop Configurations**\n\n"
+	MsgLoopStatsInterval         = "> • Interval: `%s`\n"
+	MsgLoopStatsStatus           = "> • Status: %s\n"
+	MsgLoopStatsThreads          = "> • Threads: `Enabled` (%d per channel)\n"
+	MsgLoopStatsMessage          = "> • Message: `%s`\n"
+	MsgLoopStatsAuthor           = "> • Author: `%s`\n"
+	MsgLoopStatsAvatar           = "> • Avatar: [Link](<%s>)\n"
+	MsgLoopStatsThreadMsg        = "> • Thread Message: `%s`\n"
+	MsgLoopStatsVoteChan         = "> • Vote Channel: <#%s>\n"
+	MsgLoopStatsVoteRole         = "> • Vote Role: <@&%s>\n"
+	MsgLoopStatsVoteReaction     = "> • Vote Reaction: %s\n"
+	MsgLoopStatsVoteThreshold    = "> • Vote Threshold: `%d%%`\n"
+	MsgLoopStatsVoteMsg          = "> • Vote Message: `%s`\n"
+	MsgLoopStatsQueue            = "> • Queue: `%s`\n"
+	MsgLoopStatusStopped         = "🔴"
+	MsgLoopStatusRunning         = "🟢"
+	MsgLoopStatusRound           = " (Round %d)"
+	MsgLoopStatusRoundBatch      = " (Round %d/%d)"
+	MsgLoopStatusNextRun         = " (Next: %s)"
+	MsgLoopStatusEnds            = " (Ends: %s)"
+	MsgLoopStatusFinishing       = " (Finishing...)"
+	MsgLoopChoiceStartAll        = "Start All Configured Loops"
+	MsgLoopChoiceStart           = "Start Loop: %s %s%s (Duration: %s)"
+	MsgLoopChoiceCategory        = "%s"
+	MsgLoopChoiceEraseAll        = "Erase All Configured Loops"
+	MsgLoopChoiceErase           = "Erase Loop: %s %s%s (Duration: %s)"
+	MsgLoopChoiceStopAll         = "Stop All Running Loops"
+	MsgLoopChoiceStop            = "Stop Loop: %s %s%s (Duration: %s)"
+	MsgLoopSearchStartAll        = "start all configured loops"
+	MsgLoopSearchEraseAll        = "erase all configured loops"
+	MsgLoopSearchStopAll         = "stop all running loops"
+)
+
 // ===========================
 // Command Registration
 // ===========================
@@ -30,7 +110,7 @@ import (
 func init() {
 	adminPerm := discord.PermissionAdministrator
 
-	OnClientReady(func(ctx context.Context, client *bot.Client) {
+	OnClientReady(func(ctx context.Context, client bot.Client) {
 		RegisterDaemon(LogLoopManager, func(ctx context.Context) (bool, func(), func()) { return InitLoopManager(ctx, client) })
 	})
 
@@ -265,7 +345,7 @@ var (
 )
 
 // InitLoopManager initializes the loop system, loading configurations and setting up handlers
-func InitLoopManager(ctx context.Context, client *bot.Client) (bool, func(), func()) {
+func InitLoopManager(ctx context.Context, client bot.Client) (bool, func(), func()) {
 	RegisterComponentHandler("vote:", handleVoteButton)
 
 	var rlMu sync.Mutex
@@ -322,7 +402,7 @@ func InitLoopManager(ctx context.Context, client *bot.Client) (bool, func(), fun
 }
 
 // ShutdownLoopManager gracefully stops all active loops
-func ShutdownLoopManager(ctx context.Context, client *bot.Client) {
+func ShutdownLoopManager(ctx context.Context, client bot.Client) {
 	LogLoopManager("Shutting down Loop Manager...")
 	StopAllLoops(ctx, client)
 }
@@ -368,7 +448,7 @@ func handleLoopErase(event *events.ApplicationCommandInteractionCreate) {
 
 	_ = event.DeferCreateMessage(true)
 
-	go func() {
+	safeGo(func() {
 		ctx := AppContext
 		client := event.Client()
 
@@ -380,7 +460,7 @@ func handleLoopErase(event *events.ApplicationCommandInteractionCreate) {
 			}
 			count := 0
 			for _, cfg := range configs {
-				if err := DeleteLoopConfig(ctx, cfg.ChannelID, client); err == nil {
+				if err := DeleteLoopConfig(ctx, cfg.ChannelID, *client); err == nil {
 					count++
 				}
 			}
@@ -405,12 +485,12 @@ func handleLoopErase(event *events.ApplicationCommandInteractionCreate) {
 			name = ch.Name()
 		}
 
-		if err := DeleteLoopConfig(ctx, tID, client); err != nil {
+		if err := DeleteLoopConfig(ctx, tID, *client); err != nil {
 			loopRespond(event, fmt.Sprintf(MsgLoopDeleteFail, name, err), true)
 		} else {
 			loopRespond(event, fmt.Sprintf(MsgLoopDeleted, name), true)
 		}
-	}()
+	})
 }
 
 func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
@@ -423,7 +503,7 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 
 	_ = event.DeferCreateMessage(true)
 
-	go func() {
+	safeGo(func() {
 		channel, ok := event.Client().Caches.Channel(channelID)
 		if !ok {
 			loopRespond(event, MsgLoopErrChannelFetchFail, true)
@@ -530,13 +610,13 @@ func handleLoopSet(event *events.ApplicationCommandInteractionCreate, data disco
 			IsSerial:      isSerial,
 		}
 
-		if err := SetLoopConfig(AppContext, event.Client(), channelID, config); err != nil {
+		if err := SetLoopConfig(AppContext, *event.Client(), channelID, config); err != nil {
 			loopRespond(event, fmt.Sprintf(MsgLoopSaveFail, err), true)
 			return
 		}
 
 		loopRespond(event, fmt.Sprintf(MsgLoopConfiguredDisp, channel.Name()), true)
-	}()
+	})
 }
 
 func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
@@ -548,13 +628,10 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 
 	if targetID == "all" {
 		_ = event.DeferCreateMessage(true)
-		go func() {
+		safeGo(func() {
 			configs, _ := GetAllLoopConfigs(AppContext)
 			if len(configs) == 0 {
-				_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-					SetIsComponentsV2(true).
-					AddComponents(discord.NewContainer(discord.NewTextDisplay(MsgLoopErrNoChannels))).
-					Build())
+				_ = EditInteractionV2(*event.Client(), event, MsgLoopErrNoChannels)
 				return
 			}
 
@@ -563,7 +640,7 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 				ids = append(ids, cfg.ChannelID)
 			}
 
-			_ = BatchStartLoops(AppContext, event.Client(), ids, rounds)
+			_ = BatchStartLoops(AppContext, *event.Client(), ids, rounds)
 
 			activeNow := GetActiveLoops()
 			var startedNames []string
@@ -581,11 +658,8 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 			if len(startedNames) > 0 {
 				msg = fmt.Sprintf(MsgLoopStartedBatch, len(startedNames), strings.Join(startedNames, "**, **"))
 			}
-			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				AddComponents(discord.NewContainer(discord.NewTextDisplay("> "+msg))).
-				Build())
-		}()
+			_ = EditInteractionV2(*event.Client(), event, "> "+msg)
+		})
 	} else {
 		tID, err := snowflake.Parse(targetID)
 		if err != nil {
@@ -593,8 +667,8 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 			return
 		}
 		_ = event.DeferCreateMessage(true)
-		go func() {
-			err = StartLoop(AppContext, event.Client(), tID, rounds)
+		safeGo(func() {
+			err = StartLoop(AppContext, *event.Client(), tID, rounds)
 			name := targetID
 			if ch, ok := event.Client().Caches.Channel(tID); ok {
 				name = ch.Name()
@@ -603,11 +677,8 @@ func handleLoopStart(event *events.ApplicationCommandInteractionCreate, data dis
 			if err != nil {
 				msg = fmt.Sprintf(MsgLoopStartFail, name, err)
 			}
-			_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				AddComponents(discord.NewContainer(discord.NewTextDisplay("> "+msg))).
-				Build())
-		}()
+			_ = EditInteractionV2(*event.Client(), event, "> "+msg)
+		})
 	}
 }
 
@@ -620,7 +691,7 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 	_ = event.DeferCreateMessage(true)
 
 	if targetID == "all" {
-		go func() {
+		safeGo(func() {
 			activeLoops := GetActiveLoops()
 			if len(activeLoops) == 0 {
 				loopRespond(event, MsgLoopNoRunning, true)
@@ -629,22 +700,22 @@ func handleLoopStop(event *events.ApplicationCommandInteractionCreate, data disc
 
 			stopped := 0
 			for channelID := range activeLoops {
-				if StopLoopInternal(AppContext, channelID, event.Client()) {
+				if StopLoopInternal(AppContext, channelID, *event.Client()) {
 					stopped++
 				}
 			}
 
 			loopRespond(event, fmt.Sprintf(MsgLoopStoppedBatch, stopped), true)
-		}()
+		})
 	} else {
 		tID, err := snowflake.Parse(targetID)
-		go func() {
-			if err == nil && StopLoopInternal(AppContext, tID, event.Client()) {
+		safeGo(func() {
+			if err == nil && StopLoopInternal(AppContext, tID, *event.Client()) {
 				loopRespond(event, MsgLoopStoppedDisp, true)
 			} else {
 				loopRespond(event, MsgLoopErrStopFail, true)
 			}
-		}()
+		})
 	}
 }
 
@@ -671,10 +742,10 @@ func handleLoopClose(event *events.ApplicationCommandInteractionCreate, data dis
 		action = "Deleted"
 	}
 
-	go func() {
+	safeGo(func() {
 		ctx := AppContext
 		client := event.Client()
-		scopeIDs, targetName := resolveScope(client, *guildID, targetID)
+		scopeIDs, targetName := resolveScope(*client, *guildID, targetID)
 		LogLoopManager("[CLOSE] Final scope IDs count: %d for %s", len(scopeIDs), targetName)
 
 		var threadsToProcess []discord.GuildThread
@@ -754,11 +825,8 @@ func handleLoopClose(event *events.ApplicationCommandInteractionCreate, data dis
 		}
 
 		msg := fmt.Sprintf("✅ **Loop Close**: Successfully %s **%d** matching threads.", action, count)
-		_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
-			Build())
-	}()
+		_ = EditInteractionV2(*client, event, msg)
+	})
 }
 
 func handleLoopStats(event *events.ApplicationCommandInteractionCreate) {
@@ -851,12 +919,12 @@ func handleLoopClean(event *events.ApplicationCommandInteractionCreate, data dis
 
 	_ = event.DeferCreateMessage(true)
 
-	go func() {
+	safeGo(func() {
 		client := event.Client()
 		ctx := AppContext
 
 		// 1. Resolve Scope (Target + Children if Category)
-		scopeIDs, targetName := resolveScope(client, *guildID, targetID)
+		scopeIDs, targetName := resolveScope(*client, *guildID, targetID)
 
 		// 2. Identify all parents (channels where we might have threads)
 		totalThreadsFound := 0
@@ -882,30 +950,21 @@ func handleLoopClean(event *events.ApplicationCommandInteractionCreate, data dis
 
 		if totalThreadsFound == 0 {
 			msg := fmt.Sprintf("✅ **Loop Clean**: No active bot threads found in **%s**.", targetName)
-			_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-				SetIsComponentsV2(true).
-				AddComponents(discord.NewContainer(discord.NewTextDisplay(msg))).
-				Build())
+			_ = EditInteractionV2(*client, event, msg)
 			return
 		}
 
 		msgStart := fmt.Sprintf("🧹 **Loop Clean**: Starting cleanup for **%d** threads in **%s**...\nThis may take a while.", totalThreadsFound, targetName)
-		_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			AddComponents(discord.NewContainer(discord.NewTextDisplay(msgStart))).
-			Build())
+		_ = EditInteractionV2(*client, event, msgStart)
 
 		// 3. Execution
 		for parentID, tIDs := range threadMap {
-			fastCleanThreadParticipants(ctx, client, parentID, tIDs)
+			fastCleanThreadParticipants(ctx, *client, parentID, tIDs)
 		}
 
 		msgEnd := fmt.Sprintf("✅ **Loop Clean**: Finished cleaning **%d** matching threads in **%s**.", totalThreadsFound, targetName)
-		_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			AddComponents(discord.NewContainer(discord.NewTextDisplay(msgEnd))).
-			Build())
-	}()
+		_ = EditInteractionV2(*client, event, msgEnd)
+	})
 }
 
 func handleLoopAutocomplete(event *events.AutocompleteInteractionCreate) {
@@ -1089,17 +1148,9 @@ func loopRespond(event *events.ApplicationCommandInteractionCreate, content stri
 		displayContent = content
 	}
 
-	builder := discord.NewMessageCreateBuilder().
-		SetIsComponentsV2(true).
-		AddComponents(discord.NewContainer(discord.NewTextDisplay(displayContent))).
-		SetEphemeral(ephemeral)
-
-	err := event.CreateMessage(builder.Build())
+	err := RespondInteractionV2(*event.Client(), event, displayContent, ephemeral)
 	if err != nil {
-		updateBuilder := discord.NewMessageUpdateBuilder().
-			SetIsComponentsV2(true).
-			AddComponents(discord.NewContainer(discord.NewTextDisplay(displayContent)))
-		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), updateBuilder.Build())
+		_ = EditInteractionV2(*event.Client(), event, displayContent)
 	}
 }
 
@@ -1121,7 +1172,7 @@ func getLoopStatusDetails(cfg *LoopConfig, state *LoopState) (string, string) {
 	return emoji, details
 }
 
-func SetLoopConfig(ctx context.Context, client *bot.Client, channelID snowflake.ID, config *LoopConfig) error {
+func SetLoopConfig(ctx context.Context, client bot.Client, channelID snowflake.ID, config *LoopConfig) error {
 	if err := AddLoopConfig(ctx, channelID, config); err != nil {
 		return err
 	}
@@ -1130,7 +1181,7 @@ func SetLoopConfig(ctx context.Context, client *bot.Client, channelID snowflake.
 	return nil
 }
 
-func DeleteLoopConfig(ctx context.Context, channelID snowflake.ID, client *bot.Client) error {
+func DeleteLoopConfig(ctx context.Context, channelID snowflake.ID, client bot.Client) error {
 	StopLoopInternal(ctx, channelID, client)
 	configuredChannels.Delete(channelID)
 	return DeleteLoopConfigDB(ctx, channelID)
@@ -1145,11 +1196,11 @@ func GetActiveLoops() map[snowflake.ID]*LoopState {
 	return res
 }
 
-func StartLoop(ctx context.Context, client *bot.Client, channelID snowflake.ID, rounds int) error {
+func StartLoop(ctx context.Context, client bot.Client, channelID snowflake.ID, rounds int) error {
 	return BatchStartLoops(ctx, client, []snowflake.ID{channelID}, rounds)
 }
 
-func BatchStartLoops(ctx context.Context, client *bot.Client, channelIDs []snowflake.ID, rounds int) error {
+func BatchStartLoops(ctx context.Context, client bot.Client, channelIDs []snowflake.ID, rounds int) error {
 	if atomic.LoadInt32(&isEmergencyStop) == 1 {
 		return fmt.Errorf("cannot start loops: system is currently in emergency stop due to rate limits")
 	}
@@ -1183,7 +1234,7 @@ func BatchStartLoops(ctx context.Context, client *bot.Client, channelIDs []snowf
 			serialToStart = append(serialToStart, data)
 		} else {
 			parallelCount++
-			go startLoopInternal(ctx, data.Config.ChannelID, data, client, rounds)
+			safeGo(func() { startLoopInternal(ctx, data.Config.ChannelID, data, client, rounds) })
 		}
 	}
 
@@ -1198,14 +1249,14 @@ func BatchStartLoops(ctx context.Context, client *bot.Client, channelIDs []snowf
 		loopQueueMu.Unlock()
 
 		if atomic.LoadInt32(&serialActive) == 0 {
-			go startNextInQueue(ctx, client)
+			safeGo(func() { startNextInQueue(ctx, client) })
 		}
 	}
 
 	return nil
 }
 
-func startNextInQueue(ctx context.Context, client *bot.Client) {
+func startNextInQueue(ctx context.Context, client bot.Client) {
 	loopQueueMu.Lock()
 	if len(loopQueue) == 0 {
 		shuffledQueue = nil
@@ -1233,7 +1284,7 @@ func startNextInQueue(ctx context.Context, client *bot.Client) {
 	startLoopInternal(ctx, nextID, data, client, 0)
 }
 
-func StopAllLoops(ctx context.Context, client *bot.Client) {
+func StopAllLoops(ctx context.Context, client bot.Client) {
 	if !atomic.CompareAndSwapInt32(&isEmergencyStop, 0, 1) {
 		return
 	}
@@ -1248,7 +1299,7 @@ func StopAllLoops(ctx context.Context, client *bot.Client) {
 	atomic.StoreInt32(&isEmergencyStop, 0)
 }
 
-func StopLoopInternal(ctx context.Context, channelID snowflake.ID, client *bot.Client) bool {
+func StopLoopInternal(ctx context.Context, channelID snowflake.ID, client bot.Client) bool {
 	loopQueueMu.Lock()
 	loopQueue = removeFromSlice(loopQueue, channelID)
 	shuffledQueue = removeFromSlice(shuffledQueue, channelID)
@@ -1274,7 +1325,7 @@ func handleVoteButton(event *events.ComponentInteractionCreate) {
 	channelID, _ := snowflake.Parse(parts[1])
 	stateVal, ok := activeLoops.Load(channelID)
 	if !ok {
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("⚠️ Loop is no longer active.").SetEphemeral(true).Build())
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("⚠️ Loop is no longer active.").WithEphemeral(true))
 		return
 	}
 	state := stateVal.(*LoopState)
@@ -1284,7 +1335,7 @@ func handleVoteButton(event *events.ComponentInteractionCreate) {
 	}
 	cfg := dataVal.(*ChannelData).Config
 	if !state.IsPaused || state.VoteMessageID != event.Message.ID {
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("⚠️ This vote panel is no longer valid.").SetEphemeral(true).Build())
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("⚠️ This vote panel is no longer valid.").WithEphemeral(true))
 		return
 	}
 
@@ -1297,7 +1348,7 @@ func handleVoteButton(event *events.ComponentInteractionCreate) {
 		}
 	}
 	if !hasRole {
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("⚠️ You do not have the required role to vote.").SetEphemeral(true).Build())
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("⚠️ You do not have the required role to vote.").WithEphemeral(true))
 		return
 	}
 
@@ -1305,7 +1356,7 @@ func handleVoteButton(event *events.ComponentInteractionCreate) {
 		state.Votes = make(map[snowflake.ID]struct{})
 	}
 	if _, voted := state.Votes[event.User().ID]; voted {
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("⚠️ You have already voted!").SetEphemeral(true).Build())
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("⚠️ You have already voted!").WithEphemeral(true))
 		return
 	}
 	state.Votes[event.User().ID] = struct{}{}
@@ -1326,10 +1377,10 @@ func handleVoteButton(event *events.ComponentInteractionCreate) {
 		panel = fmt.Sprintf("⏸️ **Loop Paused**\nTo resume **%s**, click the button below!", cfg.ChannelName)
 	}
 
-	update := discord.NewMessageUpdateBuilder().SetIsComponentsV2(true).SetComponents(
+	update := discord.NewMessageUpdate().WithIsComponentsV2(true).WithComponents(
 		discord.NewContainer(discord.NewSection(discord.NewTextDisplay(panel)).WithAccessory(discord.NewButton(style, formatVoteLabel(valid, needed), customID, "", 0))),
 	)
-	_ = event.UpdateMessage(update.Build())
+	_ = event.UpdateMessage(update)
 
 	if valid >= needed {
 		select {
@@ -1339,7 +1390,7 @@ func handleVoteButton(event *events.ComponentInteractionCreate) {
 	}
 }
 
-func getRoleMemberCount(client *bot.Client, guildID, roleID snowflake.ID) int {
+func getRoleMemberCount(client bot.Client, guildID, roleID snowflake.ID) int {
 	members, err := client.Rest.GetMembers(guildID, 1000, 0)
 	if err != nil {
 		return 1
@@ -1361,7 +1412,7 @@ func getRoleMemberCount(client *bot.Client, guildID, roleID snowflake.ID) int {
 
 func formatVoteLabel(current, total int) string { return fmt.Sprintf("%d/%d Votes", current, total) }
 
-func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *ChannelData, client *bot.Client, rounds int) {
+func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *ChannelData, client bot.Client, rounds int) {
 	stopChan := make(chan struct{})
 	resumeChan := make(chan struct{})
 	state := &LoopState{
@@ -1371,13 +1422,13 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 	activeLoops.Store(channelID, state)
 	SetLoopState(ctx, channelID, true)
 
-	go func() {
+	safeGo(func() {
 		defer func() {
 			activeLoops.Delete(channelID)
 			SetLoopState(ctx, channelID, false)
 			if data.Config.IsSerial {
 				atomic.StoreInt32(&serialActive, 0)
-				go startNextInQueue(ctx, client)
+				safeGo(func() { startNextInQueue(ctx, client) })
 			}
 		}()
 
@@ -1539,8 +1590,8 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 						voteCustomID := fmt.Sprintf("vote:%s", channelID)
 						_, voteAvatar := resolveWebhookIdentity(client, data.Config)
 
-						builder := discord.NewWebhookMessageCreateBuilder().
-							SetIsComponentsV2(true).
+						builder := discord.NewWebhookMessageCreate().
+							WithIsComponentsV2(true).
 							AddComponents(
 								discord.NewContainer(
 									discord.NewSection(
@@ -1550,23 +1601,23 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 									),
 								),
 							).
-							SetAllowedMentions(&discord.AllowedMentions{
+							WithAllowedMentions(&discord.AllowedMentions{
 								Parse: []discord.AllowedMentionType{
 									discord.AllowedMentionTypeEveryone,
 									discord.AllowedMentionTypeRoles,
 									discord.AllowedMentionTypeUsers,
 								},
 							}).
-							SetUsername(fmt.Sprintf("Loop Finished: %s (%d rounds)", data.Config.ChannelName, cycleRounds)).
-							SetAvatarURL(voteAvatar)
+							WithUsername(fmt.Sprintf("Loop Finished: %s (%d rounds)", data.Config.ChannelName, cycleRounds)).
+							WithAvatarURL(voteAvatar)
 
 						if voteCh, ok := client.Caches.Channel(voteChanID); ok {
 							if voteCh.Type() == discord.ChannelTypeGuildForum || voteCh.Type() == discord.ChannelTypeGuildMedia {
-								builder.SetThreadName(fmt.Sprintf("Loop Vote: %s", data.Config.ChannelName))
+								builder = builder.WithThreadName(fmt.Sprintf("Loop Vote: %s", data.Config.ChannelName))
 							}
 						}
 
-						msg, err := client.Rest.CreateWebhookMessage(hookID, hookToken, builder.Build(), rest.CreateWebhookMessageParams{Wait: true}, rest.WithCtx(ctx))
+						msg, err := client.Rest.CreateWebhookMessage(hookID, hookToken, builder, rest.CreateWebhookMessageParams{Wait: true}, rest.WithCtx(ctx))
 
 						if err == nil {
 							state.VoteMessageID = msg.ID
@@ -1610,10 +1661,10 @@ func startLoopInternal(ctx context.Context, channelID snowflake.ID, data *Channe
 		} else {
 			LogLoopManager("[%s] Parallel batch finished.", data.Config.ChannelName)
 		}
-	}()
+	})
 }
 
-func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, stopChan chan struct{}, content, threadContent, author, avatar string, rng *rand.Rand, hookBuf []WebhookData) {
+func executeRound(ctx context.Context, data *ChannelData, client bot.Client, stopChan chan struct{}, content, threadContent, author, avatar string, rng *rand.Rand, hookBuf []WebhookData) {
 	if len(hookBuf) != len(data.Hooks) {
 		hookBuf = make([]WebhookData, len(data.Hooks))
 	}
@@ -1637,116 +1688,120 @@ func executeRound(ctx context.Context, data *ChannelData, client *bot.Client, st
 		workerJitter := time.Duration(rng.Intn(50)) * time.Millisecond
 
 		wg.Add(1)
-		go func(hd WebhookData, startJitter time.Duration, stepDelay time.Duration) {
-			defer wg.Done()
+		safeGo(func() {
+			func(hd WebhookData, startJitter time.Duration, stepDelay time.Duration) {
+				defer wg.Done()
 
-			select {
-			case <-time.After(startJitter):
-			case <-stopChan:
-				return
-			}
-
-			// 1. Helper for sending with retries
-			sendWithRetry := func(threadID snowflake.ID, msgContent string, wh WebhookIdentity) {
-				if wh.ID == 0 {
-					return
-				}
 				select {
-				case messageSendSem <- struct{}{}:
-					defer func() { <-messageSendSem }()
+				case <-time.After(startJitter):
 				case <-stopChan:
 					return
-				case <-ctx.Done():
-					return
 				}
 
-				backoffs := []time.Duration{1 * time.Second, 2 * time.Second}
-				for attempt := 0; attempt <= len(backoffs); attempt++ {
+				// 1. Helper for sending with retries
+				sendWithRetry := func(threadID snowflake.ID, msgContent string, wh WebhookIdentity) {
+					if wh.ID == 0 {
+						return
+					}
 					select {
+					case messageSendSem <- struct{}{}:
+						defer func() { <-messageSendSem }()
 					case <-stopChan:
 						return
-					default:
+					case <-ctx.Done():
+						return
 					}
 
-					params := rest.CreateWebhookMessageParams{Wait: false}
-					if threadID != 0 {
-						params.ThreadID = threadID
-					}
+					backoffs := []time.Duration{1 * time.Second, 2 * time.Second}
+					for attempt := 0; attempt <= len(backoffs); attempt++ {
+						select {
+						case <-stopChan:
+							return
+						default:
+						}
 
-					_, err := client.Rest.CreateWebhookMessage(wh.ID, wh.Token, discord.WebhookMessageCreate{
-						Content:   msgContent,
-						Username:  author,
-						AvatarURL: avatar,
-						AllowedMentions: &discord.AllowedMentions{
-							Parse: []discord.AllowedMentionType{
-								discord.AllowedMentionTypeEveryone,
-								discord.AllowedMentionTypeRoles,
-								discord.AllowedMentionTypeUsers,
+						params := rest.CreateWebhookMessageParams{Wait: false}
+						if threadID != 0 {
+							params.ThreadID = threadID
+						}
+
+						_, err := client.Rest.CreateWebhookMessage(wh.ID, wh.Token, discord.WebhookMessageCreate{
+							Content:   msgContent,
+							Username:  author,
+							AvatarURL: avatar,
+							AllowedMentions: &discord.AllowedMentions{
+								Parse: []discord.AllowedMentionType{
+									discord.AllowedMentionTypeEveryone,
+									discord.AllowedMentionTypeRoles,
+									discord.AllowedMentionTypeUsers,
+								},
 							},
-						},
-						Flags: discord.MessageFlagSuppressNotifications,
-					}, params, rest.WithCtx(ctx))
+							Flags: discord.MessageFlagSuppressNotifications,
+						}, params, rest.WithCtx(ctx))
 
-					if err == nil {
-						return
-					}
+						if err == nil {
+							return
+						}
 
-					if attempt < len(backoffs) {
-						select {
-						case <-time.After(backoffs[attempt]):
-						case <-stopChan:
-							return
-						case <-ctx.Done():
-							return
+						if attempt < len(backoffs) {
+							select {
+							case <-time.After(backoffs[attempt]):
+							case <-stopChan:
+								return
+							case <-ctx.Done():
+								return
+							}
 						}
 					}
 				}
-			}
 
-			// 2. Helper to get next webhook from pool
-			getWebhook := func(idx int) WebhookIdentity {
-				if len(hd.Webhooks) == 0 {
-					return WebhookIdentity{}
-				}
-				return hd.Webhooks[idx%len(hd.Webhooks)]
-			}
-
-			// 3. Send to main channel (Synchronous - Priority)
-			isStructured := hd.IsStructured
-			if content != "" && !isStructured {
-				sendWithRetry(0, content, getWebhook(0))
-			}
-
-			// 4. Send to threads (Parallel)
-			var shardWg sync.WaitGroup
-			if threadContent != "" && len(hd.ThreadIDs) > 0 {
-				for i, tid := range hd.ThreadIDs {
-					select {
-					case <-stopChan:
-						return
-					default:
+				// 2. Helper to get next webhook from pool
+				getWebhook := func(idx int) WebhookIdentity {
+					if len(hd.Webhooks) == 0 {
+						return WebhookIdentity{}
 					}
+					return hd.Webhooks[idx%len(hd.Webhooks)]
+				}
 
-					shardWg.Add(1)
-					go func(tID snowflake.ID, index int) {
-						defer shardWg.Done()
-						sendWithRetry(tID, threadContent, getWebhook(index))
-					}(tid, i)
+				// 3. Send to main channel (Synchronous - Priority)
+				isStructured := hd.IsStructured
+				if content != "" && !isStructured {
+					sendWithRetry(0, content, getWebhook(0))
+				}
 
-					if i > 0 && i%50 == 0 {
+				// 4. Send to threads (Parallel)
+				var shardWg sync.WaitGroup
+				if threadContent != "" && len(hd.ThreadIDs) > 0 {
+					for i, tid := range hd.ThreadIDs {
 						select {
-						case <-time.After(5 * time.Millisecond):
 						case <-stopChan:
 							return
-						case <-ctx.Done():
-							return
+						default:
+						}
+
+						shardWg.Add(1)
+						safeGo(func() {
+							func(tID snowflake.ID, index int) {
+								defer shardWg.Done()
+								sendWithRetry(tID, threadContent, getWebhook(index))
+							}(tid, i)
+						})
+
+						if i > 0 && i%50 == 0 {
+							select {
+							case <-time.After(5 * time.Millisecond):
+							case <-stopChan:
+								return
+							case <-ctx.Done():
+								return
+							}
 						}
 					}
 				}
-			}
 
-			shardWg.Wait()
-		}(h, workerJitter, delay)
+				shardWg.Wait()
+			}(h, workerJitter, delay)
+		})
 		select {
 		case <-time.After(delay):
 		case <-stopChan:
@@ -1758,7 +1813,7 @@ Wait:
 	wg.Wait()
 }
 
-func loadWebhooksForChannelWithCache(ctx context.Context, client *bot.Client, data *ChannelData) error {
+func loadWebhooksForChannelWithCache(ctx context.Context, client bot.Client, data *ChannelData) error {
 	var channel discord.GuildChannel
 	var ok bool
 
@@ -1848,7 +1903,7 @@ func loadWebhooksForChannelWithCache(ctx context.Context, client *bot.Client, da
 	return prepareWebhooksForCategory(ctx, client, channel, data, webhookMap)
 }
 
-func prepareWebhooksForChannel(ctx context.Context, client *bot.Client, channel discord.GuildChannel, data *ChannelData, webhookMap map[snowflake.ID][]discord.Webhook) error {
+func prepareWebhooksForChannel(ctx context.Context, client bot.Client, channel discord.GuildChannel, data *ChannelData, webhookMap map[snowflake.ID][]discord.Webhook) error {
 	guildID := channel.GuildID()
 	var activeThreads []discord.GuildThread
 	for ch := range client.Caches.Channels() {
@@ -1870,7 +1925,7 @@ func prepareWebhooksForChannel(ctx context.Context, client *bot.Client, channel 
 	return nil
 }
 
-func prepareWebhooksForCategory(ctx context.Context, client *bot.Client, category discord.GuildChannel, data *ChannelData, webhookMap map[snowflake.ID][]discord.Webhook) error {
+func prepareWebhooksForCategory(ctx context.Context, client bot.Client, category discord.GuildChannel, data *ChannelData, webhookMap map[snowflake.ID][]discord.Webhook) error {
 	var targetChannels []discord.GuildChannel
 	guildID := category.GuildID()
 	for ch := range client.Caches.Channels() {
@@ -1910,7 +1965,7 @@ func prepareWebhooksForCategory(ctx context.Context, client *bot.Client, categor
 	return nil
 }
 
-func resolveWebhookIdentity(client *bot.Client, config *LoopConfig) (string, string) {
+func resolveWebhookIdentity(client bot.Client, config *LoopConfig) (string, string) {
 	author := config.WebhookAuthor
 	if author == "" {
 		author = LoopWebhookName
@@ -1937,7 +1992,7 @@ func removeFromSlice(slice []snowflake.ID, id snowflake.ID) []snowflake.ID {
 	return slice
 }
 
-func resolveScope(client *bot.Client, guildID, targetID snowflake.ID) (map[snowflake.ID]bool, string) {
+func resolveScope(client bot.Client, guildID, targetID snowflake.ID) (map[snowflake.ID]bool, string) {
 	scopeIDs := make(map[snowflake.ID]bool)
 	scopeIDs[targetID] = true
 	targetName := "Unknown"
@@ -1968,7 +2023,7 @@ func resolveScope(client *bot.Client, guildID, targetID snowflake.ID) (map[snowf
 	return scopeIDs, targetName
 }
 
-func prepareWorkload(ctx context.Context, client *bot.Client, tc discord.GuildChannel, config *LoopConfig, webhooks []discord.Webhook, activeThreads []discord.GuildThread) (WebhookData, error) {
+func prepareWorkload(ctx context.Context, client bot.Client, tc discord.GuildChannel, config *LoopConfig, webhooks []discord.Webhook, activeThreads []discord.GuildThread) (WebhookData, error) {
 	self, _ := client.Caches.SelfUser()
 	targetID := tc.ID()
 
@@ -2097,7 +2152,7 @@ func resolveChannelType(t discord.ChannelType) string {
 // Permission & Access Logic
 // ===========================
 
-func checkBotLoopPermissions(client *bot.Client, channel discord.GuildChannel, useThreads bool) error {
+func checkBotLoopPermissions(client bot.Client, channel discord.GuildChannel, useThreads bool) error {
 	required := discord.PermissionViewChannel | discord.PermissionSendMessages | discord.PermissionManageWebhooks
 	if useThreads {
 		required |= discord.PermissionManageThreads | discord.PermissionSendMessagesInThreads
@@ -2120,7 +2175,7 @@ func checkBotLoopPermissions(client *bot.Client, channel discord.GuildChannel, u
 	return nil
 }
 
-func fastCleanThreadParticipants(ctx context.Context, client *bot.Client, parentChannelID snowflake.ID, threadIDs []snowflake.ID) {
+func fastCleanThreadParticipants(ctx context.Context, client bot.Client, parentChannelID snowflake.ID, threadIDs []snowflake.ID) {
 	atomic.AddInt32(&isCleaningThreads, 1)
 	defer atomic.AddInt32(&isCleaningThreads, -1)
 
@@ -2210,7 +2265,7 @@ func fastCleanThreadParticipants(ctx context.Context, client *bot.Client, parent
 	}
 }
 
-func getMemberPermissionsInChannel(client *bot.Client, channel discord.GuildChannel, member discord.Member) discord.Permissions {
+func getMemberPermissionsInChannel(client bot.Client, channel discord.GuildChannel, member discord.Member) discord.Permissions {
 	guild, ok := client.Caches.Guild(channel.GuildID())
 	if !ok {
 		return 0
@@ -2281,7 +2336,7 @@ func getMemberPermissionsInChannel(client *bot.Client, channel discord.GuildChan
 	return perms
 }
 
-func createWebhookWithRetry(ctx context.Context, client *bot.Client, channelID snowflake.ID, suffix string) (*discord.IncomingWebhook, error) {
+func createWebhookWithRetry(ctx context.Context, client bot.Client, channelID snowflake.ID, suffix string) (*discord.IncomingWebhook, error) {
 	name := LoopWebhookName
 	if suffix != "" {
 		name += "-" + suffix
@@ -2306,7 +2361,7 @@ func createWebhookWithRetry(ctx context.Context, client *bot.Client, channelID s
 	return hook, nil
 }
 
-func createThreadWithRetry(ctx context.Context, client *bot.Client, channelID snowflake.ID, hookID snowflake.ID, hookToken string, name string, starterContent string, author string, avatar string, isForum bool) (*discord.GuildThread, error) {
+func createThreadWithRetry(ctx context.Context, client bot.Client, channelID snowflake.ID, hookID snowflake.ID, hookToken string, name string, starterContent string, author string, avatar string, isForum bool) (*discord.GuildThread, error) {
 	webhookOpSem <- struct{}{}
 	defer func() {
 		select {

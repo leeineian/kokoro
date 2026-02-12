@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,18 +42,9 @@ import (
 // ===========================
 
 func init() {
-	// 1. Cleanup old cache on startup
-	if err := os.RemoveAll(AudioCacheDir); err != nil {
-		fmt.Printf("Failed to clean audio cache: %v\n", err)
-	}
-	// 2. Ensure cache directory exists
-	if err := os.MkdirAll(AudioCacheDir, 0755); err != nil {
-		fmt.Printf("Failed to create audio cache dir: %v\n", err)
-	}
-
 	astiav.SetLogLevel(astiav.LogLevelFatal)
 
-	OnClientReady(func(ctx context.Context, client *bot.Client) {
+	OnClientReady(func(ctx context.Context, client bot.Client) {
 		RegisterDaemon(LogVoice, func(ctx context.Context) (bool, func(), func()) {
 			return true, func() {}, func() {
 				if VoiceManager != nil {
@@ -148,10 +137,15 @@ func init() {
 					},
 				},
 			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "panel",
+				Description: "Open a live Now Playing panel",
+			},
 		},
 	}, handleVoice)
 
 	RegisterAutocompleteHandler("voice", handleMusicAutocomplete)
+	RegisterComponentHandler("voice:", handleVoiceComponent)
 
 }
 
@@ -163,8 +157,11 @@ const AudioCacheDir = ".tracks"
 
 var (
 	// System
-	VoiceManager *VoiceSystem
-	OnceVoice    sync.Once
+	VoiceManager          *VoiceSystem
+	OnceVoice             sync.Once
+	audioCacheInitialized atomic.Bool
+	audioCacheMu          sync.Mutex
+	voiceShuttingDown     atomic.Bool
 
 	// Strings
 	cachedJSArgs []string
@@ -173,18 +170,55 @@ var (
 	// Regex
 	camelCaseRegex     = regexp.MustCompile(`([a-z])([A-Z])`)
 	metadataBlockRegex = regexp.MustCompile(`[\(\[\{].*?[\)\]\}]`)
-	videoIDRegex       = regexp.MustCompile(`(?:\?|&)v=([^&]+)`)
-	rawIDRegex         = regexp.MustCompile(`(?:\?|&)id=([^&]+)`)
 
 	// Audio
 	OpusSilence     = []byte{0xf8, 0xff, 0xfe}
 	SilenceDuration = 1 * time.Second
+
+	// Panels
+	VoicePanels   = make(map[snowflake.ID]*VoicePanel)
+	VoicePanelsMu sync.Mutex
 
 	// Download Configuration
 	maxConnWait = 20 * time.Second
 	maxStall    = 5 * time.Second
 	maxTotal    = 60 * time.Second
 )
+
+func ensureAudioCacheDir() {
+	if voiceShuttingDown.Load() {
+		return
+	}
+	if audioCacheInitialized.Load() {
+		return
+	}
+	audioCacheMu.Lock()
+	defer audioCacheMu.Unlock()
+	if voiceShuttingDown.Load() || audioCacheInitialized.Load() {
+		return
+	}
+	LogInfo("Initializing %s...", AudioCacheDir)
+	_ = os.RemoveAll(AudioCacheDir)
+	_ = os.MkdirAll(AudioCacheDir, 0755)
+	audioCacheInitialized.Store(true)
+}
+
+func cleanupAudioCache() {
+	audioCacheMu.Lock()
+	defer audioCacheMu.Unlock()
+
+	if _, err := os.Stat(AudioCacheDir); os.IsNotExist(err) {
+		audioCacheInitialized.Store(false)
+		return
+	}
+
+	LogInfo("Cleaning up %s...", AudioCacheDir)
+	err := os.RemoveAll(AudioCacheDir)
+	if err != nil {
+		LogError("Failed to remove %s: %v", AudioCacheDir, err)
+	}
+	audioCacheInitialized.Store(false)
+}
 
 // ===========================
 // Structs
@@ -214,10 +248,11 @@ type VoiceSession struct {
 	channelMu              sync.RWMutex
 	Conn                   voice.Conn
 	queue                  []*Track
-	queueMu                sync.Mutex
+	queueMuRaw             sync.Mutex
 	queueUpdate            chan struct{}
 	joined                 bool
 	joinedMu               sync.Mutex
+	joinMu                 sync.Mutex
 	joinedChan             chan struct{}
 	joinedChanMu           sync.Mutex
 	downloadMu             sync.Mutex
@@ -233,7 +268,8 @@ type VoiceSession struct {
 	IDFStats               map[string]int
 	streamCancel           context.CancelFunc
 	provider               *StreamProvider
-	client                 *bot.Client
+	clientMu               sync.RWMutex
+	client                 bot.Client
 	currentTrack           *Track
 	lastStatus             string
 	pauseChan              chan struct{}
@@ -246,6 +282,15 @@ type VoiceSession struct {
 	nearingEnd             bool
 	transcoder             *AstiavTranscoder
 	Volume                 atomic.Int32
+}
+
+// VoicePanel represents an active live panel for a user
+type VoicePanel struct {
+	UserID    snowflake.ID
+	GuildID   snowflake.ID
+	Token     string
+	AppID     snowflake.ID
+	ExpiresAt time.Time
 }
 
 // Track represents a music track in the queue
@@ -273,6 +318,7 @@ type Track struct {
 	TotalSize                 int64
 	SeekOffset                time.Duration
 	FileCreated               chan struct{} // Signal when the file is available for reading
+	metadataOnce              sync.Once
 }
 
 // SignalWriter wraps an io.Writer and signals a channel on every successful write
@@ -295,6 +341,14 @@ type TailingReader struct {
 	ctx     context.Context
 	sig     chan struct{}
 	playCtx context.Context
+}
+
+func (s *VoiceSession) lockQueue() {
+	s.queueMuRaw.Lock()
+}
+
+func (s *VoiceSession) unlockQueue() {
+	s.queueMuRaw.Unlock()
 }
 
 // StreamProvider provides a stream of audio frames to the voice session
@@ -399,6 +453,8 @@ func handleVoice(event *events.ApplicationCommandInteractionCreate) {
 		handleMusicSkip(event)
 	case "volume":
 		handleVoiceVolume(event, data)
+	case "panel":
+		handleVoicePanel(event)
 	}
 }
 
@@ -406,12 +462,13 @@ func handleVoiceVolume(event *events.ApplicationCommandInteractionCreate, data d
 	vol := data.Int("set")
 	s := GetVoiceManager().GetSession(*event.GuildID())
 	if s == nil {
-		_ = RespondInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay("Not playing anything.")), true)
+		_ = RespondInteractionV2(*event.Client(), event, "Not playing anything.", true)
 		return
 	}
 
 	s.Volume.Store(int32(vol))
-	_ = RespondInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay(fmt.Sprintf("Volume set to **%d%%**.", vol))), false)
+	UpdateVoicePanels(*event.GuildID(), *event.Client())
+	_ = RespondInteractionV2(*event.Client(), event, fmt.Sprintf("Volume set to **%d%%**.", vol), false)
 }
 
 func handleMusicSeek(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData, factor int) {
@@ -436,14 +493,15 @@ func handleMusicSeek(event *events.ApplicationCommandInteractionCreate, data dis
 		seekDuration = -d
 	}
 	if err := s.Seek(seekDuration); err != nil {
-		_ = RespondInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay(fmt.Sprintf("Seek failed: %v", err))), false)
+		_ = RespondInteractionV2(*event.Client(), event, fmt.Sprintf("Seek failed: %v", err), false)
 		return
 	}
 	action := "Forwarded"
 	if factor < 0 {
 		action = "Rewound"
 	}
-	_ = RespondInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay(fmt.Sprintf("%s %v", action, d))), false)
+	UpdateVoicePanels(*guildID, *event.Client())
+	_ = RespondInteractionV2(*event.Client(), event, fmt.Sprintf("%s %v", action, d), false)
 }
 
 func handleMusicSkip(event *events.ApplicationCommandInteractionCreate) {
@@ -465,11 +523,12 @@ func handleMusicSkip(event *events.ApplicationCommandInteractionCreate) {
 	title, err := s.Skip()
 	if err != nil {
 		LogVoice("Skip failed after %v: %v", time.Since(start), err)
-		_ = EditInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay(fmt.Sprintf("Failed to skip: %v", err))))
+		_ = EditInteractionV2(*event.Client(), event, fmt.Sprintf("Failed to skip: %v", err))
 		return
 	}
 	LogVoice("Skip success after %v: %s", time.Since(start), title)
-	_ = EditInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay(fmt.Sprintf("Skipped: %s", title))))
+	UpdateVoicePanels(*guildID, *event.Client())
+	_ = EditInteractionV2(*event.Client(), event, fmt.Sprintf("Skipped: %s", title))
 }
 
 func strPtr(s string) *string {
@@ -483,13 +542,14 @@ func strPtr(s string) *string {
 // GetVoiceManager returns the singleton VoiceSystem instance
 func GetVoiceManager() *VoiceSystem {
 	OnceVoice.Do(func() {
+		voiceShuttingDown.Store(false)
 		VoiceManager = &VoiceSystem{
 			sessions: make(map[snowflake.ID]*VoiceSession),
 			cache: &QueryCache{
 				items: make(map[string]cachedItem),
 			},
 		}
-		go VoiceManager.startCacheGC()
+		safeGo(VoiceManager.startCacheGC)
 	})
 	return VoiceManager
 }
@@ -518,7 +578,7 @@ func (vs *VoiceSystem) GetSession(guildID snowflake.ID) *VoiceSession {
 }
 
 // Prepare creates or retrieves a voice session for a guild
-func (vs *VoiceSystem) Prepare(client *bot.Client, guildID, channelID snowflake.ID) *VoiceSession {
+func (vs *VoiceSystem) Prepare(client bot.Client, guildID, channelID snowflake.ID) *VoiceSession {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	if sess, ok := vs.sessions[guildID]; ok {
@@ -532,10 +592,10 @@ func (vs *VoiceSystem) Prepare(client *bot.Client, guildID, channelID snowflake.
 				sess.ChannelID = channelID
 				sess.channelMu.Unlock()
 				// Move Discord API call to goroutine to avoid holding vs.mu
-				go func(cid snowflake.ID) {
-					route := rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status")
+				safeGo(func() {
+					route := rest.NewEndpoint(http.MethodPut, "/channels/"+oldChannelID.String()+"/voice-status")
 					_ = client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
-				}(oldChannelID)
+				})
 			} else {
 				sess.channelMu.Unlock()
 			}
@@ -564,21 +624,24 @@ func (vs *VoiceSystem) Prepare(client *bot.Client, guildID, channelID snowflake.
 
 	close(sess.pauseChan)
 	sess.goroutineWg.Add(2)
-	go func() {
+	safeGo(func() {
 		defer sess.goroutineWg.Done()
 		sess.statusManager()
-	}()
-	go func() {
+	})
+	safeGo(func() {
 		defer sess.goroutineWg.Done()
 		sess.downloadLoop()
-	}()
+	})
 	vs.sessions[guildID] = sess
 	return sess
 }
 
 // Join connects the bot to a voice channel
-func (vs *VoiceSystem) Join(ctx context.Context, client *bot.Client, guildID, channelID snowflake.ID) error {
+func (vs *VoiceSystem) Join(ctx context.Context, client bot.Client, guildID, channelID snowflake.ID) error {
 	sess := vs.Prepare(client, guildID, channelID)
+
+	sess.joinMu.Lock()
+	defer sess.joinMu.Unlock()
 
 	sess.joinedMu.Lock()
 	if sess.joined && sess.ChannelID == channelID {
@@ -594,10 +657,22 @@ func (vs *VoiceSystem) Join(ctx context.Context, client *bot.Client, guildID, ch
 		if i > 0 {
 			backoff := time.Duration(1<<uint(i-1)) * 1000 * time.Millisecond
 			LogVoice("Retrying voice connection in %v (Attempt %d/5)", backoff, i+1)
-			time.Sleep(backoff)
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
-		if err := sess.Conn.Open(ctx, channelID, false, false); err != nil {
+
+		openCtx, openCancel := context.WithTimeout(ctx, 20*time.Second)
+		err := sess.Conn.Open(openCtx, channelID, false, false)
+		openCancel()
+
+		if err != nil {
 			lastErr = err
+			LogVoice("Join attempt %d failed for guild %s: %v", i+1, guildID, err)
+			sess.Conn.Close(context.Background())
 			continue
 		}
 		lastErr = nil
@@ -606,7 +681,6 @@ func (vs *VoiceSystem) Join(ctx context.Context, client *bot.Client, guildID, ch
 
 	if lastErr != nil {
 		LogVoice("Failed to connect to voice in guild %s after 5 attempts: %v", guildID, lastErr)
-		sess.Conn.Close(ctx)
 		return lastErr
 	}
 
@@ -621,11 +695,11 @@ func (vs *VoiceSystem) Join(ctx context.Context, client *bot.Client, guildID, ch
 		}
 		sess.joinedChanMu.Unlock()
 		sess.goroutineWg.Add(2)
-		go func() {
+		safeGo(func() {
 			defer sess.goroutineWg.Done()
 			sess.processQueue()
-		}()
-		go sess.monitorConnection()
+		})
+		safeGo(sess.monitorConnection)
 	}
 	sess.joinedMu.Unlock()
 	return nil
@@ -635,7 +709,7 @@ func (s *VoiceSession) Reconnect(ctx context.Context) error {
 	s.channelMu.RLock()
 	cid := s.ChannelID
 	s.channelMu.RUnlock()
-	return GetVoiceManager().Join(ctx, s.client, s.GuildID, cid)
+	return GetVoiceManager().Join(ctx, s.GetClient(), s.GuildID, cid)
 }
 
 func (s *VoiceSession) monitorConnection() {
@@ -652,11 +726,19 @@ func (s *VoiceSession) monitorConnection() {
 		case <-s.cancelCtx.Done():
 			return
 		case <-ticker.C:
-			// Only reconnect if sess.joined is FALSE but we HAVE a channel ID
-			// (meaning we were kicked or dropped unexpectedly)
+
 			s.joinedMu.Lock()
 			joined := s.joined
 			s.joinedMu.Unlock()
+
+			if joined && (s.Conn == nil || s.Conn.ChannelID() == nil) {
+				LogVoice("Detected disconnected voice state for guild %s, marking as not joined.", s.GuildID)
+				s.joinedMu.Lock()
+				s.joined = false
+				s.joinedMu.Unlock()
+				joined = false
+			}
+
 			if !joined {
 				_ = s.Reconnect(s.cancelCtx)
 			}
@@ -664,7 +746,7 @@ func (s *VoiceSession) monitorConnection() {
 	}
 }
 
-// Leave disconnects the bot from a voice channel
+// Leave disconnects the bot from a voice channel instantly and cleans up
 func (vs *VoiceSystem) Leave(ctx context.Context, guildID snowflake.ID) {
 	vs.mu.Lock()
 	sess, ok := vs.sessions[guildID]
@@ -675,24 +757,56 @@ func (vs *VoiceSystem) Leave(ctx context.Context, guildID snowflake.ID) {
 	delete(vs.sessions, guildID)
 	vs.mu.Unlock()
 
-	sess.channelMu.RLock()
-	channelID := sess.ChannelID
-	sess.channelMu.RUnlock()
+	vs.cleanupSession(sess)
+}
 
-	route := rest.NewEndpoint(http.MethodPut, "/channels/"+channelID.String()+"/voice-status")
-	_ = sess.client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
-
-	sess.Stop()
-	sess.joinedMu.Lock()
-	sess.joined = false
-	sess.joinedMu.Unlock()
-	if sess.Conn != nil {
-		sess.Conn.Close(ctx)
+// cleanupSession performs the teardown of a voice session outside of the vs.mu lock
+func (vs *VoiceSystem) cleanupSession(sess *VoiceSession) {
+	if sess == nil {
+		return
 	}
+	// client is a struct value, no nil check needed or check if empty.
+	// We'll trust the caller passes a valid client.
+
+	// 1. Instantly trigger panel updates that session ended
+	UpdateVoicePanels(sess.GuildID, sess.GetClient())
+
+	// 2. Cleanup in background to avoid blocking
+	safeGo(func() {
+		s := sess // Capture sess for the goroutine
+		s.Stop()  // Clears queue, cancels context, clears voice status channel
+
+		s.channelMu.RLock()
+		cid := s.ChannelID
+		s.channelMu.RUnlock()
+
+		if cid != 0 {
+			// Effort to clear Discord API voice channel status
+			route := rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status")
+			_ = s.GetClient().Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
+		}
+
+		s.joinedMu.Lock()
+		s.joined = false
+		s.joinedMu.Unlock()
+
+		if s.Conn != nil {
+			s.Conn.Close(context.Background())
+		}
+
+		vs.mu.Lock()
+		activeCount := len(vs.sessions)
+		vs.mu.Unlock()
+
+		if activeCount == 0 {
+			cleanupAudioCache()
+		}
+	})
 }
 
 // Shutdown gracefully stops all voice sessions and clears their status
 func (vs *VoiceSystem) Shutdown(ctx context.Context) {
+	voiceShuttingDown.Store(true)
 	vs.mu.Lock()
 	sessions := make([]*VoiceSession, 0, len(vs.sessions))
 	for id, sess := range vs.sessions {
@@ -704,18 +818,22 @@ func (vs *VoiceSystem) Shutdown(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, sess := range sessions {
 		wg.Add(1)
-		go func(s *VoiceSession) {
-			defer wg.Done()
-			s.channelMu.RLock()
-			channelID := s.ChannelID
-			s.channelMu.RUnlock()
+		safeGo(func() {
+			func(s *VoiceSession) {
+				defer wg.Done()
+				s.channelMu.RLock()
+				channelID := s.ChannelID
+				s.channelMu.RUnlock()
 
-			route := rest.NewEndpoint(http.MethodPut, "/channels/"+channelID.String()+"/voice-status")
-			_ = s.client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
-			s.Stop()
-		}(sess)
+				route := rest.NewEndpoint(http.MethodPut, "/channels/"+channelID.String()+"/voice-status")
+				_ = s.GetClient().Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
+				s.Stop()
+			}(sess)
+		})
 	}
 	wg.Wait()
+	LogVoice("All voice sessions stopped. Finalizing cleanup...")
+	cleanupAudioCache()
 }
 
 // Play adds a track to the queue and starts playback
@@ -731,8 +849,6 @@ func (vs *VoiceSystem) Play(ctx context.Context, guildID snowflake.ID, url, mode
 	}
 
 	firstTrack := tracks[0]
-	LogVoice("Queuing %d track(s) in guild %s: %s", len(tracks), guildID, url)
-
 	s.queueTracks(tracks, mode, pos)
 
 	firstTrack.Priority = 1
@@ -761,8 +877,8 @@ func (vs *VoiceSystem) resolvePlaylist(ctx context.Context, url string) ([]*Trac
 }
 
 func (s *VoiceSession) queueTracks(tracks []*Track, mode string, pos int) {
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
+	s.lockQueue()
+	defer s.unlockQueue()
 
 	if mode == "now" {
 		for _, qt := range s.queue {
@@ -811,7 +927,7 @@ func (vs *VoiceSystem) onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 	vs.mu.Unlock()
 
 	if event.VoiceState.UserID == event.Client().ID() {
-		vs.handleBotVoiceStateUpdate(event, s, ok)
+		vs.handleBotVoiceStateUpdate(event, s)
 		return
 	}
 
@@ -820,16 +936,12 @@ func (vs *VoiceSystem) onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 	}
 }
 
-func (vs *VoiceSystem) handleBotVoiceStateUpdate(event *events.GuildVoiceStateUpdate, s *VoiceSession, ok bool) {
+func (vs *VoiceSystem) handleBotVoiceStateUpdate(event *events.GuildVoiceStateUpdate, s *VoiceSession) {
 	if event.VoiceState.ChannelID == nil {
-		if ok {
-			LogVoice("Bot disconnected by external event in guild %s", event.VoiceState.GuildID)
-			vs.Leave(context.Background(), event.VoiceState.GuildID)
-		}
-		return
-	}
-
-	if !ok {
+		LogVoice("Bot disconnected by external event in guild %s", event.VoiceState.GuildID)
+		delete(vs.sessions, event.VoiceState.GuildID)
+		// Move cleanup to goroutine to avoid calling into locked methods
+		safeGo(func() { vs.cleanupSession(s) })
 		return
 	}
 
@@ -842,8 +954,12 @@ func (vs *VoiceSystem) handleBotVoiceStateUpdate(event *events.GuildVoiceStateUp
 		LogVoice("Bot moved from %s to %s in guild %s", oldChannelID, *event.VoiceState.ChannelID, event.VoiceState.GuildID)
 
 		if oldChannelID != 0 {
-			route := rest.NewEndpoint(http.MethodPut, "/channels/"+oldChannelID.String()+"/voice-status")
-			_ = event.Client().Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
+			safeGo(func() {
+				func(cid snowflake.ID, cli *bot.Client) {
+					route := rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status")
+					_ = cli.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
+				}(oldChannelID, event.Client())
+			})
 		}
 
 		s.channelMu.Lock()
@@ -940,14 +1056,19 @@ func (vs *VoiceSystem) updateAutoPauseState(event *events.GuildVoiceStateUpdate,
 
 // Seek seeks the current track to a relative offset
 func (s *VoiceSession) Seek(duration time.Duration) error {
-	s.queueMu.Lock()
-	if s.transcoder == nil {
-		s.queueMu.Unlock()
-		return errors.New("not playing or transcoding")
+	s.lockQueue()
+	if s.currentTrack == nil {
+		s.unlockQueue()
+		return fmt.Errorf("no track currently playing")
 	}
-	tr := s.transcoder
+
+	// Create new context for the new playback
+	ctx, cancel := context.WithCancel(s.cancelCtx)
+	s.streamCancel = cancel
+
 	cur := s.currentTrack
-	s.queueMu.Unlock()
+	tr := s.transcoder
+	s.unlockQueue()
 
 	if cur == nil {
 		return errors.New("no active track")
@@ -998,7 +1119,9 @@ func (s *VoiceSession) Seek(duration time.Duration) error {
 			fragmentPath := baseName + ".webm"
 			partPath := fragmentPath + ".part"
 
-			go s.downloadAndCache(s.cancelCtx, cur, fragmentPath, cur.URL)
+			safeGo(func() {
+				s.downloadAndCache(ctx, cur, fragmentPath, cur.URL)
+			})
 
 			select {
 			case <-cur.FileCreated:
@@ -1023,9 +1146,9 @@ func (s *VoiceSession) Seek(duration time.Duration) error {
 
 // Skip skips the currently playing track
 func (s *VoiceSession) Skip() (string, error) {
-	s.queueMu.Lock()
-	if s.transcoder == nil && s.currentTrack == nil {
-		s.queueMu.Unlock()
+	s.lockQueue()
+	if s.currentTrack == nil && len(s.queue) == 0 {
+		s.unlockQueue()
 		return "", errors.New("nothing playing")
 	}
 	// Prevent looping for this specific track if it was going to loop
@@ -1040,7 +1163,7 @@ func (s *VoiceSession) Skip() (string, error) {
 	}
 
 	cancel := s.streamCancel
-	s.queueMu.Unlock()
+	s.unlockQueue()
 
 	if cancel != nil {
 		cancel()
@@ -1068,35 +1191,34 @@ func (s *VoiceSession) Stop() {
 		s.cancelFunc()
 	}
 
-	s.queueMu.Lock()
+	s.lockQueue()
 	if s.streamCancel != nil {
 		s.streamCancel()
 	}
-	s.queueMu.Unlock()
-
-	if s.Conn != nil {
+	s.transcoder = nil
+	if s.Conn != nil { // Should be safe to access Conn without lock as it is only written in Prepare
 		s.setOpusFrameProviderSafe(nil)
 		s.setSpeakingSafe(0)
 	}
-	s.queueMu.Lock()
+	s.unlockQueue()
+	s.lockQueue()
 	for _, t := range s.queue {
 		t.Cleanup()
 	}
 	s.queue = nil
 	if s.currentTrack != nil {
 		s.currentTrack.Cleanup()
+		s.currentTrack = nil
 	}
-	s.currentTrack = nil
 	if s.autoplayTrack != nil {
 		s.autoplayTrack.Cleanup()
+		s.autoplayTrack = nil
 	}
-	s.autoplayTrack = nil
-
+	s.unlockQueue()
 	select {
 	case s.queueUpdate <- struct{}{}:
 	default:
 	}
-	s.queueMu.Unlock()
 
 	s.setVoiceStatus("")
 }
@@ -1106,7 +1228,59 @@ func (s *VoiceSession) WaitForCleanup() {
 	s.goroutineWg.Wait()
 }
 
-// setVoiceStatus updates the voice channel status message
+// RefreshStatus recalculates the voice status based on current session state
+func (s *VoiceSession) RefreshStatus() {
+	// Lock for accessing state
+	s.lockQueue()
+	track := s.currentTrack
+	paused := false
+	s.pauseMu.RLock()
+	select {
+	case <-s.pauseChan:
+	default:
+		paused = true
+	}
+	s.pauseMu.RUnlock()
+
+	queueLen := len(s.queue)
+	if queueLen > 0 && s.queue[0] == track {
+		queueLen--
+	}
+	s.unlockQueue()
+
+	if track == nil {
+		if paused {
+			s.setVoiceStatus("▶️ Paused")
+		} else {
+			s.setVoiceStatus("")
+		}
+		return
+	}
+
+	track.mu.Lock()
+	title, channel := track.Title, track.Channel
+	track.mu.Unlock()
+
+	if title == "" {
+		if paused {
+			s.setVoiceStatus("▶️ Paused")
+		} else {
+			s.setVoiceStatus("⏸️ Music Track")
+		}
+		return
+	}
+
+	prefix := "⏸️ "
+	if paused {
+		prefix = "▶️ "
+	}
+	sep := ""
+	if channel != "" {
+		sep = " · "
+	}
+	s.setVoiceStatus(TruncateWithPreserve(title, 128, prefix, sep+channel))
+}
+
 func (s *VoiceSession) setVoiceStatus(status string) {
 	select {
 	case s.statusChan <- status:
@@ -1154,21 +1328,30 @@ func (s *VoiceSession) statusManager() {
 			s.channelMu.RUnlock()
 
 			// Fire and forget (log error if any)
-			go func(cid snowflake.ID, status string) {
-				err := s.client.Rest.Do(rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status").Compile(nil), map[string]string{"status": status}, nil)
-				if err != nil {
-					LogVoice("Failed to update status for %s: %v", cid, err)
-				}
-			}(channelID, target)
+			safeGo(func() {
+				func(cid snowflake.ID, status string) {
+					cl := s.GetClient()
+					err := cl.Rest.Do(rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status").Compile(nil), map[string]string{"status": status}, nil)
+					if err != nil {
+						LogVoice("Failed to update status for %s: %v", cid, err)
+					}
+				}(channelID, target)
+			})
 
 			cur = target
 			s.statusMu.Unlock()
+			UpdateVoicePanels(s.GuildID, s.GetClient())
 		}
 	}
 }
 
-func (s *VoiceSession) updateNextTrackStatusIfNeeded(t *Track) {
-	s.queueMu.Lock()
+func (s *VoiceSession) updateNextTrackStatusIfNeeded(next *Track) {
+	s.lockQueue()
+	if s.nearingEnd {
+		s.unlockQueue()
+		return
+	}
+	t := next
 	isCurrent := s.currentTrack == t
 	isNext := false
 	if len(s.queue) > 0 && s.queue[0] == t {
@@ -1178,7 +1361,7 @@ func (s *VoiceSession) updateNextTrackStatusIfNeeded(t *Track) {
 	}
 	nearing := s.nearingEnd
 	looping := s.Looping
-	s.queueMu.Unlock()
+	s.unlockQueue()
 
 	if (isCurrent || isNext) && !looping && t.Title != "" {
 		sep := ""
@@ -1285,13 +1468,15 @@ func (s *VoiceSession) processQueue() {
 			LogVoice("CRITICAL: processQueue panic recovered: %v", r)
 		}
 	}()
+	// Main loop
 	for {
-		s.queueMu.Lock()
-		if len(s.queue) == 0 {
-			s.queueMu.Unlock()
+		s.lockQueue()
+
+		for len(s.queue) == 0 {
+			s.unlockQueue()
 			select {
 			case <-s.queueUpdate:
-				continue
+				s.lockQueue()
 			case <-s.cancelCtx.Done():
 				return
 			}
@@ -1304,7 +1489,7 @@ func (s *VoiceSession) processQueue() {
 			s.autoplayTrack.Cleanup()
 			s.autoplayTrack = nil
 		}
-		s.queueMu.Unlock()
+		s.unlockQueue()
 
 		t.Priority = 1
 		s.scheduleDownload(t)
@@ -1321,12 +1506,12 @@ func (s *VoiceSession) processQueue() {
 			continue
 		}
 
-		s.queueMu.Lock()
+		s.lockQueue()
 		if len(s.queue) > 0 {
 			s.queue[0].Priority = 1
 			s.scheduleDownload(s.queue[0])
 		}
-		s.queueMu.Unlock()
+		s.unlockQueue()
 		if err := s.WaitJoined(s.cancelCtx); err != nil {
 			LogVoice("Skipping track %s: failed to wait for join: %v", t.URL, err)
 			continue
@@ -1335,7 +1520,7 @@ func (s *VoiceSession) processQueue() {
 		ctx, cancel := context.WithCancel(s.cancelCtx)
 		t.cancel = cancel
 
-		go func() {
+		safeGo(func() {
 			select {
 			case <-t.MetadataReady:
 			case <-ctx.Done():
@@ -1356,50 +1541,45 @@ func (s *VoiceSession) processQueue() {
 					}
 				}
 				LogVoice("Playing track: %s · %s (%s) [%v]", title, channel, url, duration)
-				sep := ""
-				if channel != "" {
-					sep = " · "
-				}
-				s.setVoiceStatus(TruncateWithPreserve(title, 128, "⏸️ ", sep+channel))
+				s.RefreshStatus()
 			case <-ctx.Done():
 				LogVoice("Track skipped/finished: %s", url)
 			}
 			s.addToHistory(url, title, channel)
-		}()
+		})
 
-		s.queueMu.Lock()
+		s.lockQueue()
 		autoplay := s.Autoplay
-		s.queueMu.Unlock()
+		s.unlockQueue()
 		if autoplay {
-			go func(url string) {
-				select {
-				case <-t.MetadataReady:
-				case <-s.cancelCtx.Done():
-					return
-				case <-time.After(10 * time.Second):
-				}
+			safeGo(func() {
+				func(url string) {
+					select {
+					case <-t.MetadataReady:
+					case <-s.cancelCtx.Done():
+						return
+					case <-time.After(10 * time.Second):
+					}
 
-				next, err := s.fetchRelated(url, t.Title, t.Channel)
-				if err == nil && next != "" {
-					nt := NewTrack(next)
-					shouldDownload := false
-					s.queueMu.Lock()
-					if s.Autoplay && s.currentTrack != nil && s.currentTrack.URL == url {
-						if s.autoplayTrack != nil {
-							s.autoplayTrack.Cleanup()
+					next, err := s.fetchRelated(url, t.Title, t.Channel)
+					if err == nil && next != "" {
+						nt := NewTrack(next)
+						// Check for autoplay pre-fetch
+						s.lockQueue()
+						if s.Autoplay && s.autoplayTrack == nil && s.currentTrack != nil && s.currentTrack.URL == url {
+							if s.autoplayTrack != nil {
+								s.autoplayTrack.Cleanup()
+							}
+							s.autoplayTrack = nt
+							nt.Priority = 0
+							s.scheduleDownload(nt)
 						}
-						s.autoplayTrack = nt
-						shouldDownload = true
+						s.unlockQueue()
+					} else {
+						LogVoice("Autoplay pre-fetch failed for %s: %v (Next: %s)", url, err, next)
 					}
-					s.queueMu.Unlock()
-					if shouldDownload && nt != nil {
-						nt.Priority = 0
-						s.scheduleDownload(nt)
-					}
-				} else {
-					LogVoice("Autoplay pre-fetch failed for %s: %v (Next: %s)", url, err, next)
-				}
-			}(t.URL)
+				}(t.URL)
+			})
 		}
 
 		if t.LiveStream != nil {
@@ -1410,18 +1590,21 @@ func (s *VoiceSession) processQueue() {
 
 		s.setVoiceStatus("")
 
-		s.queueMu.Lock()
+		s.lockQueue()
+
 		loop := s.Looping && !s.skipLoop
 		s.skipLoop = false
 		if loop {
 			s.queue = append([]*Track{t}, s.queue...)
-			s.queueMu.Unlock()
+			s.unlockQueue()
 			continue
 		}
-		s.queueMu.Unlock()
+		s.unlockQueue()
+
 		t.Cleanup()
 
-		s.queueMu.Lock()
+		s.lockQueue()
+
 		if len(s.queue) == 0 && s.Autoplay {
 			if s.autoplayTrack != nil {
 				next := s.autoplayTrack
@@ -1431,10 +1614,10 @@ func (s *VoiceSession) processQueue() {
 				case s.queueUpdate <- struct{}{}:
 				default:
 				}
-				s.queueMu.Unlock()
+				s.unlockQueue()
 				continue
 			} else {
-				s.queueMu.Unlock()
+				s.unlockQueue()
 				next, err := s.fetchRelated(t.URL, t.Title, t.Channel)
 				if err == nil && next != "" {
 					_, _, _ = GetVoiceManager().Play(context.Background(), s.GuildID, next, "", 0)
@@ -1447,9 +1630,9 @@ func (s *VoiceSession) processQueue() {
 		if len(s.queue) == 0 {
 			s.currentTrack = nil
 			s.autoplayTrack = nil
-			s.queueMu.Unlock()
+			s.unlockQueue()
 		} else {
-			s.queueMu.Unlock()
+			s.unlockQueue()
 		}
 	}
 }
@@ -1495,6 +1678,12 @@ func (t *Track) Cleanup() {
 			}
 		}
 	}
+}
+
+func (t *Track) SafeCloseMetadata() {
+	t.metadataOnce.Do(func() {
+		close(t.MetadataReady)
+	})
 }
 
 func (s *SignalWriter) Write(p []byte) (n int, err error) {
@@ -1620,6 +1809,7 @@ func (t *Track) MarkReady(path, title, channel string, d time.Duration, s io.Rea
 		return
 	}
 	t.Path, t.Title, t.Channel, t.Duration, t.Downloaded, t.LiveStream = path, title, channel, d, true, s
+	t.SafeCloseMetadata() // Ensure MetadataReady is closed
 	close(t.done)
 }
 
@@ -1631,6 +1821,7 @@ func (t *Track) MarkError(err error) {
 		return
 	}
 	t.Error = err
+	t.SafeCloseMetadata() // Ensure MetadataReady is closed
 	close(t.done)
 }
 
@@ -1643,7 +1834,7 @@ func (s *VoiceSession) streamFile(url, path string) {
 }
 
 func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
-	s.queueMu.Lock()
+	s.lockQueue()
 	if s.streamCancel != nil {
 		s.streamCancel()
 	}
@@ -1659,19 +1850,25 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 	if tr, ok := reader.(*TailingReader); ok {
 		tr.SetPlayContext(ctx)
 	}
-	s.queueMu.Unlock()
+	s.unlockQueue()
 
 	defer cancel()
-	go func() {
-		defer p.PushFrame(nil)
+	safeGo(func() {
+		defer func() {
+			// Always call OnFinish, even if pushing nil frame fails
+			if p.OnFinish != nil {
+				p.OnFinish()
+			}
+		}()
+		defer p.PushFrame(nil) // Best effort to signal EOF
 		t := NewAstiavTranscoder()
 		t.volume = &s.Volume
 		defer func() {
-			s.queueMu.Lock()
+			s.lockQueue()
 			if s.transcoder == t {
 				s.transcoder = nil
 			}
-			s.queueMu.Unlock()
+			s.unlockQueue()
 		}()
 		defer t.Close()
 		if err := t.OpenInput(inputPath, reader); err != nil {
@@ -1679,21 +1876,21 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 			return
 		}
 
-		s.queueMu.Lock()
+		s.lockQueue()
 		s.transcoder = t
-		s.queueMu.Unlock()
+		s.unlockQueue()
 
 		if err := t.SetupDecoder(); err != nil {
 			LogVoice("Transcoder SetupDecoder failed: %v", err)
 			return
 		}
 		if err := t.SetupEncoder(); err != nil {
-			LogVoice("Transcoder SetupEncoder failed: %v", err)
+			LogVoice("Transcoder SetupEncoder failed: %m", err)
 			return
 		}
 
 		t.OnNearingEnd = func() {
-			s.queueMu.Lock()
+			s.lockQueue()
 			s.nearingEnd = true
 			var next *Track
 			if len(s.queue) > 0 {
@@ -1701,7 +1898,7 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 			} else if s.Autoplay {
 				next = s.autoplayTrack
 			}
-			s.queueMu.Unlock()
+			s.unlockQueue()
 
 			if next != nil {
 				s.updateNextTrackStatusIfNeeded(next)
@@ -1712,11 +1909,11 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 		if err != nil {
 			LogVoice("Transcoder finished for: %s (Err: %v)", url, err)
 		}
-	}()
+	})
 
 	getMsg := func() string {
-		s.queueMu.Lock()
-		defer s.queueMu.Unlock()
+		s.lockQueue()
+		defer s.unlockQueue()
 		if s.currentTrack != nil && (s.currentTrack.Title != "" || s.currentTrack.Channel != "") {
 			return fmt.Sprintf("%s · %s", s.currentTrack.Title, s.currentTrack.Channel)
 		}
@@ -1727,13 +1924,13 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 		s.setOpusFrameProviderSafe(p)
 		s.setSpeakingSafe(voice.SpeakingFlagMicrophone)
 
-		s.queueMu.Lock()
+		s.lockQueue()
 		if s.currentTrack != nil {
 			s.currentTrack.onceStart.Do(func() {
 				close(s.currentTrack.PlaybackStarted)
 			})
 		}
-		s.queueMu.Unlock()
+		s.unlockQueue()
 	}
 	select {
 	case <-done:
@@ -1781,6 +1978,7 @@ func (p *StreamProvider) PushFrame(f []byte) {
 	case p.frames <- f:
 	case <-p.sess.cancelCtx.Done():
 	case <-p.ctx.Done():
+	case <-time.After(1 * time.Second):
 	}
 }
 
@@ -1876,12 +2074,10 @@ func (t *AstiavTranscoder) OpenInput(in string, r io.Reader) error {
 		t.inputCtx.SetPb(ioCtx)
 		t.inputCtx.SetFlags(t.inputCtx.Flags().Add(astiav.FormatContextFlagCustomIo))
 
-		ps, ad := "10000000", "10000000"
-
 		opts := astiav.NewDictionary()
 		defer opts.Free()
-		opts.Set("probesize", ps, 0)
-		opts.Set("analyzeduration", ad, 0)
+		opts.Set("probesize", "5000000", 0)
+		opts.Set("analyzeduration", "5000000", 0)
 		opts.Set("fflags", "nobuffer", 0)
 		opts.Set("flags", "low_delay", 0)
 
@@ -1889,18 +2085,17 @@ func (t *AstiavTranscoder) OpenInput(in string, r io.Reader) error {
 			return err
 		}
 	} else {
-		var opts *astiav.Dictionary
+		opts := astiav.NewDictionary()
+		defer opts.Free()
 		if strings.HasPrefix(in, "http") {
-			opts = astiav.NewDictionary()
-			defer opts.Free()
 			opts.Set("reconnect", "1", 0)
 			opts.Set("reconnect_at_eof", "1", 0)
 			opts.Set("reconnect_streamed", "1", 0)
 			opts.Set("reconnect_delay_max", "30", 0)
 			opts.Set("timeout", "30000000", 0)
-			opts.Set("probesize", "10000000", 0)
-			opts.Set("analyzeduration", "10000000", 0)
 		}
+		opts.Set("probesize", "5000000", 0)
+		opts.Set("analyzeduration", "5000000", 0)
 		if err := t.inputCtx.OpenInput(in, nil, opts); err != nil {
 			return err
 		}
@@ -2059,17 +2254,22 @@ func (t *AstiavTranscoder) Transcode(ctx context.Context, on func([]byte)) (err 
 	// Flush Encoder
 	if t.encoderCtx != nil {
 		_ = t.encoderCtx.SendFrame(nil)
-		for {
-			t.packet.Unref()
-			if t.encoderCtx.ReceivePacket(t.packet) != nil {
-				break
-			}
-			if t.onFrame != nil {
-				d := t.packet.Data()
-				fd := make([]byte, len(d))
-				copy(fd, d)
-				t.onFrame(fd)
-			}
+		_ = t.receiveAndWrite()
+	}
+	return nil
+}
+
+func (t *AstiavTranscoder) receiveAndWrite() error {
+	for {
+		t.packet.Unref()
+		if t.encoderCtx.ReceivePacket(t.packet) != nil {
+			break
+		}
+		if t.onFrame != nil {
+			d := t.packet.Data()
+			fd := make([]byte, len(d))
+			copy(fd, d)
+			t.onFrame(fd)
 		}
 	}
 	return nil
@@ -2130,20 +2330,7 @@ func (t *AstiavTranscoder) encodeAndWrite(f *astiav.Frame) error {
 	if err := t.encoderCtx.SendFrame(f); err != nil {
 		return err
 	}
-	for {
-		// Reuse Packet
-		t.packet.Unref()
-		if t.encoderCtx.ReceivePacket(t.packet) != nil {
-			break
-		}
-		if t.onFrame != nil {
-			d := t.packet.Data()
-			fd := make([]byte, len(d))
-			copy(fd, d)
-			t.onFrame(fd)
-		}
-	}
-	return nil
+	return t.receiveAndWrite()
 }
 
 func (t *AstiavTranscoder) pushToFifo() error {
@@ -2245,18 +2432,17 @@ func (t *AstiavTranscoder) Close() {
 // YT-DLP & Autocomplete
 // ===========================
 
+const (
+	YoutubePrefix = "[YT]"
+	YTMusicPrefix = "[YTM]"
+)
+
 func getYoutubePrefix() string {
-	if GlobalConfig != nil && GlobalConfig.YoutubePrefix != "" {
-		return GlobalConfig.YoutubePrefix
-	}
-	return "[YT]"
+	return YoutubePrefix
 }
 
 func getYTMusicPrefix() string {
-	if GlobalConfig != nil && GlobalConfig.YTMusicPrefix != "" {
-		return GlobalConfig.YTMusicPrefix
-	}
-	return "[YTM]"
+	return YTMusicPrefix
 }
 
 func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
@@ -2284,7 +2470,7 @@ func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
 	seen := make(map[string]bool)
 	wg := sync.WaitGroup{}
 	wg.Add(2)
-	go func() {
+	safeGo(func() {
 		defer wg.Done()
 		s := ytmusic.TrackSearch(query)
 		r, _ := s.Next()
@@ -2303,8 +2489,8 @@ func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
 			}
 			resMu.Unlock()
 		}
-	}()
-	go func() {
+	})
+	safeGo(func() {
 		defer wg.Done()
 		c := ytsearch.NewClient(nil)
 		r, _ := c.Search(ctx, query)
@@ -2316,12 +2502,12 @@ func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
 			}
 			resMu.Unlock()
 		}
-	}()
+	})
 	d := make(chan struct{})
-	go func() {
+	safeGo(func() {
 		wg.Wait()
 		close(d)
-	}()
+	})
 	select {
 	case <-d:
 	case <-time.After(2300 * time.Millisecond):
@@ -2348,7 +2534,7 @@ func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
 	return fin, nil
 }
 
-func (vs *VoiceSystem) SearchPlaylist(q string) ([]SearchResult, error) {
+func (vs *VoiceSystem) SearchPlaylist(q string) ([]ytdlpSearchResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -2357,34 +2543,34 @@ func (vs *VoiceSystem) SearchPlaylist(q string) ([]SearchResult, error) {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	go func() {
+	safeGo(func() {
 		defer wg.Done()
 		ytRs, ytErr = ytdlpSearchPlaylist(ctx, q, 10)
-	}()
-	go func() {
+	})
+	safeGo(func() {
 		defer wg.Done()
 		ytmRs, ytmErr = ytdlpSearchPlaylistYTM(ctx, q, 10)
-	}()
+	})
 	wg.Wait()
 
 	if ytErr != nil && ytmErr != nil {
 		return nil, fmt.Errorf("YouTube: %v, YTM: %v", ytErr, ytmErr)
 	}
 
-	var res []SearchResult
+	var res []ytdlpSearchResult
 	seen := make(map[string]bool)
 	for _, r := range ytmRs {
 		if seen[r.URL] {
 			continue
 		}
-		res = append(res, SearchResult{Title: "[PL] " + r.Title, ChannelName: r.Uploader, URL: r.URL})
+		res = append(res, ytdlpSearchResult{Title: "[PL] " + r.Title, Uploader: r.Uploader, URL: r.URL})
 		seen[r.URL] = true
 	}
 	for _, r := range ytRs {
 		if seen[r.URL] {
 			continue
 		}
-		res = append(res, SearchResult{Title: "[PL] " + r.Title, ChannelName: r.Uploader, URL: r.URL})
+		res = append(res, ytdlpSearchResult{Title: "[PL] " + r.Title, Uploader: r.Uploader, URL: r.URL})
 		seen[r.URL] = true
 	}
 
@@ -2404,7 +2590,7 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 
 		resultChan := make(chan metadataResult, 2)
 
-		go func() {
+		safeGo(func() {
 			timeout := 10 * time.Second
 			if likelyDRMSite {
 				timeout = 3 * time.Second
@@ -2427,16 +2613,16 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 				t.mu.Unlock()
 			}
 			resultChan <- metadataResult{title, uploader, dur, "yt-dlp", err}
-		}()
+		})
 
 		if likelyDRMSite {
-			go func() {
+			safeGo(func() {
 				scrapeCtx, scrapeCancel := context.WithTimeout(ctx, 5*time.Second)
 				defer scrapeCancel()
 
 				title, artist, err := extractMetadataFromDRMSite(scrapeCtx, t.URL)
 				resultChan <- metadataResult{title, artist, 0, "scraper", err}
-			}()
+			})
 		}
 
 		var ytdlpResult, scraperResult *metadataResult
@@ -2478,7 +2664,7 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 			}
 		}
 
-		go func() {
+		safeGo(func() {
 			for resultsReceived < expectedResults {
 				select {
 				case <-resultChan:
@@ -2487,7 +2673,7 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 					return
 				}
 			}
-		}()
+		})
 
 		if !needsSearch {
 			if scraperResult != nil && scraperResult.err == nil && scraperResult.title != "" {
@@ -2517,14 +2703,14 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 			q = strings.TrimSpace(q[len(ytmp):])
 		}
 		ch := make(chan prioritizedSearchResult, 2)
-		go func() {
+		safeGo(func() {
 			r, _ := ytdlpSearchYTM(ctx, q, 5)
 			ch <- prioritizedSearchResult{r, 0}
-		}()
-		go func() {
+		})
+		safeGo(func() {
 			r, _ := ytdlpSearch(ctx, q, 5)
 			ch <- prioritizedSearchResult{r, 1}
-		}()
+		})
 
 		var combined []ytdlpSearchResult
 		resList := make([][]ytdlpSearchResult, 2)
@@ -2561,15 +2747,20 @@ func (s *VoiceSession) processTrackFile(ctx context.Context, t *Track) {
 				t.mu.Lock()
 				t.Title, t.Channel, t.Duration = cm.Title, cm.Channel, cm.Duration
 				t.mu.Unlock()
-				close(t.MetadataReady)
+				t.SafeCloseMetadata()
 				s.updateNextTrackStatusIfNeeded(t)
 			}
 		}
 
 		if t.Title == "" {
-			go func() {
-				// 1. Fast Path: Native Go Library
-				title, uploader, dur, err := fastResolveMetadata(ctx, videoID)
+			safeGo(func() {
+				// 1. Fast Path: Native Go Library (DISABLED due to hangs/crashes)
+				// fastCtx, fastCancel := context.WithTimeout(ctx, 2*time.Second)
+				// defer fastCancel()
+				// title, uploader, dur, err := fastResolveMetadata(fastCtx, videoID)
+				var err error = errors.New("fast metadata disabled")
+				var title, uploader string
+				var dur time.Duration
 
 				// 2. Slow Path: yt-dlp process
 				if err != nil {
@@ -2591,20 +2782,20 @@ func (s *VoiceSession) processTrackFile(ctx context.Context, t *Track) {
 					t.Duration = dur
 					t.mu.Unlock()
 					writeMetadataCache(videoID, title, uploader, dur)
-					close(t.MetadataReady)
+					t.SafeCloseMetadata()
 					s.updateNextTrackStatusIfNeeded(t)
 				} else {
 					LogVoice("Background metadata fetch failed for %s: %v", t.URL, err)
-					close(t.MetadataReady)
+					t.SafeCloseMetadata()
 				}
-			}()
+			})
 		} else {
 			select {
 			case <-t.MetadataReady:
 			default:
-				close(t.MetadataReady)
+				t.SafeCloseMetadata()
 			}
-			go writeMetadataCache(videoID, t.Title, t.Channel, t.Duration)
+			safeGo(func() { writeMetadataCache(videoID, t.Title, t.Channel, t.Duration) })
 		}
 
 		if _, err := os.Stat(filename); err == nil {
@@ -2614,14 +2805,14 @@ func (s *VoiceSession) processTrackFile(ctx context.Context, t *Track) {
 
 		s.downloadAndCache(ctx, t, filename, t.URL)
 
-		go func() {
+		safeGo(func() {
 			t.mu.Lock()
 			title, ch, d := t.Title, t.Channel, t.Duration
 			t.mu.Unlock()
 			if title != "" {
 				writeMetadataCache(videoID, title, ch, d)
 			}
-		}()
+		})
 		return
 	}
 
@@ -2637,7 +2828,7 @@ func (s *VoiceSession) processTrackFile(ctx context.Context, t *Track) {
 	select {
 	case <-t.MetadataReady:
 	default:
-		close(t.MetadataReady)
+		t.SafeCloseMetadata()
 	}
 
 	if meta.ID != "" {
@@ -2666,8 +2857,13 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 	t.FileCreated = make(chan struct{})
 	t.mu.Unlock()
 
-	go func() {
+	// Use a cancelable context to ensure we kill yt-dlp if we time out
+	ctx, dcancel := context.WithCancel(ctx)
+	defer dcancel()
+
+	safeGo(func() {
 		defer close(downloadDone)
+		ensureAudioCacheDir()
 		partFilename := filename + ".part"
 
 		t.mu.Lock()
@@ -2708,11 +2904,11 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 			},
 		}
 
-		ctx, dcancel := context.WithCancel(ctx)
+		// Context is now managed by parent scope
+
 		t.mu.Lock()
 		t.downloadCancel = dcancel
 		t.mu.Unlock()
-		defer dcancel()
 
 		_, err = ytdlpStream(ctx, url, ss, sw)
 		cacheFile.Close()
@@ -2733,7 +2929,7 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 				LogVoice("Downloaded track file: %s (Size: %d bytes)", filename, wb)
 			}
 		}
-	}()
+	})
 
 	totalTimer := time.NewTimer(maxTotal)
 	defer totalTimer.Stop()
@@ -2792,16 +2988,21 @@ loop:
 	t.MarkReady(filename, t.Title, t.Channel, t.Duration, tr)
 }
 
-func (s *VoiceSession) addToHistory(url, title, channel string) {
+func (s *VoiceSession) addToHistory(url, title, author string) {
+	s.lockQueue()
+	defer s.unlockQueue()
+	if title == "" {
+		return
+	}
+	n := normalizeTitle(title, author)
+	tokens := tokenize(n)
+
 	id := extractVideoID(url)
 	if id == "" {
 		return
 	}
-	n := normalizeTitle(title, channel)
-	tokens := tokenize(n)
-
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
+	n = normalizeTitle(title, author)
+	tokens = tokenize(n)
 
 	if !slices.Contains(s.History, id) {
 		s.History = append(s.History, id)
@@ -2812,7 +3013,7 @@ func (s *VoiceSession) addToHistory(url, title, channel string) {
 	if n != "" {
 		if !s.checkSimilarity(tokens) {
 			s.HistoryTitles = append(s.HistoryTitles, n)
-			s.HistoryAuthors = append(s.HistoryAuthors, channel)
+			s.HistoryAuthors = append(s.HistoryAuthors, author)
 
 			uniqueTokens := make([]string, 0, len(tokens))
 			seen := make(map[string]bool)
@@ -2910,6 +3111,7 @@ func readMetadataCache(videoID string) *CachedMetadata {
 }
 
 func writeMetadataCache(videoID, title, channel string, d time.Duration) {
+	ensureAudioCacheDir()
 	cm := CachedMetadata{Title: title, Channel: channel, Duration: d}
 	b, _ := json.Marshal(cm)
 	_ = os.WriteFile(filepath.Join(AudioCacheDir, videoID+".meta"), b, 0644)
@@ -2922,14 +3124,14 @@ func (s *VoiceSession) fetchRelated(url, title, artist string) (string, error) {
 	}
 
 	ch := make(chan recResult, 2)
-	go func() {
+	safeGo(func() {
 		es, _ := ytdlpExtractPlaylist(s.cancelCtx, "https://music.youtube.com/watch?v="+id+"&list=RDAMVM"+id, 20)
 		ch <- recResult{es, 0}
-	}()
-	go func() {
+	})
+	safeGo(func() {
 		es, _ := ytdlpExtractPlaylist(s.cancelCtx, "https://www.youtube.com/watch?v="+id+"&list=RD"+id, 20)
 		ch <- recResult{es, 1}
-	}()
+	})
 
 	var es []ytdlpPlaylistEntry
 	resList := make([][]ytdlpPlaylistEntry, 2)
@@ -2969,15 +3171,20 @@ func (s *VoiceSession) fetchRelated(url, title, artist string) (string, error) {
 	}
 	LogVoice("Autoplay: Found %d related tracks for %s", len(es), curTitle)
 
-	s.queueMu.Lock()
-	hi := append([]string(nil), s.History...)
-
+	// Get last 5 tracks for context
+	s.lockQueue()
+	count := len(s.HistoryTitles)
+	if count > 5 {
+		count = 5
+	}
+	historyTitles := make([]string, count)
+	copy(historyTitles, s.HistoryTitles[len(s.HistoryTitles)-count:])
 	idfCopy := make(map[string]int, len(s.IDFStats))
 	maps.Copy(idfCopy, s.IDFStats)
 
 	htTokens := make([][]string, len(s.HistoryTokens))
 	copy(htTokens, s.HistoryTokens)
-	s.queueMu.Unlock()
+	s.unlockQueue()
 
 	for _, e := range es {
 		u := strings.TrimSpace(e.URL)
@@ -2993,7 +3200,7 @@ func (s *VoiceSession) fetchRelated(url, title, artist string) (string, error) {
 		if nid == "" || nid == curID {
 			continue
 		}
-		found := slices.Contains(hi, nid)
+		found := slices.Contains(s.History, nid) // Corrected from historyTitles to s.History
 		if found {
 			continue
 		}
@@ -3527,6 +3734,7 @@ func extractMetadataFromDRMSite(ctx context.Context, url string) (title, artist 
 func handleMusicPlay(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	q, m, p, a, l := parsePlayArguments(data)
 
+	_ = event.DeferCreateMessage(false)
 	if strings.HasPrefix(strings.ToUpper(q), "[PL]") {
 		qBody := strings.TrimSpace(q[4:])
 		if qBody != "" && !strings.Contains(qBody, "http") {
@@ -3537,9 +3745,8 @@ func handleMusicPlay(event *events.ApplicationCommandInteractionCreate, data dis
 		}
 	}
 
-	_ = event.DeferCreateMessage(false)
 	if err := startPlayback(event, q, m, a, l, p); err != nil {
-		_ = EditInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay("Failed: "+err.Error())))
+		_ = EditInteractionV2(*event.Client(), event, "Failed: "+err.Error())
 	}
 }
 
@@ -3564,7 +3771,7 @@ func parsePlayArguments(data discord.SlashCommandInteractionData) (q, m string, 
 func handleMusicStop(event *events.ApplicationCommandInteractionCreate, _ discord.SlashCommandInteractionData) {
 	LogVoice("User %s (%s) stopped playback in guild %s", event.User().Username, event.User().ID, *event.GuildID())
 	GetVoiceManager().Leave(context.Background(), *event.GuildID())
-	_ = RespondInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay("🛑 Stopped and disconnected.")), false)
+	_ = RespondInteractionV2(*event.Client(), event, "🛑 Stopped and disconnected.", false)
 }
 
 // handleMusicQueue handles queue interactions for music commands.
@@ -3573,14 +3780,14 @@ func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ disco
 
 	s := GetVoiceManager().GetSession(*event.GuildID())
 	if s == nil {
-		_ = EditInteractionV2(*event.Client(), event, NewV2Container(NewTextDisplay("Not playing anything.")))
+		_ = EditInteractionV2(*event.Client(), event, "Not playing anything.")
 		return
 	}
 
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
+	s.lockQueue()
+	defer s.unlockQueue()
 
-	var components []interface{}
+	var components []any
 
 	if s.currentTrack != nil {
 		s.currentTrack.mu.Lock()
@@ -3631,9 +3838,240 @@ func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ disco
 		}
 	}
 
-	if err := EditInteractionV2(*event.Client(), event, NewV2Container(components...)); err != nil {
-		LogVoice("Failed to display queue: %v", err)
+	if err := EditInteractionContainerV2(*event.Client(), event, NewV2Container(components...)); err != nil {
+		LogWarn("Failed to edit interaction: %v", err)
 	}
+}
+
+// handleVoicePanel handles the /voice panel command
+func handleVoicePanel(event *events.ApplicationCommandInteractionCreate) {
+	userID := event.User().ID
+	guildID := event.GuildID()
+	if guildID == nil {
+		_ = RespondInteractionV2(*event.Client(), event, "Not in a guild.", true)
+		return
+	}
+
+	VoicePanelsMu.Lock()
+	if p, ok := VoicePanels[userID]; ok {
+		if time.Now().Before(p.ExpiresAt) {
+			VoicePanelsMu.Unlock()
+			_ = RespondInteractionV2(*event.Client(), event, "You already have an active panel! Dismiss it or wait for it to expire.", true)
+			return
+		}
+		delete(VoicePanels, userID)
+	}
+	VoicePanelsMu.Unlock()
+
+	s := GetVoiceManager().GetSession(*guildID)
+	if s == nil {
+		_ = RespondInteractionV2(*event.Client(), event, "Not playing anything.", true)
+		return
+	}
+
+	_ = event.DeferCreateMessage(true)
+
+	VoicePanelsMu.Lock()
+	VoicePanels[userID] = &VoicePanel{
+		UserID:    userID,
+		GuildID:   *guildID,
+		Token:     event.Token(),
+		AppID:     event.ApplicationID(),
+		ExpiresAt: time.Now().Add(15 * time.Minute),
+	}
+	VoicePanelsMu.Unlock()
+
+	UpdateVoicePanels(*guildID, *event.Client())
+}
+
+func BuildVoicePanelContainer(s *VoiceSession) Container {
+	s.lockQueue()
+	defer s.unlockQueue()
+
+	var components []any
+
+	if s.currentTrack != nil {
+		s.currentTrack.mu.Lock()
+		title, url, channel, art := s.currentTrack.Title, s.currentTrack.URL, s.currentTrack.Channel, s.currentTrack.ArtworkURL
+		s.currentTrack.mu.Unlock()
+
+		if title == "" {
+			title = "Track"
+		}
+
+		components = append(components, NewTextDisplay("**Now Playing:**"))
+		components = append(components, NewTextDisplay(fmt.Sprintf("[%s](%s) · %s", title, url, channel)))
+		if art != "" {
+			components = append(components, NewMediaGallery(art))
+		}
+	} else {
+		components = append(components, NewTextDisplay("**Nothing is currently playing.**"))
+	}
+
+	paused := false
+	s.pauseMu.RLock()
+	select {
+	case <-s.pauseChan:
+		// Not paused
+	default:
+		paused = true
+	}
+	s.pauseMu.RUnlock()
+
+	statusEmoji := "⏸️"
+	statusText := "Playing"
+	if paused {
+		statusEmoji = "▶️"
+		statusText = "Paused"
+	}
+
+	options := ""
+	if s.Looping {
+		options += " 🔄 Loop"
+	}
+	if s.Autoplay {
+		options += " 🔀 Autoplay"
+	}
+
+	components = append(components, NewTextDisplay(fmt.Sprintf("**Status:** %s %s | **Volume:** %d%% %s", statusEmoji, statusText, s.Volume.Load(), options)))
+	components = append(components, NewTextDisplay(fmt.Sprintf("**Queue:** %d tracks remaining", len(s.queue))))
+
+	components = append(components, NewSeparator(true))
+
+	// Control Buttons
+	playPauseEmoji := "⏸️ Pause"
+	if paused {
+		playPauseEmoji = "▶️ Resume"
+	}
+
+	row1 := discord.NewActionRow(
+		discord.NewButton(discord.ButtonStyleSecondary, playPauseEmoji, "voice:panel:playpause", "", 0),
+		discord.NewButton(discord.ButtonStyleSecondary, "⏭️ Skip", "voice:panel:skip", "", 0),
+		discord.NewButton(discord.ButtonStyleSecondary, "⏹️ Stop", "voice:panel:stop", "", 0),
+		discord.NewButton(discord.ButtonStyleDanger, "❌ Close", "voice:panel:close", "", 0),
+	)
+
+	row2 := discord.NewActionRow(
+		discord.NewButton(discord.ButtonStylePrimary, "🔄 Loop", "voice:panel:loop", "", 0),
+		discord.NewButton(discord.ButtonStylePrimary, "🔀 Autoplay", "voice:panel:autoplay", "", 0),
+		discord.NewButton(discord.ButtonStyleSecondary, "➖ Vol", "voice:panel:voldown", "", 0),
+		discord.NewButton(discord.ButtonStyleSecondary, "➕ Vol", "voice:panel:volup", "", 0),
+	)
+
+	components = append(components, row1, row2)
+
+	return NewV2Container(components...)
+}
+
+func UpdateVoicePanels(guildID snowflake.ID, cl bot.Client) {
+	VoicePanelsMu.Lock()
+	defer VoicePanelsMu.Unlock()
+
+	s := GetVoiceManager().GetSession(guildID)
+
+	var container Container
+	if s == nil {
+		container = NewV2Container(NewTextDisplay("The music session has ended."), discord.NewActionRow(discord.NewButton(discord.ButtonStyleDanger, "❌ Close", "voice:panel:close", "", 0)))
+		// Fallback to finding at least one panel to get AppID/Client if needed?
+		// But usually we have a client.
+	} else {
+		s.SetClient(cl) // Update the session's client if it's still active
+		container = BuildVoicePanelContainer(s)
+	}
+
+	now := time.Now()
+	for userID, panel := range VoicePanels {
+		if panel.GuildID != guildID {
+			continue
+		}
+		if now.After(panel.ExpiresAt) {
+			delete(VoicePanels, userID)
+			continue
+		}
+
+		// Use the client passed to the function, which is guaranteed to be valid
+		// or the one from the session if it exists.
+		safeGo(func() {
+			func(token string, appID snowflake.ID, c Container, client bot.Client) {
+				_ = EditInteractionContainerV2ByToken(client, appID, token, c)
+			}(panel.Token, panel.AppID, container, cl)
+		}) // Pass cl directly
+
+		if s == nil {
+			delete(VoicePanels, userID)
+		}
+	}
+}
+
+func handleVoiceComponent(event *events.ComponentInteractionCreate) {
+	customID := event.Data.CustomID()
+	if !strings.HasPrefix(customID, "voice:panel:") {
+		return
+	}
+
+	action := strings.TrimPrefix(customID, "voice:panel:")
+	guildID := event.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	switch action {
+	case "close":
+		VoicePanelsMu.Lock()
+		delete(VoicePanels, event.User().ID)
+		VoicePanelsMu.Unlock()
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Panel closed.").ClearComponents())
+		return
+	}
+
+	s := GetVoiceManager().GetSession(*guildID)
+	if s == nil {
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Music session is no longer active.").WithEphemeral(true))
+		return
+	}
+
+	switch action {
+	case "playpause":
+		s.pauseMu.Lock()
+		isClosed := false
+		select {
+		case <-s.pauseChan:
+			isClosed = true
+		default:
+		}
+		if isClosed {
+			s.pauseChan = make(chan struct{})
+		} else {
+			close(s.pauseChan)
+		}
+		s.pauseMu.Unlock()
+		s.RefreshStatus()
+	case "skip":
+		_, _ = s.Skip()
+	case "stop":
+		GetVoiceManager().Leave(context.Background(), *guildID)
+	case "loop":
+		s.lockQueue()
+		s.Looping = !s.Looping
+		s.unlockQueue()
+	case "autoplay":
+		s.lockQueue()
+		s.Autoplay = !s.Autoplay
+		s.unlockQueue()
+	case "volup":
+		v := s.Volume.Load()
+		if v < 200 {
+			s.Volume.Store(v + 10)
+		}
+	case "voldown":
+		v := s.Volume.Load()
+		if v > 0 {
+			s.Volume.Store(v - 10)
+		}
+	}
+
+	UpdateVoicePanels(*guildID, *event.Client())
+	_ = event.DeferUpdateMessage()
 }
 
 // handleMusicAutocomplete handles autocomplete interactions for music commands.
@@ -3664,7 +4102,18 @@ func handleMusicAutocomplete(event *events.AutocompleteInteractionCreate) {
 	if strings.HasPrefix(strings.ToUpper(q), "[PL]") {
 		qBody := strings.TrimSpace(q[4:])
 		if qBody != "" {
-			rs, err = GetVoiceManager().SearchPlaylist(qBody)
+			ytdlpRS, searchErr := GetVoiceManager().SearchPlaylist(qBody)
+			if searchErr == nil {
+				for _, entry := range ytdlpRS {
+					rs = append(rs, SearchResult{
+						Title:       entry.Title,
+						ChannelName: entry.Uploader,
+						URL:         entry.URL,
+					})
+				}
+			} else {
+				err = searchErr
+			}
 		}
 	} else {
 		rs, err = GetVoiceManager().Search(q)
@@ -3696,10 +4145,9 @@ func handleMusicAutocomplete(event *events.AutocompleteInteractionCreate) {
 
 // getRandomRecommendation gets a random recommendation from the guild's history.
 func getRandomRecommendation(guildID *snowflake.ID) string {
-	// 1. Personalized Recommendation from History
 	if guildID != nil {
 		if s := GetVoiceManager().GetSession(*guildID); s != nil {
-			s.queueMu.Lock()
+			s.lockQueue()
 			l := len(s.HistoryTitles)
 			if l > 0 {
 				idx := l - 1
@@ -3711,19 +4159,19 @@ func getRandomRecommendation(guildID *snowflake.ID) string {
 				if len(s.HistoryAuthors) > idx {
 					author := s.HistoryAuthors[idx]
 					if author != "" && author != "NA" {
+						s.unlockQueue()
 						return "Mix - " + author
 					}
 				}
 
 				title := s.HistoryTitles[idx]
-				s.queueMu.Unlock()
+				s.unlockQueue()
 				return "Mix - " + title
 			}
-			s.queueMu.Unlock()
+			s.unlockQueue()
 		}
 	}
 
-	// 2. Fallback to generic trending
 	return "Trending Music"
 }
 
@@ -3735,12 +4183,12 @@ func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, 
 		return errors.New("user not in a voice channel")
 	}
 	vm := GetVoiceManager()
-	s := vm.Prepare(ev.Client(), *ev.GuildID(), *vs.ChannelID)
-	s.queueMu.Lock()
+	s := vm.Prepare(*ev.Client(), *ev.GuildID(), *vs.ChannelID)
+	s.lockQueue()
 	s.Autoplay, s.Looping = a, l
-	s.queueMu.Unlock()
+	s.unlockQueue()
 	je := make(chan error, 1)
-	go func() { je <- vm.Join(context.Background(), ev.Client(), *ev.GuildID(), *vs.ChannelID) }()
+	safeGo(func() { je <- vm.Join(context.Background(), *ev.Client(), *ev.GuildID(), *vs.ChannelID) })
 	t, count, err := vm.Play(context.Background(), *ev.GuildID(), q, m, p)
 	if err != nil {
 		return err
@@ -3748,20 +4196,10 @@ func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, 
 	if err := <-je; err != nil {
 		return err
 	}
-	// Wait for the track to be ready (with a timeout to prevent deadlocking the interaction)
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer waitCancel()
 
-	if err := t.Wait(waitCtx); err != nil {
-		return fmt.Errorf("failed to wait for track to be ready: %w", err)
-	}
-
-	select {
-	case <-t.MetadataReady:
-	case <-time.After(5 * time.Second):
-	}
-
-	return finishPlaybackResponse(ev, t, m, s.Autoplay, s.Looping, p, count)
+	err = finishPlaybackResponse(ev, t, m, s.Autoplay, s.Looping, p, count)
+	UpdateVoicePanels(*ev.GuildID(), *ev.Client())
+	return err
 }
 
 // finishPlaybackResponse sends the final response message after playback starts
@@ -3822,9 +4260,9 @@ func finishPlaybackResponse(ev *events.ApplicationCommandInteractionCreate, t *T
 	t.mu.Unlock()
 
 	if art != "" {
-		return EditInteractionV2(*ev.Client(), ev, NewV2Container(NewTextDisplay(c), NewMediaGallery(art)))
+		return EditInteractionContainerV2(*ev.Client(), ev, NewV2Container(NewTextDisplay(c), NewMediaGallery(art)))
 	}
-	return EditInteractionV2(*ev.Client(), ev, NewV2Container(NewTextDisplay(c)))
+	return EditInteractionV2(*ev.Client(), ev, c)
 }
 
 // SelectBestTrack scoring system to pick official audios from search results
@@ -3843,7 +4281,6 @@ func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle,
 
 	for _, res := range results {
 		score := 0.0
-		// 1. Duration Match (Very strong signal)
 		if targetDuration > 0 && res.Duration > 0 {
 			diff := math.Abs(float64(targetDuration - res.Duration))
 			if diff < 2.5*float64(time.Second) {
@@ -3852,7 +4289,6 @@ func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle,
 				score += 40
 			}
 		}
-		// 2. Channel Match
 		lowCh := strings.ToLower(res.Uploader)
 		targetCh := strings.ToLower(targetChannel)
 		if targetCh != "" {
@@ -3862,7 +4298,6 @@ func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle,
 				score += 30
 			}
 		}
-		// 3. Title Match
 		if targetTitle != "" {
 			if weightedSimilarity(normalizeTitle(res.Title, ""), normalizeTitle(targetTitle, ""), weights) {
 				score += 50
@@ -3879,34 +4314,49 @@ func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle,
 
 // extractVideoID extracts the video ID from a YouTube-related URL.
 func extractVideoID(u string) string {
-	id := ""
-	if matches := videoIDRegex.FindStringSubmatch(u); len(matches) > 1 {
-		id = matches[1]
-	} else if matches := rawIDRegex.FindStringSubmatch(u); len(matches) > 1 {
-		id = matches[1]
-	} else if strings.Contains(u, "youtu.be/") {
+	u = strings.TrimSpace(u)
+	// Handle basic Youtu.be (shortener)
+	if strings.Contains(u, "youtu.be/") {
 		parts := strings.Split(u, "youtu.be/")
 		if len(parts) >= 2 {
-			vidParts := strings.Split(parts[1], "?")
-			if len(vidParts) > 0 {
-				id = vidParts[0]
-			}
-		}
-	} else if strings.Contains(u, "shorts/") {
-		parts := strings.Split(u, "shorts/")
-		if len(parts) >= 2 {
-			vidParts := strings.Split(parts[1], "?")
-			if len(vidParts) > 0 {
-				id = vidParts[0]
-			}
+			// Trim query parameters
+			return strings.Split(parts[1], "?")[0]
 		}
 	}
 
-	if id == "" || len(id) > 50 {
-		hash := sha256.Sum256([]byte(u))
-		return hex.EncodeToString(hash[:16])
+	// Handle standard URL via net/url
+	// We prepend https:// if missing to ensure parsing works
+	if !strings.HasPrefix(u, "http") {
+		u = "https://" + u
 	}
-	return id
+	parsed, err := url.Parse(u)
+	if err == nil {
+		// Standard v=ID
+		if v := parsed.Query().Get("v"); v != "" {
+			return v
+		}
+		// id=ID
+		if id := parsed.Query().Get("id"); id != "" {
+			return id
+		}
+		// Shorts/Embed/V
+		path := parsed.Path
+		if strings.Contains(path, "/shorts/") {
+			return strings.Split(strings.TrimPrefix(path, "/shorts/"), "/")[0]
+		}
+		if strings.Contains(path, "/embed/") {
+			return strings.Split(strings.TrimPrefix(path, "/embed/"), "/")[0]
+		}
+		if strings.Contains(path, "/v/") {
+			return strings.Split(strings.TrimPrefix(path, "/v/"), "/")[0]
+		}
+	}
+
+	if len(u) == 11 && !strings.ContainsAny(u, "/?&.") {
+		return u
+	}
+	// Fallback to hashing if no ID found or ID looks invalid
+	return ""
 }
 
 // isYouTubeURL checks if a URL is a YouTube URL.
@@ -4030,62 +4480,6 @@ func weightedSimilarity(a, b string, weights map[string]float64) bool {
 	return (iScore / uScore) >= 0.7
 }
 
-// fastResolveMetadata attempts to resolve metadata using native Go libraries (ytsearch)
-func fastResolveMetadata(ctx context.Context, id string) (string, string, time.Duration, error) {
-	c := ytsearch.NewClient(nil)
-	res, err := c.Search(ctx, id)
-	if err != nil {
-		return "", "", 0, err
-	}
-	if len(res.Results) > 0 {
-		for _, r := range res.Results {
-			if r.VideoID == id {
-				d := parseDurationColon(r.Duration)
-				return r.Title, r.Channel, d, nil
-			}
-		}
-		if res.Results[0].VideoID == id {
-			d := parseDurationColon(res.Results[0].Duration)
-			return res.Results[0].Title, res.Results[0].Channel, d, nil
-		}
-	}
-	return "", "", 0, errors.New("not found")
-}
-
-// parseDurationColon parses duration strings like "3:20" or "1:05:20"
-func parseDurationColon(s string) time.Duration {
-	parts := strings.Split(s, ":")
-	if len(parts) < 2 {
-		return 0
-	}
-	var h, m, sec int
-	var err error
-	if len(parts) == 3 {
-		h, err = strconv.Atoi(parts[0])
-		if err != nil {
-			return 0
-		}
-		m, err = strconv.Atoi(parts[1])
-		if err != nil {
-			return 0
-		}
-		sec, err = strconv.Atoi(parts[2])
-		if err != nil {
-			return 0
-		}
-	} else {
-		m, err = strconv.Atoi(parts[0])
-		if err != nil {
-			return 0
-		}
-		sec, err = strconv.Atoi(parts[1])
-		if err != nil {
-			return 0
-		}
-	}
-	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(sec)*time.Second
-}
-
 // ===========================
 // Priority Queue for Downloads
 // ===========================
@@ -4160,33 +4554,47 @@ func (s *VoiceSession) downloadLoop() {
 		t := item.(*Track)
 		s.activeDownloads++
 		s.downloadMu.Unlock()
-		go func(track *Track) {
-			defer func() {
-				s.downloadMu.Lock()
-				s.activeDownloads--
-				s.downloadCond.Signal()
-				s.downloadMu.Unlock()
-			}()
+		safeGo(func() {
+			func(track *Track) {
+				defer func() {
+					s.downloadMu.Lock()
+					s.activeDownloads--
+					s.downloadCond.Signal()
+					s.downloadMu.Unlock()
+				}()
 
-			track.mu.Lock()
-			if track.Started {
+				track.mu.Lock()
+				if track.Started {
+					track.mu.Unlock()
+					return
+				}
+				track.Started = true
 				track.mu.Unlock()
-				return
-			}
-			track.Started = true
-			track.mu.Unlock()
 
-			ctx, cancel := context.WithCancel(s.cancelCtx)
-			track.cancel = cancel
+				ctx, cancel := context.WithCancel(s.cancelCtx)
+				track.cancel = cancel
 
-			if err := s.resolveTrackMetadata(ctx, track); err != nil {
-				track.MarkError(err)
-				return
-			}
+				if err := s.resolveTrackMetadata(ctx, track); err != nil {
+					track.MarkError(err)
+					return
+				}
 
-			go s.enrichTrackMetadata(s.cancelCtx, track)
+				safeGo(func() { s.enrichTrackMetadata(s.cancelCtx, track) })
 
-			s.processTrackFile(ctx, track)
-		}(t)
+				s.processTrackFile(ctx, track)
+			}(t)
+		})
 	}
+}
+
+func (s *VoiceSession) GetClient() bot.Client {
+	s.clientMu.RLock()
+	defer s.clientMu.RUnlock()
+	return s.client
+}
+
+func (s *VoiceSession) SetClient(cl bot.Client) {
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	s.client = cl
 }
