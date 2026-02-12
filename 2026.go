@@ -38,6 +38,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/disgo/voice"
+	"github.com/disgoorg/godave/golibdave"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/fatih/color"
 	"github.com/joho/godotenv"
@@ -388,6 +390,9 @@ func CreateClient(ctx context.Context, cfg *Config) (bot.Client, error) {
 		),
 		bot.WithCacheConfigOpts(
 			cache.WithCaches(cache.FlagGuilds, cache.FlagMembers, cache.FlagRoles, cache.FlagChannels, cache.FlagVoiceStates),
+		),
+		bot.WithVoiceManagerConfigOpts(
+			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
 		),
 		bot.WithEventListenerFunc(onApplicationCommandInteraction),
 		bot.WithEventListenerFunc(onAutocompleteInteraction),

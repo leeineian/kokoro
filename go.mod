@@ -6,6 +6,7 @@ require (
 	github.com/asticode/go-astiav v0.40.0
 	github.com/corentings/chess/v2 v2.3.3
 	github.com/disgoorg/disgo v0.19.0-rc.15.0.20260211231526-733e186766a7
+	github.com/disgoorg/godave/golibdave v0.0.0-20260211223842-18cd5c306076
 	github.com/disgoorg/omit v1.0.0
 	github.com/disgoorg/snowflake/v2 v2.0.3
 	github.com/fatih/color v1.18.0
@@ -23,7 +24,8 @@ require (
 	github.com/asticode/go-astikit v0.57.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/disgoorg/godave v0.0.0-20260211222359-4ef3e359a3af // indirect
+	github.com/disgoorg/godave v0.0.0-20260211223842-18cd5c306076 // indirect
+	github.com/disgoorg/godave/libdave v0.0.0-20260211223842-18cd5c306076 // indirect
 	github.com/disgoorg/json/v2 v2.0.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dop251/goja v0.0.0-20260106131823-651366fbe6e3 // indirect

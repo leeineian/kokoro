@@ -2851,7 +2851,9 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 	downloadDone := make(chan struct{})
 	writeSig := make(chan struct{}, 1)
 	readySig := make(chan struct{})
+	errorSig := make(chan error, 1)
 	onceReady := sync.Once{}
+	onceError := sync.Once{}
 
 	t.mu.Lock()
 	t.FileCreated = make(chan struct{})
@@ -2863,6 +2865,12 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 
 	safeGo(func() {
 		defer close(downloadDone)
+		defer func() {
+			if r := recover(); r != nil {
+				LogVoice("CRITICAL: downloader safeGo panic recovered: %v", r)
+				onceError.Do(func() { errorSig <- fmt.Errorf("panic: %v", r) })
+			}
+		}()
 		ensureAudioCacheDir()
 		partFilename := filename + ".part"
 
@@ -2911,23 +2919,27 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		t.mu.Unlock()
 
 		_, err = ytdlpStream(ctx, url, ss, sw)
+		if err != nil {
+			onceError.Do(func() { errorSig <- err })
+		}
 		cacheFile.Close()
 
 		if err != nil {
 			LogVoice("Stream/Cache failed for %s: %v", url, err)
 			os.Remove(partFilename)
-		} else {
-			onceReady.Do(func() { close(readySig) })
+			return
+		}
 
-			if err := os.Rename(partFilename, filename); err != nil {
-				LogVoice("Failed to rename cache file for %s: %v", url, err)
-				os.Remove(partFilename)
-			} else {
-				t.mu.Lock()
-				wb := t.WrittenBytes
-				t.mu.Unlock()
-				LogVoice("Downloaded track file: %s (Size: %d bytes)", filename, wb)
-			}
+		onceReady.Do(func() { close(readySig) })
+
+		if err := os.Rename(partFilename, filename); err != nil {
+			LogVoice("Failed to rename cache file for %s: %v", url, err)
+			os.Remove(partFilename)
+		} else {
+			t.mu.Lock()
+			wb := t.WrittenBytes
+			t.mu.Unlock()
+			LogVoice("Downloaded track file: %s (Size: %d bytes)", filename, wb)
 		}
 	})
 
@@ -2950,6 +2962,12 @@ loop:
 			return
 		case <-stallTimer.C:
 			t.MarkError(errors.New("timeout: download stalled or failed to start"))
+			return
+		case err := <-errorSig:
+			t.MarkError(err)
+			return
+		case <-downloadDone:
+			t.MarkError(errors.New("timeout: download process exited unexpectedly without data"))
 			return
 		case <-writeSig:
 			if !stallTimer.Stop() {
@@ -3304,12 +3322,21 @@ func buildYtdlpArgs() []string {
 		"--no-playlist",
 		"--no-check-certificates",
 		"--no-warnings",
-		"--extractor-args", "youtube:player_client=android,web",
+		"--extractor-args", "youtube:player_client=ios,android,web",
 		"--prefer-free-formats",
 		"--socket-timeout", "30",
 		"--retries", "20",
 		"--fragment-retries", "20",
 	)
+
+	if _, err := os.Stat("cookies.txt"); err == nil {
+		args = append(args, "--cookies", "cookies.txt")
+	} else if c := os.Getenv("YOUTUBE_COOKIES"); c != "" {
+		if _, err := os.Stat(c); err == nil {
+			args = append(args, "--cookies", c)
+		}
+	}
+
 	return args
 }
 
