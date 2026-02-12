@@ -29,8 +29,9 @@ jobs:
               export LD_LIBRARY_PATH=\"\$HOME/.local/lib:\$LD_LIBRARY_PATH\"
               export CGO_CFLAGS=\"-Wno-discarded-qualifiers\"
               git config --global --add safe.directory /app
-              CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -buildvcs=false -ldflags='-s -w' -o kokoro .
-              chown $(id -u):$(id -g) kokoro
+              CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -buildvcs=false -ldflags='-s -w -extldflags \"-Wl,-rpath,\$ORIGIN\"' -o kokoro .
+              cp $(find / -name libdave.so | head -n 1) /app/
+              chown $(id -u):$(id -g) kokoro libdave.so
             "
 
       - name: Prepare VPS for Upload
@@ -49,7 +50,7 @@ jobs:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
-          source: "kokoro"
+          source: "kokoro,libdave.so"
           target: "~/kokoro/"
           overwrite: true
 

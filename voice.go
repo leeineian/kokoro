@@ -317,7 +317,7 @@ type Track struct {
 	WrittenBytes              int64
 	TotalSize                 int64
 	SeekOffset                time.Duration
-	FileCreated               chan struct{} // Signal when the file is available for reading
+	FileCreated               chan struct{}
 	metadataOnce              sync.Once
 }
 
@@ -379,7 +379,7 @@ type AstiavTranscoder struct {
 	OnNearingEnd           func()
 	nearingEndTriggered    bool
 	seekChan               chan int64
-	volume                 *atomic.Int32 // Pointer to session volume
+	volume                 *atomic.Int32
 	frameCount             int64
 }
 
@@ -582,7 +582,6 @@ func (vs *VoiceSystem) Prepare(client bot.Client, guildID, channelID snowflake.I
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	if sess, ok := vs.sessions[guildID]; ok {
-		// If session is dead (canceled), discard it and create a new one
 		if sess.cancelCtx.Err() != nil {
 			delete(vs.sessions, guildID)
 		} else {
@@ -591,7 +590,6 @@ func (vs *VoiceSystem) Prepare(client bot.Client, guildID, channelID snowflake.I
 			if oldChannelID != channelID {
 				sess.ChannelID = channelID
 				sess.channelMu.Unlock()
-				// Move Discord API call to goroutine to avoid holding vs.mu
 				safeGo(func() {
 					route := rest.NewEndpoint(http.MethodPut, "/channels/"+oldChannelID.String()+"/voice-status")
 					_ = client.Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
@@ -765,23 +763,17 @@ func (vs *VoiceSystem) cleanupSession(sess *VoiceSession) {
 	if sess == nil {
 		return
 	}
-	// client is a struct value, no nil check needed or check if empty.
-	// We'll trust the caller passes a valid client.
-
-	// 1. Instantly trigger panel updates that session ended
 	UpdateVoicePanels(sess.GuildID, sess.GetClient())
 
-	// 2. Cleanup in background to avoid blocking
 	safeGo(func() {
-		s := sess // Capture sess for the goroutine
-		s.Stop()  // Clears queue, cancels context, clears voice status channel
+		s := sess
+		s.Stop()
 
 		s.channelMu.RLock()
 		cid := s.ChannelID
 		s.channelMu.RUnlock()
 
 		if cid != 0 {
-			// Effort to clear Discord API voice channel status
 			route := rest.NewEndpoint(http.MethodPut, "/channels/"+cid.String()+"/voice-status")
 			_ = s.GetClient().Rest.Do(route.Compile(nil), map[string]string{"status": ""}, nil)
 		}
@@ -940,7 +932,6 @@ func (vs *VoiceSystem) handleBotVoiceStateUpdate(event *events.GuildVoiceStateUp
 	if event.VoiceState.ChannelID == nil {
 		LogVoice("Bot disconnected by external event in guild %s", event.VoiceState.GuildID)
 		delete(vs.sessions, event.VoiceState.GuildID)
-		// Move cleanup to goroutine to avoid calling into locked methods
 		safeGo(func() { vs.cleanupSession(s) })
 		return
 	}
@@ -1062,7 +1053,6 @@ func (s *VoiceSession) Seek(duration time.Duration) error {
 		return fmt.Errorf("no track currently playing")
 	}
 
-	// Create new context for the new playback
 	ctx, cancel := context.WithCancel(s.cancelCtx)
 	s.streamCancel = cancel
 
@@ -1151,7 +1141,6 @@ func (s *VoiceSession) Skip() (string, error) {
 		s.unlockQueue()
 		return "", errors.New("nothing playing")
 	}
-	// Prevent looping for this specific track if it was going to loop
 	s.skipLoop = true
 
 	title := "Track"
@@ -1196,7 +1185,7 @@ func (s *VoiceSession) Stop() {
 		s.streamCancel()
 	}
 	s.transcoder = nil
-	if s.Conn != nil { // Should be safe to access Conn without lock as it is only written in Prepare
+	if s.Conn != nil {
 		s.setOpusFrameProviderSafe(nil)
 		s.setSpeakingSafe(0)
 	}
@@ -1230,7 +1219,6 @@ func (s *VoiceSession) WaitForCleanup() {
 
 // RefreshStatus recalculates the voice status based on current session state
 func (s *VoiceSession) RefreshStatus() {
-	// Lock for accessing state
 	s.lockQueue()
 	track := s.currentTrack
 	paused := false
@@ -1327,7 +1315,6 @@ func (s *VoiceSession) statusManager() {
 			channelID := s.ChannelID
 			s.channelMu.RUnlock()
 
-			// Fire and forget (log error if any)
 			safeGo(func() {
 				func(cid snowflake.ID, status string) {
 					cl := s.GetClient()
@@ -1468,7 +1455,7 @@ func (s *VoiceSession) processQueue() {
 			LogVoice("CRITICAL: processQueue panic recovered: %v", r)
 		}
 	}()
-	// Main loop
+
 	for {
 		s.lockQueue()
 
@@ -1564,7 +1551,7 @@ func (s *VoiceSession) processQueue() {
 					next, err := s.fetchRelated(url, t.Title, t.Channel)
 					if err == nil && next != "" {
 						nt := NewTrack(next)
-						// Check for autoplay pre-fetch
+
 						s.lockQueue()
 						if s.Autoplay && s.autoplayTrack == nil && s.currentTrack != nil && s.currentTrack.URL == url {
 							if s.autoplayTrack != nil {
@@ -1809,7 +1796,7 @@ func (t *Track) MarkReady(path, title, channel string, d time.Duration, s io.Rea
 		return
 	}
 	t.Path, t.Title, t.Channel, t.Duration, t.Downloaded, t.LiveStream = path, title, channel, d, true, s
-	t.SafeCloseMetadata() // Ensure MetadataReady is closed
+	t.SafeCloseMetadata()
 	close(t.done)
 }
 
@@ -1821,7 +1808,7 @@ func (t *Track) MarkError(err error) {
 		return
 	}
 	t.Error = err
-	t.SafeCloseMetadata() // Ensure MetadataReady is closed
+	t.SafeCloseMetadata()
 	close(t.done)
 }
 
@@ -1841,8 +1828,11 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 	p := NewStreamProvider(s)
 	s.provider = p
 	done := make(chan struct{})
+	var once sync.Once
 	p.OnFinish = func() {
-		close(done)
+		once.Do(func() {
+			close(done)
+		})
 	}
 	ctx, cancel := context.WithCancel(s.cancelCtx)
 	s.streamCancel = cancel
@@ -1855,12 +1845,9 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 	defer cancel()
 	safeGo(func() {
 		defer func() {
-			// Always call OnFinish, even if pushing nil frame fails
-			if p.OnFinish != nil {
-				p.OnFinish()
-			}
+			p.Close()
 		}()
-		defer p.PushFrame(nil) // Best effort to signal EOF
+		defer p.PushFrame(nil)
 		t := NewAstiavTranscoder()
 		t.volume = &s.Volume
 		defer func() {
@@ -1871,8 +1858,24 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 			s.unlockQueue()
 		}()
 		defer t.Close()
-		if err := t.OpenInput(inputPath, reader); err != nil {
-			LogVoice("Transcoder OpenInput failed: %v", err)
+		var err error
+		for range 100 {
+			err = t.OpenInput(inputPath, reader)
+			if err == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-time.After(50 * time.Millisecond):
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		if err != nil {
+			LogVoice("Transcoder OpenInput failed after retries: %v", err)
 			return
 		}
 
@@ -1905,7 +1908,7 @@ func (s *VoiceSession) streamCommon(url, inputPath string, reader io.Reader) {
 			}
 		}
 
-		err := t.Transcode(ctx, p.PushFrame)
+		err = t.Transcode(ctx, p.PushFrame)
 		if err != nil {
 			LogVoice("Transcoder finished for: %s (Err: %v)", url, err)
 		}
@@ -2157,7 +2160,6 @@ func (t *AstiavTranscoder) SetupEncoder() error {
 }
 
 func (t *AstiavTranscoder) Transcode(ctx context.Context, on func([]byte)) (err error) {
-	// 1. Panic Recovery
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("transcoder panic: %v", r)
@@ -2165,7 +2167,6 @@ func (t *AstiavTranscoder) Transcode(ctx context.Context, on func([]byte)) (err 
 		}
 	}()
 
-	// 2. Resource Cleanup
 	defer t.packet.Unref()
 	t.onFrame = on
 	defer func() {
@@ -2197,7 +2198,6 @@ func (t *AstiavTranscoder) Transcode(ctx context.Context, on func([]byte)) (err 
 		default:
 		}
 
-		// 3. Reuse Packet (Unref at the end of loop or before read)
 		t.packet.Unref()
 
 		if err := t.inputCtx.ReadFrame(t.packet); err != nil {
@@ -2232,7 +2232,6 @@ func (t *AstiavTranscoder) Transcode(ctx context.Context, on func([]byte)) (err 
 		}
 	}
 
-	// Flush Decoder
 	if t.decoderCtx != nil {
 		_ = t.decoderCtx.SendPacket(nil)
 		for {
@@ -2246,12 +2245,10 @@ func (t *AstiavTranscoder) Transcode(ctx context.Context, on func([]byte)) (err 
 		}
 	}
 
-	// Clear FIFO
 	if err := t.processFifo(true); err != nil {
 		return err
 	}
 
-	// Flush Encoder
 	if t.encoderCtx != nil {
 		_ = t.encoderCtx.SendFrame(nil)
 		_ = t.receiveAndWrite()
@@ -2446,7 +2443,6 @@ func getYTMusicPrefix() string {
 }
 
 func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
-	// 1. Check Cache
 	vs.cache.RLock()
 	if item, ok := vs.cache.items[q]; ok {
 		if time.Now().Before(item.expiresAt) {
@@ -2523,8 +2519,6 @@ func (vs *VoiceSystem) Search(q string) ([]SearchResult, error) {
 	if len(fin) > 25 {
 		fin = fin[:25]
 	}
-
-	// 2. Update Cache (TTL 1 hour)
 	if len(fin) > 0 {
 		vs.cache.Lock()
 		vs.cache.items[q] = cachedItem{results: fin, expiresAt: time.Now().Add(1 * time.Hour)}
@@ -2754,15 +2748,10 @@ func (s *VoiceSession) processTrackFile(ctx context.Context, t *Track) {
 
 		if t.Title == "" {
 			safeGo(func() {
-				// 1. Fast Path: Native Go Library (DISABLED due to hangs/crashes)
-				// fastCtx, fastCancel := context.WithTimeout(ctx, 2*time.Second)
-				// defer fastCancel()
-				// title, uploader, dur, err := fastResolveMetadata(fastCtx, videoID)
 				var err error = errors.New("fast metadata disabled")
 				var title, uploader string
 				var dur time.Duration
 
-				// 2. Slow Path: yt-dlp process
 				if err != nil {
 					var dur2 time.Duration
 					var sz2 int64
@@ -2816,7 +2805,7 @@ func (s *VoiceSession) processTrackFile(ctx context.Context, t *Track) {
 		return
 	}
 
-	meta, err := ytdlpExtractMetadata(ctx, t.URL) // Use ctx
+	meta, err := ytdlpExtractMetadata(ctx, t.URL)
 	if err != nil {
 		t.MarkError(err)
 		return
@@ -2859,7 +2848,6 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 	t.FileCreated = make(chan struct{})
 	t.mu.Unlock()
 
-	// Use a cancelable context to ensure we kill yt-dlp if we time out
 	ctx, dcancel := context.WithCancel(ctx)
 	defer dcancel()
 
@@ -2878,10 +2866,7 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		ss := t.SeekOffset
 		t.mu.Unlock()
 
-		thresh := int64(1024 * 1024)
-		if ss > 0 {
-			thresh = 128 * 1024 // 128KB is enough to start transcoding a fragment
-		}
+		thresh := int64(1)
 		cacheFile, err := os.Create(partFilename)
 
 		t.mu.Lock()
@@ -2911,8 +2896,6 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 				}
 			},
 		}
-
-		// Context is now managed by parent scope
 
 		t.mu.Lock()
 		t.downloadCancel = dcancel
@@ -3159,7 +3142,6 @@ func (s *VoiceSession) fetchRelated(url, title, artist string) (string, error) {
 	}
 	es = append(resList[0], resList[1]...)
 
-	// Fallback: Native Search if no results
 	if len(es) == 0 {
 		LogVoice("Autoplay: yt-dlp returned 0 results, trying native search fallback for '%s %s'", title, artist)
 		query := title
@@ -3189,12 +3171,8 @@ func (s *VoiceSession) fetchRelated(url, title, artist string) (string, error) {
 	}
 	LogVoice("Autoplay: Found %d related tracks for %s", len(es), curTitle)
 
-	// Get last 5 tracks for context
 	s.lockQueue()
-	count := len(s.HistoryTitles)
-	if count > 5 {
-		count = 5
-	}
+	count := min(len(s.HistoryTitles), 5)
 	historyTitles := make([]string, count)
 	copy(historyTitles, s.HistoryTitles[len(s.HistoryTitles)-count:])
 	idfCopy := make(map[string]int, len(s.IDFStats))
@@ -3218,7 +3196,7 @@ func (s *VoiceSession) fetchRelated(url, title, artist string) (string, error) {
 		if nid == "" || nid == curID {
 			continue
 		}
-		found := slices.Contains(s.History, nid) // Corrected from historyTitles to s.History
+		found := slices.Contains(s.History, nid)
 		if found {
 			continue
 		}
@@ -3939,7 +3917,6 @@ func BuildVoicePanelContainer(s *VoiceSession) Container {
 	s.pauseMu.RLock()
 	select {
 	case <-s.pauseChan:
-		// Not paused
 	default:
 		paused = true
 	}
@@ -3965,7 +3942,6 @@ func BuildVoicePanelContainer(s *VoiceSession) Container {
 
 	components = append(components, NewSeparator(true))
 
-	// Control Buttons
 	playPauseEmoji := "⏸️ Pause"
 	if paused {
 		playPauseEmoji = "▶️ Resume"
@@ -3999,10 +3975,8 @@ func UpdateVoicePanels(guildID snowflake.ID, cl bot.Client) {
 	var container Container
 	if s == nil {
 		container = NewV2Container(NewTextDisplay("The music session has ended."), discord.NewActionRow(discord.NewButton(discord.ButtonStyleDanger, "❌ Close", "voice:panel:close", "", 0)))
-		// Fallback to finding at least one panel to get AppID/Client if needed?
-		// But usually we have a client.
 	} else {
-		s.SetClient(cl) // Update the session's client if it's still active
+		s.SetClient(cl)
 		container = BuildVoicePanelContainer(s)
 	}
 
@@ -4016,13 +3990,11 @@ func UpdateVoicePanels(guildID snowflake.ID, cl bot.Client) {
 			continue
 		}
 
-		// Use the client passed to the function, which is guaranteed to be valid
-		// or the one from the session if it exists.
 		safeGo(func() {
 			func(token string, appID snowflake.ID, c Container, client bot.Client) {
 				_ = EditInteractionContainerV2ByToken(client, appID, token, c)
 			}(panel.Token, panel.AppID, container, cl)
-		}) // Pass cl directly
+		})
 
 		if s == nil {
 			delete(VoicePanels, userID)
@@ -4342,31 +4314,24 @@ func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle,
 // extractVideoID extracts the video ID from a YouTube-related URL.
 func extractVideoID(u string) string {
 	u = strings.TrimSpace(u)
-	// Handle basic Youtu.be (shortener)
 	if strings.Contains(u, "youtu.be/") {
 		parts := strings.Split(u, "youtu.be/")
 		if len(parts) >= 2 {
-			// Trim query parameters
 			return strings.Split(parts[1], "?")[0]
 		}
 	}
 
-	// Handle standard URL via net/url
-	// We prepend https:// if missing to ensure parsing works
 	if !strings.HasPrefix(u, "http") {
 		u = "https://" + u
 	}
 	parsed, err := url.Parse(u)
 	if err == nil {
-		// Standard v=ID
 		if v := parsed.Query().Get("v"); v != "" {
 			return v
 		}
-		// id=ID
 		if id := parsed.Query().Get("id"); id != "" {
 			return id
 		}
-		// Shorts/Embed/V
 		path := parsed.Path
 		if strings.Contains(path, "/shorts/") {
 			return strings.Split(strings.TrimPrefix(path, "/shorts/"), "/")[0]
@@ -4382,7 +4347,6 @@ func extractVideoID(u string) string {
 	if len(u) == 11 && !strings.ContainsAny(u, "/?&.") {
 		return u
 	}
-	// Fallback to hashing if no ID found or ID looks invalid
 	return ""
 }
 
