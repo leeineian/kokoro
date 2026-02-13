@@ -48,7 +48,7 @@ func init() {
 	adminPerm := discord.PermissionAdministrator
 
 	OnClientReady(func(ctx context.Context, client bot.Client) {
-		RegisterDaemon(LogRoleColorRotator, func(ctx context.Context) (bool, func(), func()) { return StartRoleColorRotator(ctx, client) })
+		RegisterDaemon("ROLE", LogRoleColorRotator, func(ctx context.Context) (bool, func(), func()) { return StartRoleColorRotator(ctx, client) })
 	})
 
 	RegisterCommand(discord.SlashCommandCreate{

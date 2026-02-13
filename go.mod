@@ -1,11 +1,11 @@
 module github.com/leeineian/kokoro
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/asticode/go-astiav v0.40.0
 	github.com/corentings/chess/v2 v2.3.3
-	github.com/disgoorg/disgo v0.19.0-rc.15.0.20260211231526-733e186766a7
+	github.com/disgoorg/disgo v0.19.1
 	github.com/disgoorg/godave/golibdave v0.0.0-20260211223842-18cd5c306076
 	github.com/disgoorg/omit v1.0.0
 	github.com/disgoorg/snowflake/v2 v2.0.3

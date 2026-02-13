@@ -83,8 +83,8 @@ const (
 	MsgBotClientRetry       = "Failed to create Discord client (attempt %d/5): %v. Retrying in 5s..."
 	MsgBotSkipReg           = "Skipping command registration as requested."
 	MsgBotGatewayFail       = "failed to open gateway: %w"
-	MsgDaemonShutdown       = "Shutting down all daemons..."
 	MsgPanicFatal           = "\n[FATAL] %s\n"
+	MsgComponentReady       = "Ready! (Took: %dms)"
 	BotPIDFile              = ".bot.pid"
 )
 
@@ -100,7 +100,6 @@ func main() {
 		}
 	}()
 
-	// 1. Load configuration early
 	cfg, err := LoadConfig()
 	if err != nil {
 		LogError(MsgConfigFailedToLoad, err)
@@ -111,16 +110,12 @@ func main() {
 	clearAll := flag.Bool("clear-all", false, "Force clear guild commands (scan all guilds)")
 	flag.Parse()
 
-	// 2. Initialize Logger (handle flags)
 	logName := InitLogger(*silent, true)
 
-	// 3. Try to detect bot name
 	botName := GetProjectName()
 
-	// 4. Log Starting Message
 	LogInfo(MsgBotStarting, botName)
 
-	// 5. Initialize Database & Logs
 	LogInfo(MsgInitializing, filepath.Base(cfg.DatabasePath))
 	if logName != "" {
 		LogInfo(MsgInitializing, filepath.Base(logName))
@@ -129,16 +124,15 @@ func main() {
 	if err := InitDatabase(context.Background(), cfg.DatabasePath); err != nil {
 		LogFatal(MsgDatabaseInitFail, err)
 	}
+	GlobalAI.Initialize(context.Background())
 	defer CloseDatabase()
 
-	// 6. Open or create the PID file
 	f, err := os.OpenFile(BotPIDFile, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		LogFatal(MsgPIDOpenFail, err)
 	}
 	defer f.Close()
 
-	// 7. Try to acquire an exclusive lock
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -214,7 +208,6 @@ func main() {
 		LogInfo(MsgBotOldTerminated)
 	}
 
-	// 8. We have the lock. Write our PID.
 	_ = f.Truncate(0)
 	_, _ = f.Seek(0, 0)
 	_, _ = fmt.Fprintf(f, "%d", os.Getpid())
@@ -225,12 +218,9 @@ func main() {
 		_ = os.Remove(BotPIDFile)
 	}()
 
-	// 9. Run bot (blocks until shutdown signal)
 	if err := run(cfg, *silent, *skipReg, *clearAll); err != nil {
 		LogFatal(MsgGenericError, err)
 	}
-
-	// 10. Handle Reboot
 	if RestartRequested {
 		LogInfo(MsgBotRestarting)
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
@@ -256,10 +246,8 @@ func main() {
 }
 
 func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
-	// 1. Setup global context that responds to shutdown signals
 	ctx, _ := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 
-	// Add SIGUSR1 handler for goroutine dumping
 	safeGo(func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGUSR1)
@@ -280,7 +268,6 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 
 	SetAppContext(ctx)
 
-	// 2. Config is already loaded, but ensure it's valid
 	if cfg == nil {
 		var err error
 		cfg, err = LoadConfig()
@@ -289,7 +276,6 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 		}
 	}
 
-	// 3. Create disgo client with retries for network resilience
 	var client bot.Client
 	var err error
 	for i := 1; i <= 5; i++ {
@@ -309,7 +295,6 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 	}
 	defer client.Close(ctx)
 
-	// 4. Command Registration
 	if !skipReg {
 		if err := RegisterCommands(client, cfg.GuildID, clearAll); err != nil {
 			LogError(MsgBotRegisterFail, err)
@@ -318,7 +303,6 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 		LogInfo(MsgBotSkipReg)
 	}
 
-	// 5. Connect to Gateway
 	if err := client.OpenGateway(ctx); err != nil {
 		return fmt.Errorf(MsgBotGatewayFail, err)
 	}
@@ -328,7 +312,6 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 		fmt.Println()
 	}
 
-	LogInfo(MsgDaemonShutdown)
 	ShutdownDaemons(context.Background())
 
 	LogInfo(MsgBotShutdown, GetProjectName())
@@ -342,20 +325,20 @@ func run(cfg *Config, silent bool, skipReg bool, clearAll bool) error {
 
 const (
 	MsgLoaderSyncCommands       = "Syncing %s commands..."
-	MsgLoaderTransition         = "[TRANSITION] Switching from %s to %s mode."
-	MsgLoaderCleanup            = "[CLEANUP] Removing commands from previous dev guild: %s"
-	MsgLoaderDevStarting        = "[DEV] Registering commands to guild: %s"
-	MsgLoaderDevRegistered      = "[DEV] Registered: %s"
-	MsgLoaderDevFail            = "[DEV] Registration failed: %v"
-	MsgLoaderDevGlobalClear     = "[DEV] Verifying global commands are cleared..."
-	MsgLoaderDevGlobalClearFail = "[DEV] Global clear skipped (likely rate limited): %v"
-	MsgLoaderProdStarting       = "[PROD] Registering commands globally..."
-	MsgLoaderProdRegistered     = "[PROD] Registered: %s"
-	MsgLoaderProdFail           = "[PROD] Global registration failed: %w"
-	MsgLoaderScanStarting       = "[SCAN] Checking all guilds for ghost commands..."
-	MsgLoaderScanCleared        = "[SCAN] Cleared ghost commands from: %s (%s)"
+	MsgLoaderTransition         = "Switching from %s to %s mode."
+	MsgLoaderCleanup            = "Removing commands from previous dev guild: %s"
+	MsgLoaderDevStarting        = "Registering commands to guild: %s"
+	MsgLoaderDevRegistered      = "Registered: %s"
+	MsgLoaderDevFail            = "Registration failed: %v"
+	MsgLoaderDevGlobalClear     = "Verifying global commands are cleared..."
+	MsgLoaderDevGlobalClearFail = "Global clear skipped (likely rate limited): %v"
+	MsgLoaderProdStarting       = "Registering commands globally..."
+	MsgLoaderProdRegistered     = "Registered: %s"
+	MsgLoaderProdFail           = "Global registration failed: %w"
+	MsgLoaderScanStarting       = "Checking all guilds for ghost commands..."
+	MsgLoaderScanCleared        = "Cleared ghost commands from: %s (%s)"
 	MsgLoaderPanicRecovered     = "Panic recovered in handler: %v"
-	MsgLoaderUpToDate           = "[LOADER] Commands are up to date. (Hash: %s)"
+	MsgLoaderUpToDate           = "Commands are up to date. (Hash: %s)"
 	MsgLoaderInvalidGuildID     = "invalid GUILD_ID: %w"
 )
 
@@ -467,7 +450,7 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 		currentMode = "global"
 	}
 
-	LogInfo(MsgLoaderSyncCommands, strings.ToUpper(currentMode))
+	LogLoader(MsgLoaderSyncCommands, strings.ToUpper(currentMode))
 
 	currentHash := calculateCommandHash(commands)
 	lastHash, _ := GetBotConfig(ctx, "last_cmd_hash")
@@ -476,25 +459,24 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 	shouldRegister := true
 	if currentHash != "" && currentHash == lastHash && currentMode == lastMode && !forceScan {
 		shouldRegister = false
-		LogInfo(MsgLoaderUpToDate, currentHash[:8])
+		LogLoader(MsgLoaderUpToDate, currentHash[:8])
 	}
 
-	// 1. Production Mode (Global)
 	if isProduction {
 		if shouldRegister {
-			LogInfo(MsgLoaderProdStarting)
+			LogLoader(MsgLoaderProdStarting)
 			createdCommands, err := client.Rest.SetGlobalCommands(client.ApplicationID, commands)
 			if err != nil {
 				return fmt.Errorf(MsgLoaderProdFail, err)
 			}
 			for _, cmd := range createdCommands {
-				LogInfo(MsgLoaderProdRegistered, cmd.Name())
+				LogLoader(MsgLoaderProdRegistered, cmd.Name())
 			}
 		}
 
 		shouldScan := forceScan || (lastMode != currentMode)
 		if shouldScan {
-			LogInfo(MsgLoaderScanStarting)
+			LogLoader(MsgLoaderScanStarting)
 			if guilds, err := client.Rest.GetCurrentUserGuilds("", 0, 0, 100, false); err == nil {
 				var wg sync.WaitGroup
 				sem := make(chan struct{}, 5)
@@ -508,7 +490,7 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 							defer func() { <-sem }()
 
 							if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, guild.ID, false); err == nil && len(cmds) > 0 {
-								LogInfo(MsgLoaderScanCleared, guild.Name, guild.ID.String())
+								LogLoader(MsgLoaderScanCleared, guild.Name, guild.ID.String())
 								_, _ = client.Rest.SetGuildCommands(client.ApplicationID, guild.ID, []discord.ApplicationCommandCreate{})
 							}
 						}(g)
@@ -521,33 +503,32 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 		if lastGuildID != "" {
 			if id, err := snowflake.Parse(lastGuildID); err == nil {
 				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, id, false); err == nil && len(cmds) > 0 {
-					LogInfo(MsgLoaderCleanup, lastGuildID)
+					LogLoader(MsgLoaderCleanup, lastGuildID)
 					_, _ = client.Rest.SetGuildCommands(client.ApplicationID, id, []discord.ApplicationCommandCreate{})
 				}
 			}
 		}
 	} else {
-		// 2. Development Mode (Guild)
 		guildID, err := snowflake.Parse(guildIDStr)
 		if err != nil {
 			return fmt.Errorf(MsgLoaderInvalidGuildID, err)
 		}
 
 		if shouldRegister {
-			LogInfo(MsgLoaderDevStarting, guildIDStr)
+			LogLoader(MsgLoaderDevStarting, guildIDStr)
 			createdCommands, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands)
 			if err != nil {
 				LogWarn(MsgLoaderDevFail, err)
 			} else {
 				for _, cmd := range createdCommands {
-					LogInfo(MsgLoaderDevRegistered, cmd.Name())
+					LogLoader(MsgLoaderDevRegistered, cmd.Name())
 				}
 			}
 		}
 
 		if lastMode != currentMode || forceScan {
 			if cmds, err := client.Rest.GetGlobalCommands(client.ApplicationID, false); err == nil && len(cmds) > 0 {
-				LogInfo(MsgLoaderDevGlobalClear)
+				LogLoader(MsgLoaderDevGlobalClear)
 				_, err = client.Rest.SetGlobalCommands(client.ApplicationID, []discord.ApplicationCommandCreate{})
 				if err != nil {
 					LogWarn(MsgLoaderDevGlobalClearFail, err)
@@ -558,14 +539,14 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 		if lastGuildID != "" && lastGuildID != guildIDStr {
 			if oldID, err := snowflake.Parse(lastGuildID); err == nil {
 				if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, oldID, false); err == nil && len(cmds) > 0 {
-					LogInfo(MsgLoaderCleanup, lastGuildID)
+					LogLoader(MsgLoaderCleanup, lastGuildID)
 					_, _ = client.Rest.SetGuildCommands(client.ApplicationID, oldID, []discord.ApplicationCommandCreate{})
 				}
 			}
 		}
 
 		if forceScan {
-			LogInfo(MsgLoaderScanStarting)
+			LogLoader(MsgLoaderScanStarting)
 			if guilds, err := client.Rest.GetCurrentUserGuilds("", 0, 0, 100, false); err == nil {
 				var wg sync.WaitGroup
 				sem := make(chan struct{}, 5)
@@ -582,7 +563,7 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 							defer func() { <-sem }()
 
 							if cmds, err := client.Rest.GetGuildCommands(client.ApplicationID, guild.ID, false); err == nil && len(cmds) > 0 {
-								LogInfo(MsgLoaderScanCleared, guild.Name, guild.ID.String())
+								LogLoader(MsgLoaderScanCleared, guild.Name, guild.ID.String())
 								_, _ = client.Rest.SetGuildCommands(client.ApplicationID, guild.ID, []discord.ApplicationCommandCreate{})
 							}
 						}(g)
@@ -593,31 +574,29 @@ func RegisterCommands(client bot.Client, guildIDStr string, forceScan bool) erro
 		}
 	}
 
-	// 3. Update State
-	_ = SetBotConfig(ctx, "last_reg_mode", currentMode)
-	_ = SetBotConfig(ctx, "last_guild_id", guildIDStr)
 	if currentHash != "" {
 		_ = SetBotConfig(ctx, "last_cmd_hash", currentHash)
 	}
-
-	// 3. Update State
-	_ = SetBotConfig(ctx, "last_reg_mode", currentMode)
-	_ = SetBotConfig(ctx, "last_guild_id", guildIDStr)
 
 	return nil
 }
 
 func onReady(event *events.Ready) {
 	client := *event.Client()
-	botUser := event.User
-
-	// 1. Final Status
-	duration := time.Since(StartupTime)
-	LogInfo(MsgBotReady, GetProjectName(), botUser.ID.String(), os.Getpid(), duration.Milliseconds())
-
-	// 2. Background Daemons
 	TriggerClientReady(AppContext, client)
-	StartDaemons(AppContext)
+
+	duration := time.Since(StartupTime)
+	LogInfo(MsgBotReady, GetProjectName(), event.User.ID.String(), os.Getpid(), duration.Milliseconds())
+
+	LogAI(LogAIInit, len(GlobalAI.Markov.Tokens.forward))
+
+	_, runners := StartDaemons(AppContext)
+
+	for _, run := range runners {
+		if run != nil {
+			safeGo(run)
+		}
+	}
 }
 
 func TriggerClientReady(ctx context.Context, client bot.Client) {
@@ -642,13 +621,10 @@ func onAutocompleteInteraction(event *events.AutocompleteInteractionCreate) {
 
 func onComponentInteraction(event *events.ComponentInteractionCreate) {
 	customID := event.Data.CustomID()
-	// 1. Try exact match
 	if h, ok := componentHandlers[customID]; ok {
 		safeGo(func() { h(event) })
 		return
 	}
-
-	// 2. Try prefix match
 	for prefix, h := range componentHandlers {
 		if strings.HasSuffix(prefix, ":") && strings.HasPrefix(customID, prefix) {
 			safeGo(func() { h(event) })
@@ -664,48 +640,41 @@ func onVoiceStateUpdate(event *events.GuildVoiceStateUpdate) {
 }
 
 type daemonEntry struct {
-	starter func(ctx context.Context) (bool, func(), func())
+	name    string
 	logger  func(format string, v ...any)
+	starter func(ctx context.Context) (bool, func(), func())
 }
 
 var registeredDaemons []daemonEntry
 var activeShutdownHooks []func()
 var activeShutdownMu sync.Mutex
 
-func RegisterDaemon(logger func(format string, v ...any), starter func(ctx context.Context) (bool, func(), func())) {
-	registeredDaemons = append(registeredDaemons, daemonEntry{starter: starter, logger: logger})
+func RegisterDaemon(name string, logger func(format string, v ...any), starter func(ctx context.Context) (bool, func(), func())) {
+	registeredDaemons = append(registeredDaemons, daemonEntry{name: name, logger: logger, starter: starter})
 }
 
-func StartDaemons(ctx context.Context) {
+func StartDaemons(ctx context.Context) (string, []func()) {
+	var summary []string
+	var runners []func()
 	daemonsOnce.Do(func() {
-		type activeDaemon struct {
-			entry daemonEntry
-			run   func()
-		}
-		var active []activeDaemon
-
-		// 1. Evaluate starters sequentially to determine active daemons
-		for _, daemon := range registeredDaemons {
-			if ok, run, shutdown := daemon.starter(ctx); ok && run != nil {
+		for _, entry := range registeredDaemons {
+			start := time.Now()
+			ok, run, shutdown := entry.starter(ctx)
+			if ok {
+				summarySub := fmt.Sprintf("%s (%dms)", entry.name, time.Since(start).Milliseconds())
+				summary = append(summary, summarySub)
+				if run != nil {
+					runners = append(runners, run)
+				}
 				if shutdown != nil {
 					activeShutdownMu.Lock()
 					activeShutdownHooks = append(activeShutdownHooks, shutdown)
 					activeShutdownMu.Unlock()
 				}
-				active = append(active, activeDaemon{daemon, run})
 			}
 		}
-
-		// 2. Log all "Starting..." messages sequentially
-		for _, ad := range active {
-			ad.entry.logger(MsgDaemonStarting)
-		}
-
-		// 3. Launch the actual daemon loops in parallel
-		for _, ad := range active {
-			safeGo(ad.run)
-		}
 	})
+	return strings.Join(summary, " | "), runners
 }
 
 func ShutdownDaemons(ctx context.Context) {
@@ -860,6 +829,14 @@ func LogUndertext(format string, v ...any) {
 
 func LogVoice(format string, v ...any) {
 	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "voice"))
+}
+
+func LogAI(format string, v ...any) {
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "ai"))
+}
+
+func LogLoader(format string, v ...any) {
+	slog.Info(fmt.Sprintf(format, v...), slog.String("component", "loader"))
 }
 
 func LogCustom(tag string, tagColor *color.Color, format string, v ...any) {
@@ -1058,7 +1035,7 @@ func LoadConfig() (*Config, error) {
 	}
 	cfg.AIMaxKeySize, _ = strconv.Atoi(os.Getenv(EnvAIKeySize))
 	if cfg.AIMaxKeySize == 0 {
-		cfg.AIMaxKeySize = 1 // Default
+		cfg.AIMaxKeySize = 1
 	}
 	cfg.AIAttempts, _ = strconv.Atoi(os.Getenv(EnvAITry))
 	if cfg.AIAttempts == 0 {
@@ -1077,7 +1054,6 @@ func LoadConfig() (*Config, error) {
 		cfg.AISeedPrefixChance = 0.1
 	}
 	cfg.AIRandomResponseChance, _ = strconv.ParseFloat(os.Getenv(EnvAIRandChance), 64)
-	// No default for AIRandomResponseChance as 0.0 is a valid and desired default.
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -1215,6 +1191,17 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 			hash TEXT PRIMARY KEY,
 			content TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS ai_tokens (
+			id INTEGER PRIMARY KEY,
+			token TEXT UNIQUE
+		)`,
+		`CREATE TABLE IF NOT EXISTS ai_transitions (
+			channel_id TEXT NOT NULL,
+			key_text TEXT NOT NULL,
+			next_id INTEGER NOT NULL,
+			weight INTEGER DEFAULT 1,
+			PRIMARY KEY (channel_id, key_text, next_id)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_messages_channel_id ON ai_messages(channel_id)`,
 	}
 
@@ -1259,8 +1246,6 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		}
 	}
 
-	// Data Migration: Normalize Content, Stickers, and Attachments
-	// 1. Content
 	if rows, err := DB.QueryContext(initCtx, "SELECT message_id, content FROM ai_messages WHERE content IS NOT NULL AND content != '' AND (content_hash IS NULL OR content_hash = '')"); err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -1274,7 +1259,6 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		}
 	}
 
-	// 2. Stickers
 	if rows, err := DB.QueryContext(initCtx, "SELECT message_id, sticker_id FROM ai_messages WHERE sticker_id IS NOT NULL AND sticker_id != '' AND (sticker_hash IS NULL OR sticker_hash = '')"); err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -1289,7 +1273,6 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		}
 	}
 
-	// 3. Attachments
 	if rows, err := DB.QueryContext(initCtx, "SELECT message_id, attachment_url FROM ai_messages WHERE attachment_url IS NOT NULL AND attachment_url != '' AND (attachment_hash IS NULL OR attachment_hash = '')"); err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -1304,16 +1287,11 @@ func InitDatabase(ctx context.Context, dataSourceName string) error {
 		}
 	}
 
-	// 4. Reactions
 	if rows, err := DB.QueryContext(initCtx, "SELECT message_id, reactions FROM ai_messages WHERE reactions IS NOT NULL AND reactions != '' AND (reaction_hash IS NULL OR reaction_hash = '')"); err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var id, reactions string
 			if err := rows.Scan(&id, &reactions); err == nil {
-				// Legacy reactions were Comma separated, but for the Markov chain we treat them as individual tokens
-				// For the database, we'll just hash the whole string (which might be single emoji or comma list)
-				// though SaveAIMessage now handles them one by one or as a single REACTION: token?
-				// Wait, SaveAIMessage takes a reactions string.
 				content := "REACTION:" + reactions
 				hash := sha256.Sum256([]byte(content))
 				hashStr := hex.EncodeToString(hash[:])
@@ -1880,7 +1858,6 @@ func ClearAIMessagesByHashes(ctx context.Context, hashes []string) error {
 	}
 	defer tx.Rollback()
 
-	// 1. Delete matching messages
 	for _, h := range hashes {
 		_, err = tx.ExecContext(ctx, "DELETE FROM ai_messages WHERE content_hash = ? OR sticker_hash = ? OR reaction_hash = ? OR attachment_hash = ?", h, h, h, h)
 		if err != nil {
@@ -1888,7 +1865,6 @@ func ClearAIMessagesByHashes(ctx context.Context, hashes []string) error {
 		}
 	}
 
-	// 2. Delete from vocab
 	for _, h := range hashes {
 		_, err = tx.ExecContext(ctx, "DELETE FROM ai_vocab WHERE hash = ?", h)
 		if err != nil {
@@ -2351,11 +2327,9 @@ func RespondInteractionContainerV2Files(client bot.Client, interaction discord.I
 		},
 	}
 
-	// Manual multipart construction
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	// 1. Payload JSON
 	part, err := writer.CreateFormField("payload_json")
 	if err != nil {
 		return err
@@ -2366,7 +2340,6 @@ func RespondInteractionContainerV2Files(client bot.Client, interaction discord.I
 		return err
 	}
 
-	// 2. Files
 	for i, file := range files {
 		part, err := writer.CreateFormFile(fmt.Sprintf("files[%d]", i), file.Name)
 		if err != nil {
@@ -2380,7 +2353,6 @@ func RespondInteractionContainerV2Files(client bot.Client, interaction discord.I
 		return err
 	}
 
-	// 3. Request
 	url := "https://discord.com/api/v10/interactions/" + interaction.ID().String() + "/" + interaction.Token() + "/callback"
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
@@ -2632,6 +2604,7 @@ func SendComponentsV2(client bot.Client, channelID snowflake.ID, components []an
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
 func doRequestNoEscape(client bot.Client, route *rest.CompiledEndpoint, body any, dst any) error {
 	buf := &bytes.Buffer{}
 	enc := json.NewEncoder(buf)
@@ -2890,7 +2863,7 @@ func GetUserErrors() map[string]string {
 }
 
 func getComponentColor(name string) *color.Color {
-	if name == "DATABASE" {
+	if name == "DATABASE" || name == "LOADER" {
 		return color.New()
 	}
 	return color.New(color.FgMagenta)

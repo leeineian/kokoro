@@ -12,8 +12,8 @@ github.com/corentings/chess/v2 v2.3.3 h1:ko3pE3XaCiFGdoyy6Wk9GQlgnSgGfoAWGXIXKVi
 github.com/corentings/chess/v2 v2.3.3/go.mod h1:JhWYDbjY81/7NECXrLzz4g2r9taaMEXvyqS4gYZciVE=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/disgoorg/disgo v0.19.0-rc.15.0.20260211231526-733e186766a7 h1:/P87VNhgNs2nLidijtb4OIbXIcZXat+/QZJE/i07vFs=
-github.com/disgoorg/disgo v0.19.0-rc.15.0.20260211231526-733e186766a7/go.mod h1:rLCcf3vnlyfOTGw8ksVmq5UE5CMzBA0eeA9oeZ+N0x4=
+github.com/disgoorg/disgo v0.19.1 h1:QkX5Z2fvLlg5YG4k5VmILH8U1m3ztx6vvbWVqv2c9Oc=
+github.com/disgoorg/disgo v0.19.1/go.mod h1:rLCcf3vnlyfOTGw8ksVmq5UE5CMzBA0eeA9oeZ+N0x4=
 github.com/disgoorg/godave v0.0.0-20260211223842-18cd5c306076 h1:GN4w6H8zlH/kFRFnzjk+4Kg9KEUJ+jY0e4MZaGlFKh8=
 github.com/disgoorg/godave v0.0.0-20260211223842-18cd5c306076/go.mod h1:OreAC3hpabr39bMVA+jwOVDq1EUPXH5A0XUBiZaDI1Y=
 github.com/disgoorg/godave/golibdave v0.0.0-20260211223842-18cd5c306076 h1:U4Oxru7pH4TrCeSj2fp5usYuCspPydrZrCEDylh9Nsc=

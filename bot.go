@@ -95,7 +95,7 @@ func init() {
 	adminPerm := discord.PermissionAdministrator
 
 	OnClientReady(func(ctx context.Context, client bot.Client) {
-		RegisterDaemon(LogBot, func(ctx context.Context) (bool, func(), func()) { return StartStatusRotator(ctx, client) })
+		RegisterDaemon("BOT", LogBot, func(ctx context.Context) (bool, func(), func()) { return StartStatusRotator(ctx, client) })
 	})
 
 	RegisterCommand(discord.SlashCommandCreate{
@@ -186,27 +186,23 @@ func init() {
 // Types
 // ===========================
 
-// StatsHealthMetrics contains health check metrics for the bot
 type StatsHealthMetrics struct {
 	Ping        int64
 	GatewayPing int64
 	DBLatency   string
 }
 
-// StatsCachedData stores cached data with a timestamp
 type StatsCachedData struct {
 	Data      string
 	Timestamp time.Time
 }
 
-// StatsCachedMetrics stores cached metrics with interaction tracking
 type StatsCachedMetrics struct {
 	Data          StatsHealthMetrics
 	Timestamp     time.Time
 	InteractionID string
 }
 
-// StatsCache stores all cached stats data
 type StatsCache struct {
 	System  StatsCachedData
 	Metrics StatsCachedMetrics
@@ -227,7 +223,6 @@ const (
 )
 
 var (
-	// Status Rotator State
 	StartTime       = time.Now().UTC()
 	statusMap       map[string]func(context.Context, bot.Client) string
 	statusKeys      []string
@@ -236,7 +231,6 @@ var (
 	configKeyStatus = "status_visible"
 	configKeyPin    = "status_pinned"
 
-	// Stats State
 	statsStartTime = time.Now().UTC()
 	statsCacheMu   sync.RWMutex
 	statsCache     StatsCache
@@ -246,14 +240,11 @@ var (
 // Status Rotator Logic
 // ===========================
 
-// GetRotationInterval returns the status rotation interval
 func GetRotationInterval() time.Duration {
 	return time.Duration(15+rand.Intn(46)) * time.Second
 }
 
-// StartStatusRotator starts the status rotation daemon
 func StartStatusRotator(ctx context.Context, client bot.Client) (bool, func(), func()) {
-	// Always start the daemon even if currently disabled, so it can be re-enabled at runtime
 	statusMap = map[string]func(context.Context, bot.Client) string{
 		"Reminders": GetRemindersStatus,
 		"Color":     GetColorStatus,
@@ -267,9 +258,10 @@ func StartStatusRotator(ctx context.Context, client bot.Client) (bool, func(), f
 		statusKeys = append(statusKeys, k)
 	}
 
+	next := GetRotationInterval()
+	updateStatus(ctx, client, next)
+
 	return true, func() {
-			next := GetRotationInterval()
-			updateStatus(ctx, client, next)
 			for {
 				select {
 				case <-time.After(next):
@@ -279,12 +271,11 @@ func StartStatusRotator(ctx context.Context, client bot.Client) (bool, func(), f
 					return
 				}
 			}
-		}, func() { // Shutdown hook
+		}, func() {
 			LogBot(MsgStatusRotatorShutdown)
 		}
 }
 
-// updateStatus sections selects the next status to display
 func updateStatus(ctx context.Context, client bot.Client, nextInterval time.Duration) {
 	visibleStr, err := GetBotConfig(ctx, configKeyStatus)
 	if err != nil || visibleStr == "false" {
@@ -504,7 +495,6 @@ func handleBotStatus(event *events.ApplicationCommandInteractionCreate, data dis
 		}
 	}
 
-	// Trigger immediate update
 	safeGo(func() {
 		updateStatus(AppContext, *event.Client(), 0)
 	})
@@ -522,7 +512,6 @@ func handleBotAutocomplete(event *events.AutocompleteInteractionCreate) {
 	var choices []discord.AutocompleteChoice
 	for _, key := range statusKeys {
 		name := key
-		// If this key maps to a generator, try to get the dynamic string
 		if gen, ok := statusMap[key]; ok {
 			dynamicVal := gen(AppContext, *event.Client())
 			if dynamicVal != "" {
@@ -870,7 +859,6 @@ func handleBotSend(event *events.ApplicationCommandInteractionCreate, data disco
 		return
 	}
 
-	// 1. Defer response (ephemeral)
 	err = event.DeferCreateMessage(true)
 	if err != nil {
 		return
@@ -879,9 +867,6 @@ func handleBotSend(event *events.ApplicationCommandInteractionCreate, data disco
 	client := event.Client()
 	channelID := event.Channel().ID()
 
-	// 2. Send actual sticker using the Bot's CreateMessage endpoint
-	// Discord Webhooks do NOT support sticker_ids at all.
-	// To send an actual sticker, we must use the bot's own identity.
 	_, err = client.Rest.CreateMessage(channelID, discord.MessageCreate{
 		StickerIDs: []snowflake.ID{stickerID},
 	})
@@ -893,7 +878,6 @@ func handleBotSend(event *events.ApplicationCommandInteractionCreate, data disco
 		return
 	}
 
-	// 3. Final Success Message
 	_, _ = client.Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.MessageUpdate{
 		Content: strPtr(MsgBotSendStickerSuccess),
 	})

@@ -45,16 +45,19 @@ func init() {
 	astiav.SetLogLevel(astiav.LogLevelFatal)
 
 	OnClientReady(func(ctx context.Context, client bot.Client) {
-		RegisterDaemon(LogVoice, func(ctx context.Context) (bool, func(), func()) {
-			return true, func() {}, func() {
-				if VoiceManager != nil {
-					LogVoice("Shutting down Voice Manager...")
-					VoiceManager.Shutdown(context.Background())
+		vm := GetVoiceManager()
+
+		RegisterDaemon("VOICE", LogVoice, func(ctx context.Context) (bool, func(), func()) {
+			return true, func() {
+					safeGo(vm.startCacheGC)
+				}, func() {
+					if vm != nil {
+						LogVoice("Shutting down Voice Manager...")
+						vm.Shutdown(context.Background())
+					}
 				}
-			}
 		})
 
-		vm := GetVoiceManager()
 		RegisterVoiceStateUpdateHandler(vm.onVoiceStateUpdate)
 	})
 
@@ -172,7 +175,6 @@ var (
 	SilenceDuration       = 1 * time.Second
 	VoicePanels           = make(map[snowflake.ID]*VoicePanel)
 	VoicePanelsMu         sync.Mutex
-	maxConnWait           = 45 * time.Second
 	maxStall              = 20 * time.Second
 )
 
@@ -428,36 +430,73 @@ func handleVoice(event *events.ApplicationCommandInteractionCreate) {
 	}
 }
 
-func handleVoiceVolume(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
-	vol := data.Int("set")
-	s := GetVoiceManager().GetSession(*event.GuildID())
+// ===========================
+// Interaction Helpers
+// ===========================
+
+func mustGetSession(event *events.ApplicationCommandInteractionCreate) (*VoiceSession, bool) {
+	guildID := event.GuildID()
+	if guildID == nil {
+		_ = RespondInteractionV2(*event.Client(), event, "Not in a guild.", true)
+		return nil, false
+	}
+	s := GetVoiceManager().GetSession(*guildID)
 	if s == nil {
-		_ = RespondInteractionV2(*event.Client(), event, "Not playing anything.", true)
+		_ = RespondInteractionV2(*event.Client(), event, "Not running.", true)
+		return nil, false
+	}
+	return s, true
+}
+
+func mustGetUserVoiceState(event *events.ApplicationCommandInteractionCreate) (*discord.VoiceState, bool) {
+	guildID := event.GuildID()
+	if guildID == nil {
+		return nil, false
+	}
+	vs, ok := event.Client().Caches.VoiceState(*guildID, event.User().ID)
+	if !ok || vs.ChannelID == nil {
+		_ = RespondInteractionV2(*event.Client(), event, "You must be in a voice channel.", true)
+		return nil, false
+	}
+	return &vs, true
+}
+
+func (s *VoiceSession) buildTrackComponents(t *Track, prefix string) []any {
+	var components []any
+	components = append(components, NewTextDisplay(fmt.Sprintf("**%s**", prefix)))
+	components = append(components, NewTextDisplay(t.FullDisplay()))
+	t.mu.Lock()
+	art := t.ArtworkURL
+	t.mu.Unlock()
+	if art != "" {
+		components = append(components, NewMediaGallery(art))
+	}
+	return components
+}
+
+func handleVoiceVolume(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
+	s, ok := mustGetSession(event)
+	if !ok {
 		return
 	}
-
+	vol := data.Int("set")
 	s.Volume.Store(int32(vol))
 	UpdateVoicePanels(*event.GuildID(), *event.Client())
 	_ = RespondInteractionV2(*event.Client(), event, fmt.Sprintf("Volume set to **%d%%**.", vol), false)
 }
 
 func handleMusicSeek(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData, factor int) {
+	s, ok := mustGetSession(event)
+	if !ok {
+		return
+	}
 	dStr := data.String("duration")
 	d, err := time.ParseDuration(dStr)
 	if err != nil {
-		_ = event.CreateMessage(discord.MessageCreate{Content: "Invalid duration format (use 10s, 1m etc)."})
+		_ = RespondInteractionV2(*event.Client(), event, "Invalid duration format (use 10s, 1m etc).", true)
 		return
 	}
-	guildID := event.GuildID()
-	if guildID == nil {
-		_ = event.CreateMessage(discord.MessageCreate{Content: "Not in a guild."})
-		return
-	}
-	s := GetVoiceManager().GetSession(*guildID)
-	if s == nil {
-		_ = event.CreateMessage(discord.MessageCreate{Content: "Not running."})
-		return
-	}
+
 	seekDuration := d
 	if factor < 0 {
 		seekDuration = -d
@@ -470,34 +509,23 @@ func handleMusicSeek(event *events.ApplicationCommandInteractionCreate, data dis
 	if factor < 0 {
 		action = "Rewound"
 	}
-	UpdateVoicePanels(*guildID, *event.Client())
+	UpdateVoicePanels(*event.GuildID(), *event.Client())
 	_ = RespondInteractionV2(*event.Client(), event, fmt.Sprintf("%s %v", action, d), false)
 }
 
 func handleMusicSkip(event *events.ApplicationCommandInteractionCreate) {
+	s, ok := mustGetSession(event)
+	if !ok {
+		return
+	}
 	_ = event.DeferCreateMessage(false)
 
-	guildID := event.GuildID()
-	if guildID == nil {
-		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.MessageUpdate{Content: strPtr("Not in a guild.")})
-		return
-	}
-	s := GetVoiceManager().GetSession(*guildID)
-	if s == nil {
-		_, _ = event.Client().Rest.UpdateInteractionResponse(event.ApplicationID(), event.Token(), discord.MessageUpdate{Content: strPtr("Not running.")})
-		return
-	}
-
-	start := time.Now()
-	LogVoice("Attempting to skip track in guild %s...", *guildID)
 	title, err := s.Skip()
 	if err != nil {
-		LogVoice("Skip failed after %v: %v", time.Since(start), err)
 		_ = EditInteractionV2(*event.Client(), event, fmt.Sprintf("Failed to skip: %v", err))
 		return
 	}
-	LogVoice("Skip success after %v: %s", time.Since(start), title)
-	UpdateVoicePanels(*guildID, *event.Client())
+	UpdateVoicePanels(*event.GuildID(), *event.Client())
 	_ = EditInteractionV2(*event.Client(), event, fmt.Sprintf("Skipped: %s", title))
 }
 
@@ -518,7 +546,6 @@ func GetVoiceManager() *VoiceSystem {
 				items: make(map[string]cachedItem),
 			},
 		}
-		safeGo(VoiceManager.startCacheGC)
 	})
 	return VoiceManager
 }
@@ -787,7 +814,6 @@ func (vs *VoiceSystem) Shutdown(ctx context.Context) {
 		})
 	}
 	wg.Wait()
-	LogVoice("All voice sessions stopped. Finalizing cleanup...")
 	cleanupAudioCache()
 }
 
@@ -1577,6 +1603,23 @@ func (s *VoiceSession) processQueue() {
 // ===========================
 // Track
 // ===========================
+
+func (t *Track) FullDisplay() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	title := t.Title
+	if title == "" || strings.HasPrefix(title, "http") {
+		if id := extractVideoID(t.URL); id != "" {
+			title = "YouTube Track (" + id + ")"
+		} else {
+			title = "Music Track"
+		}
+	}
+	if t.Channel != "" && t.Channel != "NA" {
+		return fmt.Sprintf("[%s](%s) · %s", title, t.URL, t.Channel)
+	}
+	return fmt.Sprintf("[%s](%s)", title, t.URL)
+}
 
 func (t *Track) Cancel() {
 	if t.cancel != nil {
@@ -2521,6 +2564,12 @@ func (s *VoiceSession) resolveTrackMetadata(ctx context.Context, t *Track) error
 		return nil
 	}
 
+	start := time.Now()
+	origURL := t.URL
+	defer func() {
+		LogVoice("Metadata resolution for %s took %v", origURL, time.Since(start))
+	}()
+
 	needsSearch := !strings.HasPrefix(t.URL, "http")
 	var targetDuration time.Duration
 
@@ -2788,7 +2837,6 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 	errorSig := make(chan error, 1)
 	onceReady := sync.Once{}
 	onceError := sync.Once{}
-	LogVoice("DEBUG: downloadAndCache ENTER for %s", url)
 
 	t.mu.Lock()
 	t.FileCreated = make(chan struct{})
@@ -2885,10 +2933,10 @@ func (s *VoiceSession) downloadAndCache(ctx context.Context, t *Track, filename,
 		}
 	})
 
-	totalTimer := time.NewTimer(60 * time.Second)
+	totalTimer := time.NewTimer(90 * time.Second)
 	defer totalTimer.Stop()
 
-	stallTimer := time.NewTimer(45 * time.Second)
+	stallTimer := time.NewTimer(30 * time.Second)
 	defer stallTimer.Stop()
 
 loop:
@@ -2906,7 +2954,6 @@ loop:
 			return
 		case <-stallTimer.C:
 			dcancel()
-			LogVoice("DEBUG: downloadAndCache stallTimer fired for %s after %v (Written: %d bytes)", url, maxConnWait, t.WrittenBytes)
 			t.MarkError(errors.New("timeout: download stalled or failed to start"))
 			return
 		case err := <-errorSig:
@@ -3264,9 +3311,10 @@ func buildYtdlpArgs() []string {
 		"--no-warnings",
 		"--extractor-args", "youtube:player_client=android,web",
 		"--prefer-free-formats",
-		"--socket-timeout", "30",
-		"--retries", "20",
-		"--fragment-retries", "20",
+		"--socket-timeout", "15",
+		"--retries", "10",
+		"--fragment-retries", "10",
+		"--no-cache-dir",
 	)
 
 	if _, err := os.Stat("cookies.txt"); err == nil {
@@ -3698,6 +3746,10 @@ func extractMetadataFromDRMSite(ctx context.Context, url string) (title, artist 
 func handleMusicPlay(event *events.ApplicationCommandInteractionCreate, data discord.SlashCommandInteractionData) {
 	q, m, p, a, l := parsePlayArguments(data)
 
+	if _, ok := mustGetUserVoiceState(event); !ok {
+		return
+	}
+
 	_ = event.DeferCreateMessage(false)
 	if strings.HasPrefix(strings.ToUpper(q), "[PL]") {
 		qBody := strings.TrimSpace(q[4:])
@@ -3737,13 +3789,11 @@ func handleMusicStop(event *events.ApplicationCommandInteractionCreate, _ discor
 }
 
 func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ discord.SlashCommandInteractionData) {
-	_ = event.DeferCreateMessage(true)
-
-	s := GetVoiceManager().GetSession(*event.GuildID())
-	if s == nil {
-		_ = EditInteractionV2(*event.Client(), event, "Not playing anything.")
+	s, ok := mustGetSession(event)
+	if !ok {
 		return
 	}
+	_ = event.DeferCreateMessage(true)
 
 	s.lockQueue()
 	defer s.unlockQueue()
@@ -3751,25 +3801,17 @@ func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ disco
 	var components []any
 
 	if s.currentTrack != nil {
-		s.currentTrack.mu.Lock()
-		title, url, channel, art := s.currentTrack.Title, s.currentTrack.URL, s.currentTrack.Channel, s.currentTrack.ArtworkURL
-		s.currentTrack.mu.Unlock()
-
-		components = append(components, NewTextDisplay("**Now Playing:**"))
-		components = append(components, NewTextDisplay(fmt.Sprintf("[%s](%s) · %s", title, url, channel)))
-		if art != "" {
-			components = append(components, NewMediaGallery(art))
-		}
+		components = append(components, s.buildTrackComponents(s.currentTrack, "Now Playing:")...)
 		components = append(components, NewSeparator(true))
 	}
 
 	components = append(components, NewTextDisplay("**Queue:**"))
 	if len(s.queue) == 0 {
+		msg := "_Empty_"
 		if s.Autoplay && s.autoplayTrack != nil {
-			components = append(components, NewTextDisplay("_Empty (Autoplay Ready)_"))
-		} else {
-			components = append(components, NewTextDisplay("_Empty_"))
+			msg = "_Empty (Autoplay Ready)_"
 		}
+		components = append(components, NewTextDisplay(msg))
 	} else {
 		var qList strings.Builder
 		for i, t := range s.queue {
@@ -3777,25 +3819,16 @@ func handleMusicQueue(event *events.ApplicationCommandInteractionCreate, _ disco
 				qList.WriteString(fmt.Sprintf("\n*...and %d more*", len(s.queue)-10))
 				break
 			}
-			qList.WriteString(fmt.Sprintf("`%d.` [%s](%s)\n", i+1, t.Title, t.URL))
+			qList.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, t.FullDisplay()))
 		}
 		components = append(components, NewTextDisplay(qList.String()))
 	}
 
 	if s.Autoplay {
 		components = append(components, NewSeparator(true))
+		components = append(components, NewTextDisplay("**Autoplay:** Enabled"))
 		if s.autoplayTrack != nil {
-			s.autoplayTrack.mu.Lock()
-			atitle, aurl, achannel, aart := s.autoplayTrack.Title, s.autoplayTrack.URL, s.autoplayTrack.Channel, s.autoplayTrack.ArtworkURL
-			s.autoplayTrack.mu.Unlock()
-
-			components = append(components, NewTextDisplay("**Autoplay:** Enabled (Ready)"))
-			components = append(components, NewTextDisplay(fmt.Sprintf("**Next Up:** [%s](%s) · %s", atitle, aurl, achannel)))
-			if aart != "" {
-				components = append(components, NewMediaGallery(aart))
-			}
-		} else {
-			components = append(components, NewTextDisplay("**Autoplay:** Enabled"))
+			components = append(components, s.buildTrackComponents(s.autoplayTrack, "Next Up (Autoplay):")...)
 		}
 	}
 
@@ -3851,37 +3884,15 @@ func BuildVoicePanelContainer(s *VoiceSession) Container {
 	var components []any
 
 	if s.currentTrack != nil {
-		s.currentTrack.mu.Lock()
-		title, url, channel, art := s.currentTrack.Title, s.currentTrack.URL, s.currentTrack.Channel, s.currentTrack.ArtworkURL
-		s.currentTrack.mu.Unlock()
-
-		if title == "" {
-			title = "Track"
-		}
-
-		components = append(components, NewTextDisplay("**Now Playing:**"))
-		components = append(components, NewTextDisplay(fmt.Sprintf("[%s](%s) · %s", title, url, channel)))
-		if art != "" {
-			components = append(components, NewMediaGallery(art))
-		}
+		components = append(components, s.buildTrackComponents(s.currentTrack, "Now Playing:")...)
 	} else {
 		components = append(components, NewTextDisplay("**Nothing is currently playing.**"))
 	}
 
-	paused := false
-	s.pauseMu.RLock()
-	select {
-	case <-s.pauseChan:
-	default:
-		paused = true
-	}
-	s.pauseMu.RUnlock()
-
-	statusEmoji := "⏸️"
-	statusText := "Playing"
+	paused := s.IsPaused()
+	statusEmoji, statusText := "⏸️", "Playing"
 	if paused {
-		statusEmoji = "▶️"
-		statusText = "Paused"
+		statusEmoji, statusText = "▶️", "Paused"
 	}
 
 	options := ""
@@ -3897,13 +3908,13 @@ func BuildVoicePanelContainer(s *VoiceSession) Container {
 
 	components = append(components, NewSeparator(true))
 
-	playPauseEmoji := "⏸️ Pause"
+	playPauseLabel := "⏸️ Pause"
 	if paused {
-		playPauseEmoji = "▶️ Resume"
+		playPauseLabel = "▶️ Resume"
 	}
 
 	row1 := discord.NewActionRow(
-		discord.NewButton(discord.ButtonStyleSecondary, playPauseEmoji, "voice:panel:playpause", "", 0),
+		discord.NewButton(discord.ButtonStyleSecondary, playPauseLabel, "voice:panel:playpause", "", 0),
 		discord.NewButton(discord.ButtonStyleSecondary, "⏭️ Skip", "voice:panel:skip", "", 0),
 		discord.NewButton(discord.ButtonStyleSecondary, "⏹️ Stop", "voice:panel:stop", "", 0),
 		discord.NewButton(discord.ButtonStyleDanger, "❌ Close", "voice:panel:close", "", 0),
@@ -3919,6 +3930,35 @@ func BuildVoicePanelContainer(s *VoiceSession) Container {
 	components = append(components, row1, row2)
 
 	return NewV2Container(components...)
+}
+
+func (s *VoiceSession) IsPaused() bool {
+	s.pauseMu.RLock()
+	defer s.pauseMu.RUnlock()
+	select {
+	case <-s.pauseChan:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *VoiceSession) TogglePause() bool {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	isClosed := false
+	select {
+	case <-s.pauseChan:
+		isClosed = true
+	default:
+	}
+	if isClosed {
+		s.pauseChan = make(chan struct{})
+		return true // Now paused
+	} else {
+		close(s.pauseChan)
+		return false // Now playing
+	}
 }
 
 func UpdateVoicePanels(guildID snowflake.ID, cl bot.Client) {
@@ -3986,19 +4026,7 @@ func handleVoiceComponent(event *events.ComponentInteractionCreate) {
 
 	switch action {
 	case "playpause":
-		s.pauseMu.Lock()
-		isClosed := false
-		select {
-		case <-s.pauseChan:
-			isClosed = true
-		default:
-		}
-		if isClosed {
-			s.pauseChan = make(chan struct{})
-		} else {
-			close(s.pauseChan)
-		}
-		s.pauseMu.Unlock()
+		s.TogglePause()
 		s.RefreshStatus()
 	case "skip":
 		_, _ = s.Skip()
@@ -4032,7 +4060,11 @@ func handleVoiceComponent(event *events.ComponentInteractionCreate) {
 func handleMusicAutocomplete(event *events.AutocompleteInteractionCreate) {
 	f := event.Data.Focused()
 	if f.Name == "queue" {
-		v, cs := f.String(), []discord.AutocompleteChoice{discord.AutocompleteChoiceString{Name: "Play Now", Value: "now"}, discord.AutocompleteChoiceString{Name: "Play Next", Value: "next"}}
+		v := f.String()
+		cs := []discord.AutocompleteChoice{
+			discord.AutocompleteChoiceString{Name: "Play Now", Value: "now"},
+			discord.AutocompleteChoiceString{Name: "Play Next", Value: "next"},
+		}
 		if v != "" {
 			if _, err := strconv.Atoi(v); err == nil {
 				cs = append([]discord.AutocompleteChoice{discord.AutocompleteChoiceString{Name: "Position: " + v, Value: v}}, cs...)
@@ -4054,10 +4086,8 @@ func handleMusicAutocomplete(event *events.AutocompleteInteractionCreate) {
 	var rs []SearchResult
 	var err error
 	if strings.HasPrefix(strings.ToUpper(q), "[PL]") {
-		qBody := strings.TrimSpace(q[4:])
-		if qBody != "" {
-			ytdlpRS, searchErr := GetVoiceManager().SearchPlaylist(qBody)
-			if searchErr == nil {
+		if qBody := strings.TrimSpace(q[4:]); qBody != "" {
+			if ytdlpRS, searchErr := GetVoiceManager().SearchPlaylist(qBody); searchErr == nil {
 				for _, entry := range ytdlpRS {
 					rs = append(rs, SearchResult{
 						Title:       entry.Title,
@@ -4072,20 +4102,21 @@ func handleMusicAutocomplete(event *events.AutocompleteInteractionCreate) {
 	} else {
 		rs, err = GetVoiceManager().Search(q)
 	}
+
 	if err != nil {
 		_ = event.AutocompleteResult(nil)
 		return
 	}
+
 	var cs []discord.AutocompleteChoice
 	for i, r := range rs {
 		if i >= 25 {
 			break
 		}
-		n := r.Title
+		n, v := r.Title, r.URL
 		if len(n) > 100 {
 			n = n[:97] + "..."
 		}
-		v := r.URL
 		if len(v) > 100 {
 			v = r.Title
 			if len(v) > 100 {
@@ -4101,6 +4132,7 @@ func getRandomRecommendation(guildID *snowflake.ID) string {
 	if guildID != nil {
 		if s := GetVoiceManager().GetSession(*guildID); s != nil {
 			s.lockQueue()
+			defer s.unlockQueue()
 			l := len(s.HistoryTitles)
 			if l > 0 {
 				idx := l - 1
@@ -4112,26 +4144,20 @@ func getRandomRecommendation(guildID *snowflake.ID) string {
 				if len(s.HistoryAuthors) > idx {
 					author := s.HistoryAuthors[idx]
 					if author != "" && author != "NA" {
-						s.unlockQueue()
 						return "Mix - " + author
 					}
 				}
-
-				title := s.HistoryTitles[idx]
-				s.unlockQueue()
-				return "Mix - " + title
+				return "Mix - " + s.HistoryTitles[idx]
 			}
-			s.unlockQueue()
 		}
 	}
-
 	return "Trending Music"
 }
 
 func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, a, l bool, p int) error {
 	LogVoice("User %s (%s) requested playback: %s", ev.User().Username, ev.User().ID, q)
-	vs, ok := ev.Client().Caches.VoiceState(*ev.GuildID(), ev.User().ID)
-	if !ok || vs.ChannelID == nil {
+	vs, ok := mustGetUserVoiceState(ev)
+	if !ok {
 		return errors.New("user not in a voice channel")
 	}
 	vm := GetVoiceManager()
@@ -4155,65 +4181,70 @@ func startPlayback(ev *events.ApplicationCommandInteractionCreate, q, m string, 
 }
 
 func finishPlaybackResponse(ev *events.ApplicationCommandInteractionCreate, t *Track, m string, a, l bool, p int, count int) error {
-	t.mu.Lock()
-	title := t.Title
-	url := t.URL
-	channel := t.Channel
-	t.mu.Unlock()
-
-	if title == "" || strings.HasPrefix(title, "http") {
-		if id := extractVideoID(url); id != "" {
-			title = "YouTube Track (" + id + ")"
+	build := func() (string, string) {
+		pr := "Added to queue:"
+		if count > 1 {
+			pr = fmt.Sprintf("📂 Added **%d** tracks from playlist to queue:", count)
+			switch m {
+			case "now":
+				pr = fmt.Sprintf("▶️ Playing Now (Cleared queue and added **%d** tracks from playlist):", count)
+			case "next":
+				pr = fmt.Sprintf("⏭️ Added **%d** tracks to play next:", count)
+			}
 		} else {
-			title = "Music Track"
+			if m == "next" {
+				pr = "⏭️ Next up:"
+			} else if m == "now" {
+				pr = "▶️ Playing Now (Skipped Current):"
+			} else if p > 0 {
+				pr = "Added to queue at position " + strconv.Itoa(p) + ":"
+			}
 		}
+
+		var ss []string
+		if a {
+			ss = append(ss, "Autoplay")
+		}
+		if l {
+			ss = append(ss, "Looping")
+		}
+		suffix := ""
+		if len(ss) > 0 {
+			suffix = " (" + strings.Join(ss, ", ") + ": Enabled)"
+		}
+
+		content := fmt.Sprintf("%s %s%s", pr, t.FullDisplay(), suffix)
+		t.mu.Lock()
+		art := t.ArtworkURL
+		t.mu.Unlock()
+		return content, art
 	}
 
-	pr := "Added to queue:"
-	if count > 1 {
-		pr = fmt.Sprintf("📂 Added **%d** tracks from playlist to queue:", count)
-		switch m {
-		case "now":
-			pr = fmt.Sprintf("▶️ Playing Now (Cleared queue and added **%d** tracks from playlist):", count)
-		case "next":
-			pr = fmt.Sprintf("⏭️ Added **%d** tracks to play next:", count)
-		}
-	} else {
-		switch m {
-		case "next":
-			pr = "⏭️ Next up:"
-		case "now":
-			pr = "▶️ Playing Now (Skipped Current):"
-		}
-		if p > 0 {
-			pr = "Added to queue at position " + strconv.Itoa(p) + ":"
-		}
-	}
-	var ss []string
-	if a {
-		ss = append(ss, "Autoplay")
-	}
-	if l {
-		ss = append(ss, "Looping")
-	}
-	s := ""
-	if len(ss) > 0 {
-		s = " (" + strings.Join(ss, ", ") + ": Enabled)"
-	}
-	c := pr + " [" + title + "](" + url + ")"
-	if channel != "" && channel != "NA" {
-		c += " · " + channel
-	}
-	c += s
-
-	t.mu.Lock()
-	art := t.ArtworkURL
-	t.mu.Unlock()
-
+	content, art := build()
+	var err error
 	if art != "" {
-		return EditInteractionContainerV2(*ev.Client(), ev, NewV2Container(NewTextDisplay(c), NewMediaGallery(art)))
+		err = EditInteractionContainerV2(*ev.Client(), ev, NewV2Container(NewTextDisplay(content), NewMediaGallery(art)))
+	} else {
+		err = EditInteractionV2(*ev.Client(), ev, content)
 	}
-	return EditInteractionV2(*ev.Client(), ev, c)
+
+	select {
+	case <-t.MetadataReady:
+	default:
+		safeGo(func() {
+			select {
+			case <-t.MetadataReady:
+				c, a := build()
+				if a != "" {
+					_ = EditInteractionContainerV2(*ev.Client(), ev, NewV2Container(NewTextDisplay(c), NewMediaGallery(a)))
+				} else {
+					_ = EditInteractionV2(*ev.Client(), ev, c)
+				}
+			case <-time.After(15 * time.Second):
+			}
+		})
+	}
+	return err
 }
 
 func (s *VoiceSession) SelectBestTrack(results []ytdlpSearchResult, targetTitle, targetChannel string, targetDuration time.Duration) ytdlpSearchResult {

@@ -73,7 +73,7 @@ func init() {
 	initReminderParser()
 
 	OnClientReady(func(ctx context.Context, client bot.Client) {
-		RegisterDaemon(LogReminder, func(ctx context.Context) (bool, func(), func()) { return StartReminderScheduler(ctx, client) })
+		RegisterDaemon("REMINDER", LogReminder, func(ctx context.Context) (bool, func(), func()) { return StartReminderScheduler(ctx, client) })
 	})
 
 	// Register reminder command
@@ -430,6 +430,8 @@ func StartReminderScheduler(ctx context.Context, client bot.Client) (bool, func(
 	if !atomic.CompareAndSwapInt32(&reminderSchedulerRunning, 0, 1) {
 		return false, nil, nil
 	}
+
+	checkAndSendReminders(ctx, client)
 
 	return true, func() {
 			ticker := time.NewTicker(10 * time.Second)

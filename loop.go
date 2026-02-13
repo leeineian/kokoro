@@ -111,7 +111,7 @@ func init() {
 	adminPerm := discord.PermissionAdministrator
 
 	OnClientReady(func(ctx context.Context, client bot.Client) {
-		RegisterDaemon(LogLoopManager, func(ctx context.Context) (bool, func(), func()) { return InitLoopManager(ctx, client) })
+		RegisterDaemon("LOOP", LogLoopManager, func(ctx context.Context) (bool, func(), func()) { return InitLoopManager(ctx, client) })
 	})
 
 	RegisterCommand(discord.SlashCommandCreate{
@@ -380,13 +380,10 @@ func InitLoopManager(ctx context.Context, client bot.Client) (bool, func(), func
 		LogLoopManager("⚠️ Failed to reset loop states: %v", err)
 	}
 
-	return true, func() {
-		configs, err := GetAllLoopConfigs(ctx)
-		if err != nil {
-			LogLoopManager(MsgLoopFailedToLoadConfigs, err)
-			return
-		}
-
+	configs, err := GetAllLoopConfigs(ctx)
+	if err != nil {
+		LogLoopManager(MsgLoopFailedToLoadConfigs, err)
+	} else {
 		for _, config := range configs {
 			data := &ChannelData{
 				Config: config,
@@ -398,6 +395,9 @@ func InitLoopManager(ctx context.Context, client bot.Client) (bool, func(), func
 		if len(configs) > 0 {
 			LogLoopManager(MsgLoopLoadedChannels, len(configs))
 		}
+	}
+
+	return true, func() {
 	}, func() { ShutdownLoopManager(ctx, client) }
 }
 
