@@ -1,24 +1,14 @@
-# Environment Variables
+# environment variables
 .env
 .env.local
 .env.*.local
 
-# Discloud
-discloud/
-discloud.config
-.discloudignore
-
-# Database
+# database
 *.db
 *.db-shm
 *.db-wal
 
-# Build Output
-bin/
-dist/
-tmp/
-
-# Runtime & Process
+# runtime
 .bot.pid
 *.log
 *cache/
@@ -26,23 +16,14 @@ tmp/
 *.opus
 *.part
 
-# Testing
-*.test
-*.out
-coverage.txt
-coverage.html
-*.coverprofile
+# testing
 *.old
-tmp/
-.tmp/
-.backups/
 .bck/
-.air.toml
-kokoro
-backup
-*.txt
-.BACKUP.go
 *.bak
+
+# go
+*.exe
+*.exe~
 
 # IDE
 .vscode/
@@ -51,10 +32,3 @@ backup
 *.swo
 *~
 .DS_Store
-
-# Go specific
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
