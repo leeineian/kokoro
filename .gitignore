@@ -9,7 +9,7 @@
 *.db-wal
 
 # runtime
-.bot.pid
+.app.pid
 *.log
 *cache/
 *tracks/
@@ -20,6 +20,7 @@
 *.old
 .bck/
 *.bak
+kokoro
 
 # go
 *.exe
